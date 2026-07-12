@@ -2,7 +2,7 @@ import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+const config = defineConfig({
   main: {},
   preload: {},
   renderer: {
@@ -14,3 +14,5 @@ export default defineConfig({
     plugins: [react()]
   }
 })
+
+module.exports = config

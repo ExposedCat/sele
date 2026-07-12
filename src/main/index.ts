@@ -2,6 +2,8 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { disposeProviderAdapters } from './providers/providerService'
+import { registerProviderIpc } from './providers/registerProviderIpc'
 
 const createWindow = (): void => {
   const mainWindow = new BrowserWindow({
@@ -28,6 +30,7 @@ const createWindow = (): void => {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.sele')
+  registerProviderIpc()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -39,6 +42,8 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+app.on('before-quit', disposeProviderAdapters)
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
