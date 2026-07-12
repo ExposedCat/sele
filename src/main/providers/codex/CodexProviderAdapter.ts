@@ -1,4 +1,8 @@
-import type { ProviderChat, ProviderLoginResult } from '../../../shared/provider'
+import type {
+  ProviderChat,
+  ProviderChatStatus,
+  ProviderLoginResult
+} from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient } from './CodexAppServerClient'
 
@@ -16,12 +20,20 @@ type LoginResponse =
   | { type: 'chatgptDeviceCode'; loginId: string; verificationUrl: string; userCode: string }
   | { type: 'chatgptAuthTokens' }
 
+type CodexThreadStatus =
+  | { type: 'notLoaded' | 'idle' | 'systemError' }
+  | {
+      type: 'active'
+      activeFlags: ('waitingOnApproval' | 'waitingOnUserInput')[]
+    }
+
 type CodexThread = {
   id: string
   name: string | null
   preview: string
   createdAt: number
   updatedAt: number
+  status: CodexThreadStatus
 }
 
 type ThreadListResponse = {
@@ -36,6 +48,14 @@ const getAccountLabel = (account: CodexAccount): string => {
 
 const getThreadTitle = (thread: CodexThread): string =>
   thread.name?.trim() || thread.preview.trim().split('\n')[0] || 'Untitled chat'
+
+const getThreadStatus = (thread: CodexThread): ProviderChatStatus | null => {
+  if (thread.status.type === 'systemError') return 'error'
+  if (thread.status.type !== 'active') return null
+  if (thread.status.activeFlags.includes('waitingOnApproval')) return 'waitingOnApproval'
+  if (thread.status.activeFlags.includes('waitingOnUserInput')) return 'waitingOnUserInput'
+  return null
+}
 
 export class CodexProviderAdapter implements ProviderAdapter {
   id = 'codex' as const
@@ -85,7 +105,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
       title: getThreadTitle(thread),
       preview: thread.preview.trim(),
       createdAt: thread.createdAt * 1_000,
-      updatedAt: thread.updatedAt * 1_000
+      updatedAt: thread.updatedAt * 1_000,
+      status: getThreadStatus(thread)
     }))
   }
 

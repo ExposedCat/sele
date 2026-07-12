@@ -78,6 +78,7 @@ button {
 }
 
 .chat-list-item h2 {
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   font-size: 15px;
@@ -86,21 +87,44 @@ button {
   white-space: nowrap;
 }
 
-.chat-list-item time {
+.chat-list-item__meta {
+  display: flex;
   flex: none;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-list-item time {
   color: #8a8f87;
   font-size: 12px;
 }
 
+.chat-list-item__status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.chat-list-item__status--error {
+  background: #dc2626;
+}
+
+.chat-list-item__status--waitingOnApproval {
+  background: #f59e0b;
+}
+
+.chat-list-item__status--waitingOnUserInput {
+  background: #2563eb;
+}
+
 .chat-list-item p {
-  display: -webkit-box;
   margin: 8px 0 0;
   overflow: hidden;
   color: #646a63;
   font-size: 14px;
   line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-box {

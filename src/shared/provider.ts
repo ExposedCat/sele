@@ -11,6 +11,8 @@ export type ProviderLoginResult =
   | { status: 'pending'; loginId: string; authUrl: string }
   | { status: 'notRequired' }
 
+export type ProviderChatStatus = 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
+
 export type ProviderChat = {
   id: string
   providerId: ProviderId
@@ -18,6 +20,7 @@ export type ProviderChat = {
   preview: string
   createdAt: number
   updatedAt: number
+  status: ProviderChatStatus | null
 }
 
 export type ProviderApi = {
