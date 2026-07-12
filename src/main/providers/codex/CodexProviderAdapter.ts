@@ -54,7 +54,7 @@ const getThreadStatus = (thread: CodexThread): ProviderChatStatus | null => {
   if (thread.status.type !== 'active') return null
   if (thread.status.activeFlags.includes('waitingOnApproval')) return 'waitingOnApproval'
   if (thread.status.activeFlags.includes('waitingOnUserInput')) return 'waitingOnUserInput'
-  return null
+  return 'active'
 }
 
 export class CodexProviderAdapter implements ProviderAdapter {

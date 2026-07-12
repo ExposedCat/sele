@@ -1,20 +1,13 @@
 import { useState } from 'react'
 
-type MessageBoxProps = {
-  onSend?: (message: string) => void
-}
-
-export const MessageBox: React.FC<MessageBoxProps> = ({ onSend }) => {
+export const MessageBox: React.FC = () => {
   const [message, setMessage] = useState('')
-  const disabled = !onSend
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
 
-    const content = message.trim()
-    if (!content) return
+    if (!message.trim()) return
 
-    onSend?.(content)
     setMessage('')
   }
 
@@ -27,11 +20,10 @@ export const MessageBox: React.FC<MessageBoxProps> = ({ onSend }) => {
         id="message-input"
         rows={1}
         value={message}
-        placeholder={disabled ? 'Messaging is not available yet' : 'Message the assistant'}
-        disabled={disabled}
+        placeholder="Message the assistant"
         onChange={(event) => setMessage(event.target.value)}
       />
-      <button type="submit" disabled={disabled || !message.trim()}>
+      <button type="submit" disabled={!message.trim()}>
         Send
       </button>
     </form>
