@@ -16,6 +16,7 @@ import {
 import Markdown from 'markdown-to-jsx'
 import type {
   ProviderChatItem,
+  ProviderMessage,
   ProviderToolActivity,
   ProviderWorkingItem,
   ProviderWorkingStep,
@@ -24,7 +25,9 @@ import type {
 import './ChatDetailItem.css'
 
 type ChatDetailItemProps = {
+  canEditOwnMessages?: boolean
   item: ProviderChatItem
+  onEditMessage?: (message: ProviderMessage) => void
 }
 
 type ProviderToolItem = Exclude<ProviderWorkingItem, { type: 'message' }>
@@ -393,8 +396,34 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   )
 }
 
-export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({ item }) => {
+export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
+  canEditOwnMessages = false,
+  item,
+  onEditMessage
+}) => {
   if (item.type === 'message') {
+    const canEdit = item.role === 'user' && canEditOwnMessages && Boolean(onEditMessage)
+
+    if (canEdit) {
+      return (
+        <div className="chat-detail__message-row chat-detail__message-row--user">
+          <button
+            className="chat-detail__message-edit"
+            type="button"
+            aria-label="Edit message"
+            title="Edit message"
+            onClick={() => onEditMessage?.(item)}
+          >
+            <Pencil aria-hidden="true" />
+          </button>
+          <MarkdownMessage
+            className={`chat-detail__message chat-detail__message--${item.role}`}
+            content={item.content}
+          />
+        </div>
+      )
+    }
+
     return (
       <MarkdownMessage
         className={`chat-detail__message chat-detail__message--${item.role}`}

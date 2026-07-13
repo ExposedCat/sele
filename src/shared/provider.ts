@@ -25,6 +25,12 @@ export type ProviderLoginResult =
 
 export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
 
+export type ProviderChatMetadata = {
+  id: string
+  pinned: boolean
+  done: boolean
+}
+
 export type ProviderChat = {
   id: string
   providerId: ProviderId
@@ -34,6 +40,8 @@ export type ProviderChat = {
   createdAt: number
   updatedAt: number
   status: ProviderChatStatus | null
+  pinned: boolean
+  done: boolean
 }
 
 export type ProviderChatListOptions = {
@@ -44,6 +52,10 @@ export type ProviderChatListOptions = {
 export type ProviderChatPage = {
   chats: ProviderChat[]
   nextCursor: string | null
+}
+
+export type ProviderCapabilities = {
+  editMessages: boolean
 }
 
 export type ProviderMessage = {
@@ -115,6 +127,9 @@ export type ProviderChatDetail = {
   title: string
   cwd: string | null
   status: ProviderChatStatus | null
+  pinned: boolean
+  done: boolean
+  capabilities: ProviderCapabilities
   items: ProviderChatItem[]
 }
 
@@ -148,7 +163,21 @@ export type ProviderApi = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  editMessage: (
+    providerId: ProviderId,
+    chatId: string,
+    messageId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
   stopChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
+  markChatDone: (providerId: ProviderId, chatId: string) => Promise<ProviderChatMetadata>
+  markCwdChatsDone: (providerId: ProviderId, cwd: string | null) => Promise<ProviderChatMetadata[]>
+  setChatPinned: (
+    providerId: ProviderId,
+    chatId: string,
+    pinned: boolean
+  ) => Promise<ProviderChatMetadata>
   onChatUpdated: (listener: (event: ProviderChatUpdatedEvent) => void) => () => void
 }
 
@@ -158,7 +187,11 @@ export const providerIpcChannels = {
   getChat: 'provider:get-chat',
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
+  editMessage: 'provider:edit-message',
   stopChat: 'provider:stop-chat',
+  markChatDone: 'provider:mark-chat-done',
+  markCwdChatsDone: 'provider:mark-cwd-chats-done',
+  setChatPinned: 'provider:set-chat-pinned',
   chatUpdated: 'provider:chat-updated'
 } as const
 

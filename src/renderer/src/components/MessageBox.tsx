@@ -10,12 +10,15 @@ import './MessageBox.css'
 type MessageBoxProps = {
   accessMode: ProviderAccessMode
   active?: boolean
+  autoFocus?: boolean
   disabled?: boolean
+  editSession?: { id: string; content: string } | null
   error?: string | null
   model: ProviderModelId
   pending?: boolean
   reasoningEffort: ProviderReasoningEffort
   onAccessModeChange: (accessMode: ProviderAccessMode) => void
+  onCancelEdit?: () => void
   onModelChange: (model: ProviderModelId) => void
   onReasoningEffortChange: (reasoningEffort: ProviderReasoningEffort) => void
   onStop?: () => Promise<void> | void
@@ -51,19 +54,60 @@ const reasoningEffortLabels = {
 export const MessageBox: React.FC<MessageBoxProps> = ({
   accessMode,
   active = false,
+  autoFocus = false,
   disabled = false,
+  editSession = null,
   error = null,
   model,
   pending = false,
   reasoningEffort,
   onAccessModeChange,
+  onCancelEdit,
   onModelChange,
   onReasoningEffortChange,
   onStop,
   onSend
 }) => {
   const [message, setMessage] = useState('')
+  const editSessionIdRef = useRef<string | null>(null)
+  const messageRef = useRef(message)
+  const messageBeforeEditRef = useRef<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editing = Boolean(editSession)
+
+  useEffect(() => {
+    messageRef.current = message
+  }, [message])
+
+  useEffect(() => {
+    if (!editSession) {
+      editSessionIdRef.current = null
+      messageBeforeEditRef.current = null
+      return
+    }
+
+    if (editSessionIdRef.current === editSession.id) return
+
+    editSessionIdRef.current = editSession.id
+    messageBeforeEditRef.current = messageRef.current
+    setMessage(editSession.content)
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    })
+
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [editSession])
+
+  useEffect(() => {
+    if (!autoFocus || disabled || pending) return
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    })
+
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [autoFocus, disabled, pending])
 
   useEffect(() => {
     const textarea = textareaRef.current
@@ -81,6 +125,17 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
     const nextMessage = message.trim()
     if (!nextMessage || disabled || pending) return
 
+    if (editing) {
+      void Promise.resolve(onSend(nextMessage))
+        .then(() => {
+          setMessage(messageBeforeEditRef.current ?? '')
+          editSessionIdRef.current = null
+          messageBeforeEditRef.current = null
+        })
+        .catch(() => {})
+      return
+    }
+
     setMessage('')
     void onSend(nextMessage)
   }
@@ -95,7 +150,15 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
     void onStop()
   }
 
-  const buttonLabel = active ? 'Stop response' : 'Send message'
+  const handleCancelEdit = (): void => {
+    setMessage(messageBeforeEditRef.current ?? '')
+    editSessionIdRef.current = null
+    messageBeforeEditRef.current = null
+    onCancelEdit?.()
+  }
+
+  const buttonLabel = active ? 'Stop response' : editing ? 'Save edit' : 'Send message'
+  const selectorsDisabled = active || pending || editing
 
   return (
     <form className="message-box" aria-busy={pending} onSubmit={handleSubmit}>
@@ -136,7 +199,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           <select
             id="access-mode"
             className="message-box__select message-box__access"
-            disabled={active || pending}
+            disabled={selectorsDisabled}
             value={accessMode}
             title={accessModeLabels[accessMode]}
             onChange={(event) => onAccessModeChange(event.target.value as ProviderAccessMode)}
@@ -151,7 +214,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
             <select
               id="model-mode"
               className="message-box__select message-box__model"
-              disabled={active || pending}
+              disabled={selectorsDisabled}
               value={model}
               title={modelLabels[model]}
               onChange={(event) => onModelChange(event.target.value as ProviderModelId)}
@@ -165,7 +228,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
             <select
               id="reasoning-effort"
               className="message-box__select message-box__reasoning"
-              disabled={active || pending}
+              disabled={selectorsDisabled}
               value={reasoningEffort}
               title={`${reasoningEffortLabels[reasoningEffort]} reasoning`}
               onChange={(event) =>
@@ -178,6 +241,16 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 </option>
               ))}
             </select>
+            {editing && (
+              <button
+                className="message-box__cancel"
+                type="button"
+                disabled={pending}
+                onClick={handleCancelEdit}
+              >
+                Cancel
+              </button>
+            )}
             <button
               className="message-box__action"
               type={active ? 'button' : 'submit'}

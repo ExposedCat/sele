@@ -1,12 +1,10 @@
 .chat-list-item {
   position: relative;
   width: 100%;
-  padding: 18px 18px 17px;
   overflow: hidden;
   border: 1px solid var(--glass-line);
   border-radius: 16px;
   color: inherit;
-  text-align: left;
   background: var(--glass);
   box-shadow: var(--glass-shadow);
   transition:
@@ -16,6 +14,18 @@
     transform 180ms ease;
   -webkit-backdrop-filter: blur(16px) saturate(1.35);
   backdrop-filter: blur(16px) saturate(1.35);
+}
+
+.chat-list-item__main {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 18px 82px 17px 18px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
 }
 
 .chat-list-item:hover {
@@ -54,6 +64,12 @@
   flex: none;
   gap: 9px;
   align-items: center;
+}
+
+.chat-list-item__pin-indicator {
+  width: 15px;
+  height: 15px;
+  color: var(--quiet);
 }
 
 .chat-list-item__status-container {
@@ -126,29 +142,58 @@
   flex: none;
 }
 
-.chat-list-item__chevron {
-  width: 18px;
-  height: 18px;
-  flex: none;
-  color: var(--quiet);
+.chat-list-item__actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 6px;
   opacity: 0;
-  transform: translateX(-4px);
+  pointer-events: none;
   transition:
-    color 180ms ease,
-    opacity 180ms ease,
-    transform 180ms ease;
+    opacity 160ms ease,
+    transform 160ms ease;
+  transform: translateY(-2px);
 }
 
-.chat-list-item:hover .chat-list-item__chevron,
-.chat-list-item:focus-visible .chat-list-item__chevron {
-  color: var(--ink);
+.chat-list-item:hover .chat-list-item__actions {
   opacity: 1;
-  transform: translateX(0);
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.chat-list-item__action {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--glass-strong);
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.chat-list-item__action:hover,
+.chat-list-item__action:focus-visible,
+.chat-list-item__action--active {
+  color: var(--ink);
+  background: var(--glass);
+  border-color: color-mix(in srgb, var(--muted) 26%, var(--glass-line));
+}
+
+.chat-list-item__action svg {
+  width: 16px;
+  height: 16px;
 }
 
 @media (max-width: 600px) {
-  .chat-list-item {
+  .chat-list-item__main {
     padding: 16px;
+    padding-right: 82px;
   }
 
   .chat-list-item__header {

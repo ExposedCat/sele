@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ChevronRight, Search, SquarePen, X } from 'lucide-react'
+import { ArrowLeft, CheckCheck, ChevronRight, Search, SquarePen, X } from 'lucide-react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type {
   ProviderChat,
   ProviderChatDetail,
   ProviderChatItem,
+  ProviderChatMetadata,
+  ProviderMessage,
   ProviderAccessMode,
   ProviderId,
   ProviderModelId,
@@ -23,9 +25,11 @@ type SendState = 'idle' | 'sending' | 'error'
 type ApplyChatDetailOptions = {
   select?: boolean
 }
+type EditingMessage = Pick<ProviderMessage, 'id' | 'content'>
 
 const chatPageSize = 20
 const unknownCwdGroupKey = 'cwd:unknown'
+const doneGroupKey = 'done'
 
 const providerLabels = {
   codex: 'Codex'
@@ -73,17 +77,42 @@ const getChatCwdGroupKey = (cwd: string | null): string => {
   return normalizedCwd ? `cwd:${normalizedCwd}` : unknownCwdGroupKey
 }
 
+const getDefaultCollapsedGroupState = (groupKey: string): boolean => groupKey === doneGroupKey
+
+const getCollapsedGroupState = (
+  groupKey: string,
+  collapsedGroups: Record<string, boolean>
+): boolean => collapsedGroups[groupKey] ?? getDefaultCollapsedGroupState(groupKey)
+
 type ChatCwdGroup = {
   key: string
   cwd: string | null
   label: string
   chats: ProviderChat[]
+  kind: 'cwd' | 'done'
 }
+
+const sortChatsForGroup = (chats: ProviderChat[]): ProviderChat[] =>
+  [...chats].sort((firstChat, secondChat) => {
+    if (firstChat.pinned !== secondChat.pinned) return firstChat.pinned ? -1 : 1
+
+    if (secondChat.updatedAt !== firstChat.updatedAt) {
+      return secondChat.updatedAt - firstChat.updatedAt
+    }
+
+    return secondChat.createdAt - firstChat.createdAt
+  })
 
 const groupChatsByCwd = (chats: ProviderChat[]): ChatCwdGroup[] => {
   const groupsByCwd = new Map<string, ChatCwdGroup>()
+  const doneChats: ProviderChat[] = []
 
   for (const chat of chats) {
+    if (chat.done) {
+      doneChats.push(chat)
+      continue
+    }
+
     const key = getChatCwdGroupKey(chat.cwd)
     const existingGroup = groupsByCwd.get(key)
 
@@ -97,11 +126,28 @@ const groupChatsByCwd = (chats: ProviderChat[]): ChatCwdGroup[] => {
       key,
       cwd,
       label: getChatCwdLabel(cwd),
-      chats: [chat]
+      chats: [chat],
+      kind: 'cwd'
     })
   }
 
-  return Array.from(groupsByCwd.values())
+  const cwdGroups = Array.from(groupsByCwd.values()).map((group) => ({
+    ...group,
+    chats: sortChatsForGroup(group.chats)
+  }))
+
+  if (doneChats.length === 0) return cwdGroups
+
+  return [
+    ...cwdGroups,
+    {
+      key: doneGroupKey,
+      cwd: null,
+      label: 'Done',
+      chats: sortChatsForGroup(doneChats),
+      kind: 'done' as const
+    }
+  ]
 }
 
 const getChatPreview = (detail: ProviderChatDetail): string | null => {
@@ -122,7 +168,9 @@ const getChatFromDetail = (
   cwd: detail.cwd ?? existingChat?.cwd ?? null,
   createdAt: existingChat?.createdAt ?? updatedAt,
   updatedAt,
-  status: detail.status
+  status: detail.status,
+  pinned: detail.pinned ?? existingChat?.pinned ?? false,
+  done: detail.done ?? existingChat?.done ?? false
 })
 
 const getOptimisticItems = (items: ProviderChatItem[], message: string): ProviderChatItem[] => {
@@ -145,13 +193,31 @@ const getOptimisticItems = (items: ProviderChatItem[], message: string): Provide
   ]
 }
 
+const hasActiveWorkingStep = (detail: ProviderChatDetail | null): boolean =>
+  detail?.items.some((item) => item.type === 'working' && item.status === 'working') ?? false
+
+const getVisibleChatItems = (
+  items: ProviderChatItem[],
+  editingMessage: EditingMessage | null
+): ProviderChatItem[] => {
+  if (!editingMessage) return items
+
+  const editingMessageIndex = items.findIndex(
+    (item) => item.type === 'message' && item.id === editingMessage.id
+  )
+
+  return editingMessageIndex < 0 ? items : items.slice(0, editingMessageIndex)
+}
+
 export const App: React.FC = () => {
   const [chats, setChats] = useState<ProviderChat[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [selectedChat, setSelectedChat] = useState<ProviderChat | null>(null)
   const [chatDetail, setChatDetail] = useState<ProviderChatDetail | null>(null)
-  const [chatLoadState, setChatLoadState] = useState<LoadState>('loading')
+  const [chatLoadState, setChatLoadState] = useState<LoadState>('ready')
+  const [chatLoadRequest, setChatLoadRequest] = useState(0)
   const [sendState, setSendState] = useState<SendState>('idle')
+  const [editingMessage, setEditingMessage] = useState<EditingMessage | null>(null)
   const [accessMode, setAccessMode] = useState<ProviderAccessMode>('sandbox')
   const [model, setModel] = useState<ProviderModelId>('gpt-5.5')
   const [reasoningEffort, setReasoningEffort] = useState<ProviderReasoningEffort>('xhigh')
@@ -166,6 +232,7 @@ export const App: React.FC = () => {
   const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const chatLoadTriggerRef = useRef<HTMLDivElement>(null)
+  const resizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
 
@@ -230,6 +297,44 @@ export const App: React.FC = () => {
     []
   )
 
+  const showNewChatView = useCallback((): void => {
+    setSelectedChat(null)
+    setChatDetail(null)
+    setChatLoadState('ready')
+    setSendState('idle')
+    setEditingMessage(null)
+    setSearchOpen(false)
+    setSearchQuery('')
+    setNewChatOpen(true)
+  }, [])
+
+  const applyChatMetadata = useCallback((metadataList: ProviderChatMetadata[]): void => {
+    const metadataById = new Map(metadataList.map((metadata) => [metadata.id, metadata]))
+
+    setChats((currentChats) =>
+      currentChats.map((chat) => {
+        const metadata = metadataById.get(chat.id)
+        return metadata ? { ...chat, pinned: metadata.pinned, done: metadata.done } : chat
+      })
+    )
+    setSelectedChat((currentChat) => {
+      if (!currentChat) return currentChat
+
+      const metadata = metadataById.get(currentChat.id)
+      return metadata
+        ? { ...currentChat, pinned: metadata.pinned, done: metadata.done }
+        : currentChat
+    })
+    setChatDetail((currentDetail) => {
+      if (!currentDetail) return currentDetail
+
+      const metadata = metadataById.get(currentDetail.id)
+      return metadata
+        ? { ...currentDetail, pinned: metadata.pinned, done: metadata.done }
+        : currentDetail
+    })
+  }, [])
+
   useEffect(
     () =>
       providerApi.onChatUpdated((event) => {
@@ -260,7 +365,27 @@ export const App: React.FC = () => {
     return () => {
       active = false
     }
-  }, [selectedProviderId, selectedChatId])
+  }, [chatLoadRequest, selectedProviderId, selectedChatId])
+
+  useEffect(() => {
+    const resizeHandle = resizeHandleRef.current
+    if (!resizeHandle) return
+
+    const removeTabStop = (): void => {
+      resizeHandle.removeAttribute('tabindex')
+      if (document.activeElement === resizeHandle) resizeHandle.blur()
+    }
+
+    removeTabStop()
+
+    const observer = new MutationObserver(removeTabStop)
+    observer.observe(resizeHandle, {
+      attributeFilter: ['tabindex'],
+      attributes: true
+    })
+
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     if (!chatDetail) return
@@ -306,6 +431,8 @@ export const App: React.FC = () => {
           )
         })
   const chatGroups = groupChatsByCwd(filteredChats)
+  const activeChatGroups = chatGroups.filter((group) => group.kind !== 'done')
+  const doneChatGroup = chatGroups.find((group) => group.kind === 'done') ?? null
   const hasMoreChats = Boolean(nextCursor)
 
   const loadMoreChats = useCallback(async (): Promise<void> => {
@@ -352,18 +479,29 @@ export const App: React.FC = () => {
   const handleToggleCwdGroup = (groupKey: string): void => {
     setCollapsedCwdGroups((currentGroups) => ({
       ...currentGroups,
-      [groupKey]: !currentGroups[groupKey]
+      [groupKey]: !getCollapsedGroupState(groupKey, currentGroups)
     }))
   }
 
   const handleSelectChat = (chat: ProviderChat): void => {
-    setChatDetail(null)
-    setChatLoadState('loading')
+    const selectingCurrentChat =
+      selectedChat?.providerId === chat.providerId && selectedChat.id === chat.id
+
     setSendState('idle')
+    setEditingMessage(null)
     setNewChatOpen(false)
     setSearchOpen(false)
     setSearchQuery('')
+
+    if (selectingCurrentChat && chatLoadState === 'ready' && chatDetail?.id === chat.id) return
+
+    setChatDetail(null)
+    setChatLoadState('loading')
     setSelectedChat(chat)
+
+    if (selectingCurrentChat) {
+      setChatLoadRequest((currentRequest) => currentRequest + 1)
+    }
   }
 
   const handleBack = (): void => {
@@ -371,16 +509,11 @@ export const App: React.FC = () => {
     setChatDetail(null)
     setNewChatOpen(false)
     setSendState('idle')
+    setEditingMessage(null)
   }
 
   const handleNewChat = (): void => {
-    setSelectedChat(null)
-    setChatDetail(null)
-    setChatLoadState('ready')
-    setSendState('idle')
-    setSearchOpen(false)
-    setSearchQuery('')
-    setNewChatOpen(true)
+    showNewChatView()
   }
 
   const handleCloseSearch = (): void => {
@@ -397,10 +530,105 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleMarkChatDone = async (chat: ProviderChat): Promise<void> => {
+    try {
+      const metadata = await providerApi.markChatDone(chat.providerId, chat.id)
+      applyChatMetadata([metadata])
+
+      if (selectedChat?.providerId === chat.providerId && selectedChat.id === chat.id) {
+        showNewChatView()
+      }
+    } catch {
+      // Leave the chat as-is if local metadata cannot be updated.
+    }
+  }
+
+  const handleToggleChatPinned = async (chat: ProviderChat): Promise<void> => {
+    try {
+      const metadata = await providerApi.setChatPinned(chat.providerId, chat.id, !chat.pinned)
+      applyChatMetadata([metadata])
+    } catch {
+      // Leave the chat as-is if local metadata cannot be updated.
+    }
+  }
+
+  const handleMarkCwdChatsDone = async (group: ChatCwdGroup): Promise<void> => {
+    if (group.kind !== 'cwd') return
+
+    try {
+      const providerIds = Array.from(new Set(group.chats.map((chat) => chat.providerId)))
+      const metadataGroups = await Promise.all(
+        providerIds.map((providerId) => providerApi.markCwdChatsDone(providerId, group.cwd))
+      )
+      applyChatMetadata(metadataGroups.flat())
+
+      if (
+        selectedChat &&
+        !selectedChat.done &&
+        getChatCwdGroupKey(selectedChat.cwd) === getChatCwdGroupKey(group.cwd)
+      ) {
+        showNewChatView()
+      }
+    } catch {
+      // Leave the group as-is if local metadata cannot be updated.
+    }
+  }
+
+  const handleEditMessage = (message: ProviderMessage): void => {
+    if (
+      message.role !== 'user' ||
+      !chatDetail?.capabilities.editMessages ||
+      chatIsBusy ||
+      sendInFlightRef.current
+    ) {
+      return
+    }
+
+    setSendState('idle')
+    setEditingMessage({
+      id: message.id,
+      content: message.content
+    })
+  }
+
+  const handleCancelEditMessage = (): void => {
+    setSendState('idle')
+    setEditingMessage(null)
+  }
+
   const handleSendMessage = async (message: string): Promise<void> => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
     const turnOptions = { accessMode, model, reasoningEffort }
+
+    if (editingMessage) {
+      if (!selectedChat) {
+        sendInFlightRef.current = false
+        return
+      }
+
+      setSendState('sending')
+
+      try {
+        const detail = await providerApi.editMessage(
+          selectedChat.providerId,
+          selectedChat.id,
+          editingMessage.id,
+          message,
+          turnOptions
+        )
+        applyChatDetail(selectedChat.providerId, detail)
+        setEditingMessage(null)
+        setSendState('idle')
+      } catch (error) {
+        setSendState('error')
+        throw error
+      } finally {
+        sendInFlightRef.current = false
+      }
+
+      return
+    }
 
     if (!selectedChat) {
       setSendState('sending')
@@ -464,11 +692,68 @@ export const App: React.FC = () => {
     }
   }
 
-  const chatIsBusy =
-    chatDetail?.status === 'active' ||
-    chatDetail?.status === 'waitingOnApproval' ||
-    chatDetail?.status === 'waitingOnUserInput'
+  const renderChatGroup = (group: ChatCwdGroup, contentId: string): React.ReactElement => {
+    const groupOpen =
+      searchTerms.length > 0 || !getCollapsedGroupState(group.key, collapsedCwdGroups)
+
+    return (
+      <section
+        className={`chat-list-section chat-list-section--cwd${groupOpen ? ' chat-list-section--open' : ''}`}
+        aria-label={`${group.label} chats`}
+        key={group.key}
+      >
+        <div className="chat-list-section__header">
+          <button
+            className="chat-list-section__toggle"
+            type="button"
+            aria-controls={contentId}
+            aria-expanded={groupOpen}
+            title={group.cwd ?? group.label}
+            onClick={() => handleToggleCwdGroup(group.key)}
+          >
+            <ChevronRight className="chat-list-section__chevron" aria-hidden="true" />
+            <span className="chat-list-section__title">{group.label}</span>
+          </button>
+          {group.kind === 'cwd' && (
+            <button
+              className="chat-list-section__action"
+              type="button"
+              aria-label={`Mark all ${group.label} chats done`}
+              title="Mark project chats done"
+              onClick={() => void handleMarkCwdChatsDone(group)}
+            >
+              <CheckCheck aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        {groupOpen && (
+          <blockquote className="chat-list-section__quote" id={contentId}>
+            <ChatList
+              ariaLabel={`${group.label} chats`}
+              chats={group.chats}
+              onMarkDone={handleMarkChatDone}
+              onSelect={handleSelectChat}
+              onTogglePinned={handleToggleChatPinned}
+            />
+          </blockquote>
+        )}
+      </section>
+    )
+  }
+
+  const chatIsWaiting =
+    chatDetail?.status === 'waitingOnApproval' || chatDetail?.status === 'waitingOnUserInput'
+  const chatIsBusy = chatIsWaiting || hasActiveWorkingStep(chatDetail)
   const messageBoxDisabled = selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false
+  const canEditOwnMessages = Boolean(
+    selectedChat &&
+    chatDetail?.capabilities.editMessages &&
+    chatLoadState === 'ready' &&
+    !chatIsBusy &&
+    sendState !== 'sending' &&
+    !editingMessage
+  )
+  const visibleChatItems = chatDetail ? getVisibleChatItems(chatDetail.items, editingMessage) : []
   const chatPanelOpen = Boolean(selectedChat) || newChatOpen
 
   return (
@@ -550,39 +835,9 @@ export const App: React.FC = () => {
               )}
               {filteredChats.length > 0 && (
                 <div className="chat-list-stack">
-                  {chatGroups.map((group, groupIndex) => {
-                    const groupOpen = searchTerms.length > 0 || !collapsedCwdGroups[group.key]
-                    const contentId = `cwd-chats-list-${groupIndex}`
-
-                    return (
-                      <section
-                        className={`chat-list-section chat-list-section--cwd${groupOpen ? ' chat-list-section--open' : ''}`}
-                        aria-label={`${group.label} chats`}
-                        key={group.key}
-                      >
-                        <button
-                          className="chat-list-section__toggle"
-                          type="button"
-                          aria-controls={contentId}
-                          aria-expanded={groupOpen}
-                          title={group.cwd ?? group.label}
-                          onClick={() => handleToggleCwdGroup(group.key)}
-                        >
-                          <ChevronRight className="chat-list-section__chevron" aria-hidden="true" />
-                          <span className="chat-list-section__title">{group.label}</span>
-                        </button>
-                        {groupOpen && (
-                          <blockquote className="chat-list-section__quote" id={contentId}>
-                            <ChatList
-                              ariaLabel={`${group.label} chats`}
-                              chats={group.chats}
-                              onSelect={handleSelectChat}
-                            />
-                          </blockquote>
-                        )}
-                      </section>
-                    )
-                  })}
+                  {activeChatGroups.map((group, groupIndex) =>
+                    renderChatGroup(group, `cwd-chats-list-${groupIndex}`)
+                  )}
                   {hasMoreChats && chatPageLoadState !== 'error' && (
                     <div className="chat-list-section__sentinel" ref={chatLoadTriggerRef}>
                       {chatPageLoadState === 'loading' ? (
@@ -601,13 +856,21 @@ export const App: React.FC = () => {
                       Retry loading chats
                     </button>
                   )}
+                  {doneChatGroup && renderChatGroup(doneChatGroup, 'cwd-chats-list-done')}
                 </div>
               )}
             </div>
           </aside>
         </Panel>
 
-        <Separator className="chat__resize-handle" id="chat-sidebar-resize" />
+        <Separator
+          className="chat__resize-handle"
+          elementRef={resizeHandleRef}
+          id="chat-sidebar-resize"
+          onFocus={(event) => event.currentTarget.blur()}
+          onPointerDown={(event) => event.currentTarget.blur()}
+          onPointerUp={(event) => event.currentTarget.blur()}
+        />
 
         <Panel className="chat__detail-panel" minSize={0} id="detail">
           <section
@@ -633,11 +896,18 @@ export const App: React.FC = () => {
                   {chatLoadState === 'error' && (
                     <p className="chat__status">Unable to load messages.</p>
                   )}
-                  {chatLoadState === 'ready' && chatDetail?.items.length === 0 && (
-                    <p className="chat__status">No messages found.</p>
-                  )}
-                  {chatDetail?.items.map((item) => (
-                    <ChatDetailItem item={item} key={item.id} />
+                  {!editingMessage &&
+                    chatLoadState === 'ready' &&
+                    visibleChatItems.length === 0 && (
+                      <p className="chat__status">No messages found.</p>
+                    )}
+                  {visibleChatItems.map((item) => (
+                    <ChatDetailItem
+                      canEditOwnMessages={canEditOwnMessages}
+                      item={item}
+                      key={item.id}
+                      onEditMessage={handleEditMessage}
+                    />
                   ))}
                 </div>
               </>
@@ -686,14 +956,17 @@ export const App: React.FC = () => {
                 </div>
               )}
               <MessageBox
-                active={chatIsBusy}
+                active={editingMessage ? false : chatIsBusy}
                 accessMode={accessMode}
+                autoFocus={!selectedChat && newChatOpen}
                 disabled={messageBoxDisabled}
+                editSession={editingMessage}
                 error={sendState === 'error' ? 'Unable to complete request.' : null}
                 model={model}
                 pending={sendState === 'sending'}
                 reasoningEffort={reasoningEffort}
                 onAccessModeChange={setAccessMode}
+                onCancelEdit={handleCancelEditMessage}
                 onModelChange={setModel}
                 onReasoningEffortChange={setReasoningEffort}
                 onStop={handleStopChat}

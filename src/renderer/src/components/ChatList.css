@@ -18,10 +18,17 @@
   gap: 10px;
 }
 
+.chat-list-section__header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .chat-list-section__toggle {
   display: flex;
-  width: 100%;
   min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 8px;
   padding: 0;
@@ -58,6 +65,34 @@
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-list-section__action {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  color: var(--quiet);
+  background: transparent;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.chat-list-section__action:hover,
+.chat-list-section__action:focus-visible {
+  color: var(--ink);
+  background: var(--glass-subtle);
+  border-color: color-mix(in srgb, var(--muted) 24%, var(--glass-line));
+}
+
+.chat-list-section__action svg {
+  width: 17px;
+  height: 17px;
 }
 
 .chat-list-section__quote {

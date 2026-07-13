@@ -20,8 +20,23 @@ const providerApi: ProviderApi = {
     ipcRenderer.invoke(providerIpcChannels.startChat, providerId, message, options),
   continueChat: (providerId, chatId, message, options) =>
     ipcRenderer.invoke(providerIpcChannels.continueChat, providerId, chatId, message, options),
+  editMessage: (providerId, chatId, messageId, message, options) =>
+    ipcRenderer.invoke(
+      providerIpcChannels.editMessage,
+      providerId,
+      chatId,
+      messageId,
+      message,
+      options
+    ),
   stopChat: (providerId, chatId) =>
     ipcRenderer.invoke(providerIpcChannels.stopChat, providerId, chatId),
+  markChatDone: (providerId, chatId) =>
+    ipcRenderer.invoke(providerIpcChannels.markChatDone, providerId, chatId),
+  markCwdChatsDone: (providerId, cwd) =>
+    ipcRenderer.invoke(providerIpcChannels.markCwdChatsDone, providerId, cwd),
+  setChatPinned: (providerId, chatId, pinned) =>
+    ipcRenderer.invoke(providerIpcChannels.setChatPinned, providerId, chatId, pinned),
   onChatUpdated: (listener): (() => void) => {
     const handleChatUpdated = (_: IpcRendererEvent, event: ProviderChatUpdatedEvent): void => {
       listener(event)

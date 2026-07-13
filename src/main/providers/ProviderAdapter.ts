@@ -18,6 +18,12 @@ export type ProviderAdapter = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  editMessage: (
+    chatId: string,
+    messageId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
   stopChat: (chatId: string) => Promise<ProviderChatDetail>
   onChatUpdated: (listener: (detail: ProviderChatDetail) => void) => () => void
   dispose: () => void

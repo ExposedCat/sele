@@ -1,10 +1,12 @@
-import { ChevronRight, Folder, LoaderCircle } from 'lucide-react'
+import { Check, Folder, LoaderCircle, Pin } from 'lucide-react'
 import type { ProviderChat } from '../../../shared/provider'
 import './ChatListItem.css'
 
 type ChatListItemProps = {
   chat: ProviderChat
   onClick: () => void
+  onMarkDone: () => void
+  onTogglePinned: () => void
 }
 
 const statusLabels = {
@@ -30,42 +32,73 @@ const getChatProjectName = (cwd: string | null): string => {
   return normalizedCwd ? getLastPathPart(normalizedCwd) : 'Unknown cwd'
 }
 
-export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, onClick }) => {
+export const ChatListItem: React.FC<ChatListItemProps> = ({
+  chat,
+  onClick,
+  onMarkDone,
+  onTogglePinned
+}) => {
   const updatedAt = new Date(chat.updatedAt)
   const projectName = getChatProjectName(chat.cwd)
 
   return (
-    <button className="chat-list-item" type="button" onClick={onClick}>
-      <span className="chat-list-item__header">
-        <span className="chat-list-item__title">{chat.title}</span>
-        {chat.status && (
+    <article className={`chat-list-item${chat.pinned ? ' chat-list-item--pinned' : ''}`}>
+      <button className="chat-list-item__main" type="button" onClick={onClick}>
+        <span className="chat-list-item__header">
+          <span className="chat-list-item__title">{chat.title}</span>
           <span className="chat-list-item__meta">
-            <span className="chat-list-item__status-container" title={statusLabels[chat.status]}>
-              {workingStatuses.has(chat.status) ? (
-                <LoaderCircle
-                  className="chat-list-item__loading"
-                  aria-label={statusLabels[chat.status]}
-                />
-              ) : (
-                <span
-                  className={`chat-list-item__status chat-list-item__status--${chat.status}`}
-                  role="img"
-                  aria-label={statusLabels[chat.status]}
-                />
-              )}
-            </span>
+            {chat.pinned && (
+              <Pin className="chat-list-item__pin-indicator" aria-label="Pinned chat" />
+            )}
+            {chat.status && (
+              <span className="chat-list-item__status-container" title={statusLabels[chat.status]}>
+                {workingStatuses.has(chat.status) ? (
+                  <LoaderCircle
+                    className="chat-list-item__loading"
+                    aria-label={statusLabels[chat.status]}
+                  />
+                ) : (
+                  <span
+                    className={`chat-list-item__status chat-list-item__status--${chat.status}`}
+                    role="img"
+                    aria-label={statusLabels[chat.status]}
+                  />
+                )}
+              </span>
+            )}
           </span>
-        )}
-      </span>
-      <span className="chat-list-item__body">
-        <span className="chat-list-item__context" title={chat.cwd ?? projectName}>
-          <Folder className="chat-list-item__folder" aria-hidden="true" />
-          <span className="chat-list-item__project">{projectName}</span>
-          <span className="chat-list-item__separator">·</span>
-          <time dateTime={updatedAt.toISOString()}>{updatedAt.toLocaleDateString()}</time>
         </span>
-        <ChevronRight className="chat-list-item__chevron" aria-hidden="true" />
+        <span className="chat-list-item__body">
+          <span className="chat-list-item__context" title={chat.cwd ?? projectName}>
+            <Folder className="chat-list-item__folder" aria-hidden="true" />
+            <span className="chat-list-item__project">{projectName}</span>
+            <span className="chat-list-item__separator">·</span>
+            <time dateTime={updatedAt.toISOString()}>{updatedAt.toLocaleDateString()}</time>
+          </span>
+        </span>
+      </button>
+      <span className="chat-list-item__actions">
+        {!chat.done && (
+          <button
+            className="chat-list-item__action"
+            type="button"
+            aria-label="Mark chat done"
+            title="Mark done"
+            onClick={onMarkDone}
+          >
+            <Check aria-hidden="true" />
+          </button>
+        )}
+        <button
+          className={`chat-list-item__action chat-list-item__action--pin${chat.pinned ? ' chat-list-item__action--active' : ''}`}
+          type="button"
+          aria-label={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+          title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+          onClick={onTogglePinned}
+        >
+          <Pin aria-hidden="true" />
+        </button>
       </span>
-    </button>
+    </article>
   )
 }

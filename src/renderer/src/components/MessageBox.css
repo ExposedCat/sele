@@ -151,6 +151,32 @@
   opacity: 0.36;
 }
 
+.message-box__cancel {
+  height: 38px;
+  flex: none;
+  padding: 0 12px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  color: var(--lead);
+  background: var(--glass-subtle);
+  font-size: 14px;
+  font-weight: 750;
+  transition:
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.message-box__cancel:not(:disabled):hover {
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.message-box__cancel:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 @media (max-width: 600px) {
   .message-box {
     padding: 10px;

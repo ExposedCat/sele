@@ -23,6 +23,22 @@ const requireChatId = (value: unknown): string => {
   return value
 }
 
+const requireMessageId = (value: unknown): string => {
+  if (typeof value !== 'string' || !value) throw new Error('Invalid message ID')
+  return value
+}
+
+const requireOptionalCwd = (value: unknown): string | null => {
+  if (value == null) return null
+  if (typeof value !== 'string') throw new Error('Invalid cwd')
+  return value
+}
+
+const requireBoolean = (value: unknown): boolean => {
+  if (typeof value !== 'boolean') throw new Error('Invalid boolean value')
+  return value
+}
+
 const requireChatListOptions = (value: unknown): ProviderChatListOptions | undefined => {
   if (value == null) return undefined
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -121,7 +137,44 @@ export const registerProviderIpc = (): void => {
       )
   )
 
+  ipcMain.handle(
+    providerIpcChannels.editMessage,
+    (
+      _,
+      providerId: unknown,
+      chatId: unknown,
+      messageId: unknown,
+      message: unknown,
+      options: unknown
+    ) =>
+      providerApi.editMessage(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireMessageId(messageId),
+        requireMessage(message),
+        requireTurnOptions(options)
+      )
+  )
+
   ipcMain.handle(providerIpcChannels.stopChat, (_, providerId: unknown, chatId: unknown) =>
     providerApi.stopChat(requireProviderId(providerId), requireChatId(chatId))
+  )
+
+  ipcMain.handle(providerIpcChannels.markChatDone, (_, providerId: unknown, chatId: unknown) =>
+    providerApi.markChatDone(requireProviderId(providerId), requireChatId(chatId))
+  )
+
+  ipcMain.handle(providerIpcChannels.markCwdChatsDone, (_, providerId: unknown, cwd: unknown) =>
+    providerApi.markCwdChatsDone(requireProviderId(providerId), requireOptionalCwd(cwd))
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.setChatPinned,
+    (_, providerId: unknown, chatId: unknown, pinned: unknown) =>
+      providerApi.setChatPinned(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireBoolean(pinned)
+      )
   )
 }

@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { disposeDatabase } from './database/sqlite'
 import { disposeProviderAdapters } from './providers/providerService'
 import { registerProviderIpc } from './providers/registerProviderIpc'
 import { registerAppIpc } from './registerAppIpc'
@@ -45,7 +46,10 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', disposeProviderAdapters)
+app.on('before-quit', () => {
+  disposeProviderAdapters()
+  void disposeDatabase()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

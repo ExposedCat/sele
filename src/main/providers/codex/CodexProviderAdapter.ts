@@ -3,6 +3,7 @@ import type {
   ProviderChatPage,
   ProviderChatDetail,
   ProviderChatStatus,
+  ProviderCapabilities,
   ProviderLoginResult,
   ProviderTurnOptions
 } from '../../../shared/provider'
@@ -10,6 +11,7 @@ import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification } from './CodexAppServerClient'
 import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
 import { loadRolloutCwd, loadRolloutHistory } from './CodexRolloutHistory'
+import { loadSessionThreadName, loadSessionThreadNames } from './CodexSessionIndex'
 import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
 
 type CodexAccount =
@@ -35,7 +37,7 @@ type CodexThreadStatus =
 
 type CodexThread = {
   id: string
-  name: string | null
+  name?: string | null
   preview: string
   createdAt: number
   updatedAt: number
@@ -66,6 +68,10 @@ type TurnStartResponse = {
   turn: CodexTurn
 }
 
+type ThreadRollbackResponse = {
+  thread: CodexThread
+}
+
 type CodexThreadAccessOptions = {
   approvalPolicy: 'on-request' | 'on-failure' | 'never'
   approvalsReviewer?: 'user' | 'auto_review'
@@ -91,6 +97,8 @@ type ThreadNotificationParams = {
   threadId?: unknown
   status?: unknown
   threadName?: unknown
+  thread_name?: unknown
+  name?: unknown
 }
 
 type TurnNotificationParams = {
@@ -134,8 +142,33 @@ const getAccountLabel = (account: CodexAccount): string => {
   return 'Amazon Bedrock'
 }
 
-const getThreadTitle = (thread: CodexThread): string =>
-  thread.name?.trim() || thread.preview.trim().split('\n')[0] || 'Untitled chat'
+const getStringValue = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value.trim() : null
+
+const getThreadName = (thread: CodexThread): string | null => {
+  const threadFields = thread as CodexThread & {
+    threadName?: unknown
+    thread_name?: unknown
+    title?: unknown
+  }
+
+  return (
+    getStringValue(thread.name) ??
+    getStringValue(threadFields.thread_name) ??
+    getStringValue(threadFields.threadName) ??
+    getStringValue(threadFields.title)
+  )
+}
+
+const getThreadTitle = (thread: CodexThread): string => {
+  const previewTitle = thread.preview.trim().split('\n')[0]
+  return getThreadName(thread) ?? (previewTitle || 'Untitled chat')
+}
+
+const getThreadNotificationName = (params: ThreadNotificationParams): string | null =>
+  getStringValue(params.threadName) ??
+  getStringValue(params.thread_name) ??
+  getStringValue(params.name)
 
 const getThreadStatus = (thread: CodexThread): ProviderChatStatus | null => {
   if (thread.status.type === 'systemError') return 'error'
@@ -149,6 +182,9 @@ const getThreadApiCwd = (thread: CodexThread): string | null => {
   const cwd = thread.cwd?.trim()
   return cwd || null
 }
+
+const getThreadTurns = (thread: CodexThread): CodexTurn[] =>
+  Array.isArray(thread.turns) ? thread.turns : []
 
 const nowSeconds = (): number => Math.floor(Date.now() / 1_000)
 
@@ -208,6 +244,10 @@ const isPendingUserMessage = (item: CodexThreadItem): boolean =>
 
 const hasUserMessage = (items: CodexThreadItem[]): boolean =>
   items.some((item) => item.type === 'userMessage')
+
+const codexCapabilities = {
+  editMessages: true
+} satisfies ProviderCapabilities
 
 const createUserTextInput = (
   text: string
@@ -285,6 +325,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private pendingTurnIds = new Map<string, string>()
   private activeTurnIds = new Map<string, string>()
   private chatUpdatedTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private rolledBackTurnIds = new Map<string, Set<string>>()
 
   constructor() {
     this.disposeNotificationListener = this.client.onNotification(this.handleNotification)
@@ -328,17 +369,24 @@ export class CodexProviderAdapter implements ProviderAdapter {
       archived: false
     })
 
+    const threadNames = await loadSessionThreadNames(response.data.map((thread) => thread.id))
     const chats = await Promise.all(
-      response.data.map(async (thread) => ({
-        id: thread.id,
-        providerId: this.id,
-        title: getThreadTitle(thread),
-        preview: thread.preview.trim(),
-        cwd: await this.resolveThreadCwd(thread),
-        createdAt: thread.createdAt * 1_000,
-        updatedAt: thread.updatedAt * 1_000,
-        status: getThreadStatus(thread)
-      }))
+      response.data.map(async (thread) => {
+        const namedThread = this.withResolvedThreadName(thread, threadNames.get(thread.id) ?? null)
+
+        return {
+          id: namedThread.id,
+          providerId: this.id,
+          title: getThreadTitle(namedThread),
+          preview: namedThread.preview.trim(),
+          cwd: await this.resolveThreadCwd(namedThread),
+          createdAt: namedThread.createdAt * 1_000,
+          updatedAt: namedThread.updatedAt * 1_000,
+          status: getThreadStatus(namedThread),
+          pinned: false,
+          done: false
+        }
+      })
     )
 
     return {
@@ -353,14 +401,16 @@ export class CodexProviderAdapter implements ProviderAdapter {
       includeTurns: true
     })
 
-    const [cwd, turns] = await Promise.all([
+    const [cwd, name, turns] = await Promise.all([
       this.resolveThreadCwd(response.thread),
+      this.resolveThreadName(response.thread),
       this.getTurnsForThread(response.thread)
     ])
     const thread = {
       ...response.thread,
+      name,
       cwd,
-      turns
+      turns: this.filterRolledBackTurns(response.thread.id, turns)
     }
     this.cacheThread(thread)
 
@@ -379,12 +429,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
       ...getThreadAccessOptions(options),
       ...getThreadModelOptions(options)
     })
-    const [cwd, turns] = await Promise.all([
+    const [cwd, name, turns] = await Promise.all([
       this.resolveThreadCwd(startedThread.thread, options?.cwd ?? null),
+      this.resolveThreadName(startedThread.thread),
       this.getTurnsForThread(startedThread.thread)
     ])
     const thread = {
       ...startedThread.thread,
+      name,
       cwd,
       status: { type: 'active', activeFlags: [] },
       turns
@@ -430,26 +482,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
     if (pendingTurn) this.emitChatUpdated(chatId)
 
     try {
-      const resume = await this.client.request<ThreadResumeResponse>('thread/resume', {
-        threadId: chatId,
-        ...getThreadAccessOptions(options)
-      })
       const existingCwd = this.threads.get(chatId)?.cwd ?? null
-      const [cwd, resumedTurns] = await Promise.all([
-        this.resolveThreadCwd(resume.thread, existingCwd),
-        this.getTurnsForThread(resume.thread)
-      ])
-      const turns =
-        pendingTurn && !resumedTurns.some((turn) => turn.id === pendingTurn.id)
-          ? [...resumedTurns, pendingTurn]
-          : resumedTurns
-
-      this.cacheThread({
-        ...resume.thread,
-        cwd,
-        status: { type: 'active', activeFlags: [] },
-        turns
-      })
+      await this.resumeThreadForMutation(chatId, options, existingCwd)
 
       const started = await this.client.request<TurnStartResponse>('turn/start', {
         threadId: chatId,
@@ -468,6 +502,75 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
     const detail = this.getCachedChatDetail(chatId)
     if (!detail) throw new Error('Unable to continue chat')
+
+    this.emitChatUpdated(chatId)
+    return detail
+  }
+
+  editMessage = async (
+    chatId: string,
+    messageId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ): Promise<ProviderChatDetail> => {
+    const text = message.trim()
+    if (!text) throw new Error('Cannot edit a message to empty content')
+
+    if (!this.threads.has(chatId)) {
+      await this.getChat(chatId)
+    }
+
+    let thread = this.threads.get(chatId)
+    if (!thread) throw new Error('Unable to load chat for editing')
+
+    thread = await this.resumeThreadForMutation(chatId, options, thread.cwd ?? null)
+
+    const targetTurnIndex = this.findUserMessageTurnIndex(thread, messageId)
+    if (targetTurnIndex < 0) throw new Error('Message cannot be edited')
+
+    const numTurns = thread.turns.length - targetTurnIndex
+    if (numTurns < 1) throw new Error('Message cannot be edited')
+
+    const rolledBackTurnIds = new Set(thread.turns.slice(targetTurnIndex).map((turn) => turn.id))
+    const rollback = await this.client.request<ThreadRollbackResponse>('thread/rollback', {
+      threadId: chatId,
+      numTurns
+    })
+    const [cwd, name] = await Promise.all([
+      this.resolveThreadCwd(rollback.thread, thread.cwd ?? null),
+      this.resolveThreadName(rollback.thread)
+    ])
+    this.rememberRolledBackTurns(chatId, rolledBackTurnIds)
+    this.cacheThread({
+      ...rollback.thread,
+      name,
+      cwd,
+      turns: thread.turns.slice(0, targetTurnIndex)
+    })
+    this.emitChatUpdated(chatId)
+
+    const pendingTurn = this.addPendingTurn(chatId, text)
+    if (pendingTurn) this.emitChatUpdated(chatId)
+
+    try {
+      const started = await this.client.request<TurnStartResponse>('turn/start', {
+        threadId: chatId,
+        input: createUserTextInput(text),
+        ...getTurnModelOptions(options),
+        ...getTurnAccessOptions(options)
+      })
+
+      this.allowRolledBackTurn(chatId, started.turn.id)
+      this.activeTurnIds.set(chatId, started.turn.id)
+      this.replacePendingTurn(chatId, pendingTurn?.id ?? null, started.turn)
+      this.pendingTurnIds.delete(chatId)
+    } catch (error) {
+      if (pendingTurn) this.removePendingTurn(chatId, pendingTurn.id)
+      throw error
+    }
+
+    const detail = this.getCachedChatDetail(chatId)
+    if (!detail) throw new Error('Unable to edit message')
 
     this.emitChatUpdated(chatId)
     return detail
@@ -513,22 +616,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     getThreadApiCwd(thread) ?? fallbackCwd ?? (await loadRolloutCwd(thread.path))
 
   private getTurnsForThread = async (thread: CodexThread): Promise<CodexTurn[]> => {
-    const turnStatuses = new Map(thread.turns.map((turn) => [turn.id, turn.status]))
-    const rolloutTurns = await loadRolloutHistory(thread.path)
-    if (rolloutTurns.length === 0) return thread.turns
+    const structuredTurns = getThreadTurns(thread)
+    if (structuredTurns.length > 0) return structuredTurns
 
-    const rolloutTurnIds = new Set(rolloutTurns.map((turn) => turn.id))
-    const structuredOnlyTurns = thread.turns.filter(
-      (turn) => !rolloutTurnIds.has(turn.id) && turn.items.length > 0
-    )
-
-    return [
-      ...rolloutTurns.map((turn) => ({
-        ...turn,
-        status: turnStatuses.get(turn.id) ?? turn.status ?? null
-      })),
-      ...structuredOnlyTurns
-    ]
+    return loadRolloutHistory(thread.path)
   }
 
   private createChatDetail = (thread: CodexThread): ProviderChatDetail => ({
@@ -536,6 +627,9 @@ export class CodexProviderAdapter implements ProviderAdapter {
     title: getThreadTitle(thread),
     cwd: getThreadApiCwd(thread),
     status: getThreadStatus(thread),
+    pinned: false,
+    done: false,
+    capabilities: codexCapabilities,
     items: getChatItems(thread.turns)
   })
 
@@ -546,6 +640,85 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private getCachedChatDetail = (threadId: string): ProviderChatDetail | null => {
     const thread = this.threads.get(threadId)
     return thread ? this.createChatDetail(thread) : null
+  }
+
+  private rememberRolledBackTurns = (threadId: string, turnIds: Set<string>): void => {
+    if (turnIds.size === 0) return
+
+    const rolledBackTurnIds = this.rolledBackTurnIds.get(threadId) ?? new Set<string>()
+    turnIds.forEach((turnId) => rolledBackTurnIds.add(turnId))
+    this.rolledBackTurnIds.set(threadId, rolledBackTurnIds)
+
+    const activeTurnId = this.activeTurnIds.get(threadId)
+    if (activeTurnId && turnIds.has(activeTurnId)) this.activeTurnIds.delete(threadId)
+
+    const pendingTurnId = this.pendingTurnIds.get(threadId)
+    if (pendingTurnId && turnIds.has(pendingTurnId)) this.pendingTurnIds.delete(threadId)
+  }
+
+  private allowRolledBackTurn = (threadId: string, turnId: string): void => {
+    const rolledBackTurnIds = this.rolledBackTurnIds.get(threadId)
+    if (!rolledBackTurnIds) return
+
+    rolledBackTurnIds.delete(turnId)
+    if (rolledBackTurnIds.size === 0) this.rolledBackTurnIds.delete(threadId)
+  }
+
+  private isRolledBackTurn = (threadId: string, turnId: string): boolean =>
+    this.rolledBackTurnIds.get(threadId)?.has(turnId) ?? false
+
+  private filterRolledBackTurns = (threadId: string, turns: CodexTurn[]): CodexTurn[] => {
+    const rolledBackTurnIds = this.rolledBackTurnIds.get(threadId)
+    if (!rolledBackTurnIds || rolledBackTurnIds.size === 0) return turns
+
+    return turns.filter((turn) => !rolledBackTurnIds.has(turn.id))
+  }
+
+  private findUserMessageTurnIndex = (thread: CodexThread, messageId: string): number =>
+    thread.turns.findIndex((turn) =>
+      turn.items.some(
+        (item) => item.type === 'userMessage' && `${turn.id}:${item.id}` === messageId
+      )
+    )
+
+  private withResolvedThreadName = (
+    thread: CodexThread,
+    fallbackName: string | null
+  ): CodexThread => ({
+    ...thread,
+    name: fallbackName ?? getThreadName(thread)
+  })
+
+  private resolveThreadName = async (thread: CodexThread): Promise<string | null> =>
+    (await loadSessionThreadName(thread.id)) ?? getThreadName(thread)
+
+  private resumeThreadForMutation = async (
+    threadId: string,
+    options: ProviderTurnOptions | undefined,
+    fallbackCwd: string | null
+  ): Promise<CodexThread> => {
+    const existingThread = this.threads.get(threadId) ?? null
+    const resume = await this.client.request<ThreadResumeResponse>('thread/resume', {
+      threadId,
+      ...getThreadAccessOptions(options)
+    })
+    const [cwd, name, resumedTurns] = await Promise.all([
+      this.resolveThreadCwd(resume.thread, fallbackCwd),
+      this.resolveThreadName(resume.thread),
+      existingThread ? Promise.resolve<CodexTurn[]>([]) : this.getTurnsForThread(resume.thread)
+    ])
+    const thread = {
+      ...resume.thread,
+      name,
+      cwd,
+      status: existingThread?.status ?? resume.thread.status,
+      turns: existingThread
+        ? existingThread.turns
+        : this.filterRolledBackTurns(threadId, resumedTurns)
+    }
+
+    this.cacheThread(thread)
+    return thread
   }
 
   private emitChatUpdated = (threadId: string): void => {
@@ -828,6 +1001,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
     turnId: string,
     update: (items: CodexThreadItem[]) => CodexThreadItem[]
   ): void => {
+    if (this.isRolledBackTurn(threadId, turnId)) return
+
     this.updateThread(threadId, (thread) => {
       const turnIndex = thread.turns.findIndex((candidate) => candidate.id === turnId)
       const turns = [...thread.turns]
@@ -859,6 +1034,11 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const threadId = getThreadId(params)
     if (!threadId || !params.turn || typeof params.turn !== 'object') return
     const turn = this.normalizeLiveTurn(params.turn as CodexTurn)
+
+    if (this.isRolledBackTurn(threadId, turn.id)) {
+      if (notification.method !== 'turn/started' || !this.pendingTurnIds.has(threadId)) return
+      this.allowRolledBackTurn(threadId, turn.id)
+    }
 
     if (notification.method === 'turn/started') {
       this.activeTurnIds.set(threadId, turn.id)
@@ -1037,9 +1217,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }
 
     if (notification.method === 'thread/name/updated') {
+      const name = getThreadNotificationName(params)
       this.updateThread(threadId, (thread) => ({
         ...thread,
-        name: typeof params.threadName === 'string' ? params.threadName : null
+        name
       }))
     }
 
