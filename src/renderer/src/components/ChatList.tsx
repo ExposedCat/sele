@@ -3,14 +3,19 @@ import { ChatListItem } from './ChatListItem'
 import './ChatList.css'
 
 type ChatListProps = {
+  ariaLabel?: string
   chats: ProviderChat[]
   onSelect: (chat: ProviderChat) => void
 }
 
-export const ChatList: React.FC<ChatListProps> = ({ chats, onSelect }) => (
-  <section className="chat-list" aria-label="Chats">
+export const ChatList: React.FC<ChatListProps> = ({ ariaLabel = 'Chats', chats, onSelect }) => (
+  <section className="chat-list" aria-label={ariaLabel}>
     {chats.map((chat) => (
-      <ChatListItem key={chat.id} chat={chat} onClick={() => onSelect(chat)} />
+      <ChatListItem
+        key={`${chat.providerId}:${chat.id}`}
+        chat={chat}
+        onClick={() => onSelect(chat)}
+      />
     ))}
   </section>
 )

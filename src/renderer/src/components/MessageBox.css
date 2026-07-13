@@ -1,12 +1,10 @@
 .message-box {
   position: relative;
   z-index: 3;
-  display: flex;
+  display: block;
   width: 100%;
-  gap: 12px;
-  align-items: center;
   margin: 0;
-  padding: 10px 10px 10px 16px;
+  padding: 10px;
   border: 1px solid var(--glass-line);
   border-radius: 18px;
   background: var(--glass-strong);
@@ -23,11 +21,50 @@
   box-shadow: var(--glass-shadow);
 }
 
+.message-box__select {
+  height: 36px;
+  flex: none;
+  padding: 0 30px 0 11px;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  outline: 0;
+  color: var(--lead);
+  background: var(--glass-subtle);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.message-box__select:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.message-box__access {
+  min-width: 124px;
+}
+
+.message-box__model {
+  width: 158px;
+}
+
+.message-box__reasoning {
+  width: 102px;
+}
+
+.message-box__input {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .message-box textarea {
+  width: 100%;
   min-width: 0;
   min-height: 44px;
-  flex: 1;
-  padding: 10px 0;
+  max-height: 180px;
+  padding: 8px 4px 0;
   resize: none;
   border: 0;
   outline: 0;
@@ -35,6 +72,21 @@
   background: transparent;
   font-size: 18px;
   line-height: 1.5;
+}
+
+.message-box__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.message-box__send-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .message-box textarea::placeholder {
@@ -64,10 +116,10 @@
   backdrop-filter: blur(18px) saturate(1.3);
 }
 
-.message-box button {
+.message-box__action {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   flex: none;
   place-items: center;
   padding: 0;
@@ -84,23 +136,47 @@
     transform 160ms ease;
 }
 
-.message-box button svg {
+.message-box__action svg {
   width: 21px;
   height: 21px;
 }
 
-.message-box button:not(:disabled):hover {
+.message-box__action:not(:disabled):hover {
   background: var(--dark-hover);
   transform: translateY(-1px);
 }
 
-.message-box button:disabled {
+.message-box__action:disabled {
   cursor: default;
   opacity: 0.36;
 }
 
 @media (max-width: 600px) {
   .message-box {
-    padding-left: 14px;
+    padding: 10px;
+  }
+
+  .message-box__controls {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .message-box__send-controls {
+    flex: 1;
+  }
+
+  .message-box__access {
+    min-width: 94px;
+    max-width: 104px;
+    padding-right: 24px;
+    font-size: 13px;
+  }
+
+  .message-box__model {
+    width: 126px;
+  }
+
+  .message-box__reasoning {
+    width: 88px;
   }
 }

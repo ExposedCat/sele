@@ -1,17 +1,24 @@
 import type {
-  ProviderChat,
+  ProviderChatListOptions,
+  ProviderChatPage,
   ProviderChatDetail,
   ProviderId,
-  ProviderLoginResult
+  ProviderLoginResult,
+  ProviderTurnOptions
 } from '../../shared/provider'
 
 export type ProviderAdapter = {
   id: ProviderId
   login: () => Promise<ProviderLoginResult>
-  getChats: () => Promise<ProviderChat[]>
+  getChats: (options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (chatId: string) => Promise<ProviderChatDetail>
-  startChat: (message: string) => Promise<ProviderChatDetail>
-  continueChat: (chatId: string, message: string) => Promise<ProviderChatDetail>
+  startChat: (message: string, options?: ProviderTurnOptions) => Promise<ProviderChatDetail>
+  continueChat: (
+    chatId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
+  stopChat: (chatId: string) => Promise<ProviderChatDetail>
   onChatUpdated: (listener: (detail: ProviderChatDetail) => void) => () => void
   dispose: () => void
 }

@@ -4,6 +4,7 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { disposeProviderAdapters } from './providers/providerService'
 import { registerProviderIpc } from './providers/registerProviderIpc'
+import { registerAppIpc } from './registerAppIpc'
 
 const createWindow = (): void => {
   const mainWindow = new BrowserWindow({
@@ -30,6 +31,7 @@ const createWindow = (): void => {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.sele')
+  registerAppIpc()
   registerProviderIpc()
 
   app.on('browser-window-created', (_, window) => {

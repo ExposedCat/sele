@@ -1,3 +1,4 @@
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   ChevronRight,
   FilePlus2,
@@ -12,6 +13,7 @@ import {
   Trash2,
   Wrench
 } from 'lucide-react'
+import Markdown from 'markdown-to-jsx'
 import type {
   ProviderChatItem,
   ProviderToolActivity,
@@ -27,6 +29,9 @@ type ChatDetailItemProps = {
 
 type ProviderToolItem = Exclude<ProviderWorkingItem, { type: 'message' }>
 type ProviderWorkingMessageItem = Extract<ProviderWorkingItem, { type: 'message' }>
+type WorkingBlock =
+  | { type: 'message'; item: ProviderWorkingMessageItem }
+  | { type: 'tools'; items: ProviderToolItem[] }
 
 const activityLabels: Record<ProviderToolActivity, string> = {
   read: 'read files',
@@ -40,6 +45,32 @@ const activityLabels: Record<ProviderToolActivity, string> = {
   script: 'ran scripts',
   command: 'ran commands',
   other: 'used tools'
+}
+
+const placeholderLabels = ['Thinking', 'Analyzing', 'Processing'] as const
+const silencePlaceholderDelayMs = 600
+const markdownOptions = {
+  disableParsingRawHTML: true,
+  forceBlock: true,
+  wrapper: Fragment,
+  overrides: {
+    a: {
+      props: {
+        rel: 'noreferrer',
+        target: '_blank'
+      }
+    }
+  }
+} as const
+
+const getPlaceholderLabel = (id: string): (typeof placeholderLabels)[number] => {
+  let hash = 0
+
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) | 0
+  }
+
+  return placeholderLabels[Math.abs(hash) % placeholderLabels.length]
 }
 
 const DiffContent: React.FC<{ tools: ProviderWorkingTool[] }> = ({ tools }) => (
@@ -155,6 +186,15 @@ const ToolItem: React.FC<{ item: ProviderToolItem }> = ({ item }) => {
   return <Activity label={label} tools={tools} />
 }
 
+const MarkdownMessage: React.FC<{ className: string; content: string }> = ({
+  className,
+  content
+}) => (
+  <div className={className}>
+    <Markdown options={markdownOptions}>{content}</Markdown>
+  </div>
+)
+
 const getSequenceLabel = (tools: ProviderWorkingTool[]): string => {
   const labels = [...new Set(tools.map((tool) => activityLabels[tool.activity]))]
   const label = labels.join(', ') || activityLabels.other
@@ -198,22 +238,74 @@ const ToolSequence: React.FC<{ items: ProviderToolItem[] }> = ({ items }) => {
   )
 }
 
-const groupWorkingItems = (
-  items: ProviderWorkingItem[]
-): Array<ProviderWorkingMessageItem | ProviderToolItem[]> => {
-  const blocks: Array<ProviderWorkingMessageItem | ProviderToolItem[]> = []
+const WorkingPlaceholder: React.FC<{ id: string }> = ({ id }) => {
+  return (
+    <div className="chat-detail__tool-read chat-detail__tool-placeholder">
+      <span className="chat-detail__tool-icon">
+        <span className="chat-detail__tool-dot" aria-hidden="true" />
+      </span>
+      <span className="chat-detail__tool-label">{getPlaceholderLabel(id)}</span>
+    </div>
+  )
+}
+
+type PlaceholderState = {
+  signature: string
+  visible: boolean
+}
+
+const getToolSignature = (tool: ProviderWorkingTool): string =>
+  [
+    tool.id,
+    tool.label,
+    tool.command?.length ?? 0,
+    tool.stdout?.length ?? 0,
+    tool.diffs.map((diff) => `${diff.path}:${diff.diff.length}`).join(',')
+  ].join(':')
+
+const getWorkingItemSignature = (item: ProviderWorkingItem): string => {
+  if (item.type === 'message') return `message:${item.id}:${item.content.length}`
+  if (item.type === 'toolGroup') {
+    return `toolGroup:${item.id}:${item.tools.map(getToolSignature).join('|')}`
+  }
+
+  return `tool:${getToolSignature(item)}`
+}
+
+const useSilencePlaceholder = (signature: string, active: boolean, immediate: boolean): boolean => {
+  const [placeholderState, setPlaceholderState] = useState<PlaceholderState>(() => ({
+    signature,
+    visible: active && immediate
+  }))
+
+  useEffect(() => {
+    if (!active) return undefined
+
+    const timeout = window.setTimeout(
+      () => setPlaceholderState({ signature, visible: true }),
+      immediate ? 0 : silencePlaceholderDelayMs
+    )
+
+    return () => window.clearTimeout(timeout)
+  }, [active, immediate, signature])
+
+  return active && placeholderState.signature === signature && placeholderState.visible
+}
+
+const groupWorkingItems = (items: ProviderWorkingItem[]): WorkingBlock[] => {
+  const blocks: WorkingBlock[] = []
 
   for (const item of items) {
     if (item.type === 'message') {
-      blocks.push(item)
+      blocks.push({ type: 'message', item })
       continue
     }
 
     const lastBlock = blocks[blocks.length - 1]
-    if (Array.isArray(lastBlock)) {
-      lastBlock.push(item)
+    if (lastBlock?.type === 'tools') {
+      lastBlock.items.push(item)
     } else {
-      blocks.push([item])
+      blocks.push({ type: 'tools', items: [item] })
     }
   }
 
@@ -222,6 +314,15 @@ const groupWorkingItems = (
 
 const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   const blocks = groupWorkingItems(item.items)
+  const signature = useMemo(
+    () => `${item.status}:${item.items.map(getWorkingItemSignature).join('|')}`,
+    [item.items, item.status]
+  )
+  const showPlaceholder = useSilencePlaceholder(
+    signature,
+    item.status === 'working',
+    blocks.length === 0
+  )
   const label =
     item.status === 'stopped' ? 'Stopped' : item.status === 'worked' ? 'Worked' : 'Working'
   const heading = (
@@ -234,6 +335,23 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   )
 
   if (blocks.length === 0) {
+    if (showPlaceholder) {
+      return (
+        <details
+          className={`chat-detail__step chat-detail__working chat-detail__working--${item.status}`}
+          open
+        >
+          <summary>
+            {heading}
+            <ChevronRight className="chat-detail__summary-chevron" aria-hidden="true" />
+          </summary>
+          <div className="chat-detail__step-content">
+            <WorkingPlaceholder id={item.id} />
+          </div>
+        </details>
+      )
+    }
+
     return (
       <div
         className={`chat-detail__step chat-detail__working chat-detail__working--${item.status}`}
@@ -244,25 +362,32 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   }
 
   return (
-    <details className="chat-detail__step chat-detail__working">
+    <details
+      className={`chat-detail__step chat-detail__working chat-detail__working--${item.status}`}
+      open={item.status === 'working'}
+    >
       <summary>
         {heading}
         <ChevronRight className="chat-detail__summary-chevron" aria-hidden="true" />
       </summary>
       <div className="chat-detail__step-content">
-        {blocks.map((block) =>
-          Array.isArray(block) ? (
-            block.length > 1 ? (
-              <ToolSequence items={block} key={block[0]?.id} />
+        {blocks.map((block, blockIndex) =>
+          block.type === 'tools' ? (
+            block.items.length > 1 &&
+            (blockIndex < blocks.length - 1 || item.status !== 'working' || showPlaceholder) ? (
+              <ToolSequence items={block.items} key={block.items[0]?.id} />
             ) : (
-              <ToolItem item={block[0]} key={block[0].id} />
+              block.items.map((toolItem) => <ToolItem item={toolItem} key={toolItem.id} />)
             )
           ) : (
-            <p className="chat-detail__working-message" key={block.id}>
-              {block.content}
-            </p>
+            <MarkdownMessage
+              className="chat-detail__working-message"
+              content={block.item.content}
+              key={block.item.id}
+            />
           )
         )}
+        {showPlaceholder && <WorkingPlaceholder id={`${item.id}:${item.items.length}`} />}
       </div>
     </details>
   )
@@ -271,7 +396,10 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
 export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({ item }) => {
   if (item.type === 'message') {
     return (
-      <p className={`chat-detail__message chat-detail__message--${item.role}`}>{item.content}</p>
+      <MarkdownMessage
+        className={`chat-detail__message chat-detail__message--${item.role}`}
+        content={item.content}
+      />
     )
   }
 

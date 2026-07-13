@@ -341,3 +341,27 @@ export const loadRolloutHistory = async (rolloutPath: string | null): Promise<Co
     return []
   }
 }
+
+export const loadRolloutCwd = async (rolloutPath: string | null): Promise<string | null> => {
+  if (!rolloutPath) return null
+
+  try {
+    const contents = await readFile(rolloutPath, 'utf8')
+
+    for (const line of contents.split('\n')) {
+      if (!line.trim()) continue
+
+      try {
+        const record = JSON.parse(line) as RolloutRecord
+        const cwd = record.payload?.cwd
+        if (typeof cwd === 'string' && cwd.trim()) return cwd
+      } catch {
+        // Keep scanning; one malformed row should not hide cwd metadata from later rows.
+      }
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}

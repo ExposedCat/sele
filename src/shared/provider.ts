@@ -1,6 +1,18 @@
 export const providerIds = ['codex'] as const
+export const providerModelIds = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.3-codex-spark'
+] as const
+export const providerReasoningEfforts = ['low', 'medium', 'high', 'xhigh'] as const
 
 export type ProviderId = (typeof providerIds)[number]
+export type ProviderModelId = (typeof providerModelIds)[number]
+export type ProviderReasoningEffort = (typeof providerReasoningEfforts)[number]
 
 export type ProviderAccount = {
   label: string
@@ -18,9 +30,20 @@ export type ProviderChat = {
   providerId: ProviderId
   title: string
   preview: string
+  cwd: string | null
   createdAt: number
   updatedAt: number
   status: ProviderChatStatus | null
+}
+
+export type ProviderChatListOptions = {
+  cursor?: string | null
+  limit?: number | null
+}
+
+export type ProviderChatPage = {
+  chats: ProviderChat[]
+  nextCursor: string | null
 }
 
 export type ProviderMessage = {
@@ -90,6 +113,7 @@ export type ProviderChatItem = ProviderMessage | ProviderWorkingStep
 export type ProviderChatDetail = {
   id: string
   title: string
+  cwd: string | null
   status: ProviderChatStatus | null
   items: ProviderChatItem[]
 }
@@ -100,16 +124,31 @@ export type ProviderChatUpdatedEvent = {
   detail: ProviderChatDetail
 }
 
+export type ProviderAccessMode = 'sandbox' | 'auto' | 'full'
+
+export type ProviderTurnOptions = {
+  accessMode: ProviderAccessMode
+  cwd?: string
+  model: ProviderModelId
+  reasoningEffort: ProviderReasoningEffort
+}
+
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
-  getChats: (providerId: ProviderId) => Promise<ProviderChat[]>
+  getChats: (providerId: ProviderId, options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
-  startChat: (providerId: ProviderId, message: string) => Promise<ProviderChatDetail>
+  startChat: (
+    providerId: ProviderId,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
   continueChat: (
     providerId: ProviderId,
     chatId: string,
-    message: string
+    message: string,
+    options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  stopChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
   onChatUpdated: (listener: (event: ProviderChatUpdatedEvent) => void) => () => void
 }
 
@@ -119,8 +158,15 @@ export const providerIpcChannels = {
   getChat: 'provider:get-chat',
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
+  stopChat: 'provider:stop-chat',
   chatUpdated: 'provider:chat-updated'
 } as const
 
 export const isProviderId = (value: unknown): value is ProviderId =>
   providerIds.includes(value as ProviderId)
+
+export const isProviderModelId = (value: unknown): value is ProviderModelId =>
+  providerModelIds.includes(value as ProviderModelId)
+
+export const isProviderReasoningEffort = (value: unknown): value is ProviderReasoningEffort =>
+  providerReasoningEfforts.includes(value as ProviderReasoningEffort)

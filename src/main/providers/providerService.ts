@@ -22,10 +22,12 @@ for (const adapter of Object.values(adapters)) {
 
 export const providerApi: ProviderApi = {
   login: (providerId) => adapters[providerId].login(),
-  getChats: (providerId) => adapters[providerId].getChats(),
+  getChats: (providerId, options) => adapters[providerId].getChats(options),
   getChat: (providerId, chatId) => adapters[providerId].getChat(chatId),
-  startChat: (providerId, message) => adapters[providerId].startChat(message),
-  continueChat: (providerId, chatId, message) => adapters[providerId].continueChat(chatId, message),
+  startChat: (providerId, message, options) => adapters[providerId].startChat(message, options),
+  continueChat: (providerId, chatId, message, options) =>
+    adapters[providerId].continueChat(chatId, message, options),
+  stopChat: (providerId, chatId) => adapters[providerId].stopChat(chatId),
   onChatUpdated: (listener) => {
     chatUpdatedListeners.add(listener)
     return () => chatUpdatedListeners.delete(listener)
