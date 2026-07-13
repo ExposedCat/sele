@@ -11,11 +11,7 @@ export type ProviderLoginResult =
   | { status: 'pending'; loginId: string; authUrl: string }
   | { status: 'notRequired' }
 
-export type ProviderChatStatus =
-  | 'active'
-  | 'error'
-  | 'waitingOnApproval'
-  | 'waitingOnUserInput'
+export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
 
 export type ProviderChat = {
   id: string
@@ -27,14 +23,72 @@ export type ProviderChat = {
   status: ProviderChatStatus | null
 }
 
+export type ProviderMessage = {
+  type: 'message'
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type ProviderWorkingMessage = {
+  type: 'message'
+  id: string
+  content: string
+}
+
+export type ProviderFileDiff = {
+  path: string
+  kind: 'edit' | 'create' | 'delete'
+  diff: string
+}
+
+export type ProviderToolActivity = 'read' | 'edit' | 'create' | 'delete' | 'command' | 'other'
+
+export type ProviderWorkingTool = {
+  type: 'tool'
+  id: string
+  activity: ProviderToolActivity
+  label: string
+  command: string | null
+  stdout: string | null
+  diffs: ProviderFileDiff[]
+  raw: unknown[]
+}
+
+export type ProviderWorkingToolGroup = {
+  type: 'toolGroup'
+  id: string
+  label: string
+  tools: ProviderWorkingTool[]
+}
+
+export type ProviderWorkingItem =
+  ProviderWorkingMessage | ProviderWorkingTool | ProviderWorkingToolGroup
+
+export type ProviderWorkingStep = {
+  type: 'working'
+  id: string
+  items: ProviderWorkingItem[]
+}
+
+export type ProviderChatItem = ProviderMessage | ProviderWorkingStep
+
+export type ProviderChatDetail = {
+  id: string
+  title: string
+  items: ProviderChatItem[]
+}
+
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
   getChats: (providerId: ProviderId) => Promise<ProviderChat[]>
+  getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
 }
 
 export const providerIpcChannels = {
   login: 'provider:login',
-  getChats: 'provider:get-chats'
+  getChats: 'provider:get-chats',
+  getChat: 'provider:get-chat'
 } as const
 
 export const isProviderId = (value: unknown): value is ProviderId =>

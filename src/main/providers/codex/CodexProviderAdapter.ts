@@ -1,10 +1,13 @@
 import type {
   ProviderChat,
+  ProviderChatDetail,
   ProviderChatStatus,
   ProviderLoginResult
 } from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient } from './CodexAppServerClient'
+import { getChatItems, type CodexTurn } from './CodexItemRenderers'
+import { mergeRolloutHistory } from './CodexRolloutHistory'
 
 type CodexAccount =
   { type: 'apiKey' } | { type: 'chatgpt'; email: string } | { type: 'amazonBedrock' }
@@ -34,10 +37,15 @@ type CodexThread = {
   createdAt: number
   updatedAt: number
   status: CodexThreadStatus
+  path: string | null
 }
 
 type ThreadListResponse = {
   data: CodexThread[]
+}
+
+type ThreadReadResponse = {
+  thread: CodexThread & { turns: CodexTurn[] }
 }
 
 const getAccountLabel = (account: CodexAccount): string => {
@@ -108,6 +116,21 @@ export class CodexProviderAdapter implements ProviderAdapter {
       updatedAt: thread.updatedAt * 1_000,
       status: getThreadStatus(thread)
     }))
+  }
+
+  getChat = async (chatId: string): Promise<ProviderChatDetail> => {
+    const response = await this.client.request<ThreadReadResponse>('thread/read', {
+      threadId: chatId,
+      includeTurns: true
+    })
+
+    const turns = await mergeRolloutHistory(response.thread.turns, response.thread.path)
+
+    return {
+      id: response.thread.id,
+      title: getThreadTitle(response.thread),
+      items: getChatItems(turns)
+    }
   }
 
   dispose = (): void => {

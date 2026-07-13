@@ -209,12 +209,12 @@ button {
 .chat-detail__messages {
   display: flex;
   flex: 1;
+  gap: 12px;
   flex-direction: column;
   justify-content: flex-end;
 }
 
 .chat-detail__message {
-  align-self: flex-start;
   max-width: 85%;
   margin: 0;
   padding: 12px 14px;
@@ -223,6 +223,126 @@ button {
   background: #e9eae5;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.chat-detail__message--assistant {
+  align-self: flex-start;
+}
+
+.chat-detail__message--user {
+  align-self: flex-end;
+  border-radius: 14px 14px 4px;
+  color: #ffffff;
+  background: #1d2433;
+}
+
+.chat-detail__step {
+  align-self: flex-start;
+  max-width: 90%;
+  color: #747a72;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-detail__step > summary,
+.chat-detail__tool-group > summary {
+  position: relative;
+  padding-left: 20px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-detail__step > summary::-webkit-details-marker,
+.chat-detail__tool-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-detail__step > summary::before,
+.chat-detail__tool-group > summary::before {
+  position: absolute;
+  left: 3px;
+  display: inline-block;
+  content: '›';
+  transition: transform 150ms ease;
+}
+
+.chat-detail__step[open] > summary::before,
+.chat-detail__tool-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-detail__step > summary:focus-visible,
+.chat-detail__tool-group > summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid #1d2433;
+  outline-offset: 3px;
+}
+
+.chat-detail__step-content {
+  margin: 8px 0 0 20px;
+  padding: 2px 0 2px 14px;
+  border-left: 1px solid #d4d6d0;
+}
+
+.chat-detail__working p {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+}
+
+.chat-detail__working p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-detail__activity-content {
+  max-width: min(640px, calc(100vw - 100px));
+  margin: 7px 0 10px 20px;
+  overflow: hidden;
+  border: 1px solid #d8d9d4;
+  border-radius: 8px;
+  background: #f3f3f0;
+}
+
+.chat-detail__activity-content section {
+  margin: 0;
+  padding: 9px 11px;
+}
+
+.chat-detail__activity-content section + section {
+  border-top: 1px solid #d8d9d4;
+}
+
+.chat-detail__activity-content h3 {
+  margin: 0 0 5px;
+  color: #747a72;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.chat-detail__activity-content pre + h3 {
+  margin-top: 9px;
+}
+
+.chat-detail__activity-content pre {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  color: #343a33;
+  font: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-detail__tool-group {
+  color: #565d55;
+}
+
+.chat-detail__activity-line {
+  color: #565d55;
 }
 
 .message-box {

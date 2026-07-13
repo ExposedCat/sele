@@ -8,7 +8,8 @@ const adapters: Record<ProviderId, ProviderAdapter> = {
 
 export const providerApi: ProviderApi = {
   login: (providerId) => adapters[providerId].login(),
-  getChats: (providerId) => adapters[providerId].getChats()
+  getChats: (providerId) => adapters[providerId].getChats(),
+  getChat: (providerId, chatId) => adapters[providerId].getChat(chatId)
 }
 
 export const disposeProviderAdapters = (): void => {
