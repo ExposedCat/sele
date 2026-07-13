@@ -40,30 +40,39 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
 }) => {
   const updatedAt = new Date(chat.updatedAt)
   const projectName = getChatProjectName(chat.cwd)
+  const workingStatus = chat.status && workingStatuses.has(chat.status) ? chat.status : null
+  const trailingStatus = chat.status && !workingStatus ? chat.status : null
 
   return (
     <article className={`chat-list-item${chat.pinned ? ' chat-list-item--pinned' : ''}`}>
       <button className="chat-list-item__main" type="button" onClick={onClick}>
         <span className="chat-list-item__header">
+          {workingStatus && (
+            <span
+              className="chat-list-item__status-container chat-list-item__status-container--leading"
+              title={statusLabels[workingStatus]}
+            >
+              <LoaderCircle
+                className="chat-list-item__loading"
+                aria-label={statusLabels[workingStatus]}
+              />
+            </span>
+          )}
           <span className="chat-list-item__title">{chat.title}</span>
           <span className="chat-list-item__meta">
             {chat.pinned && (
               <Pin className="chat-list-item__pin-indicator" aria-label="Pinned chat" />
             )}
-            {chat.status && (
-              <span className="chat-list-item__status-container" title={statusLabels[chat.status]}>
-                {workingStatuses.has(chat.status) ? (
-                  <LoaderCircle
-                    className="chat-list-item__loading"
-                    aria-label={statusLabels[chat.status]}
-                  />
-                ) : (
-                  <span
-                    className={`chat-list-item__status chat-list-item__status--${chat.status}`}
-                    role="img"
-                    aria-label={statusLabels[chat.status]}
-                  />
-                )}
+            {trailingStatus && (
+              <span
+                className="chat-list-item__status-container"
+                title={statusLabels[trailingStatus]}
+              >
+                <span
+                  className={`chat-list-item__status chat-list-item__status--${trailingStatus}`}
+                  role="img"
+                  aria-label={statusLabels[trailingStatus]}
+                />
               </span>
             )}
           </span>

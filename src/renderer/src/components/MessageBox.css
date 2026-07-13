@@ -30,7 +30,7 @@
   outline: 0;
   color: var(--lead);
   background: var(--glass-subtle);
-  font-size: 14px;
+  font: inherit;
   font-weight: 650;
 }
 
@@ -189,20 +189,20 @@
 
   .message-box__send-controls {
     flex: 1;
+    flex-wrap: wrap;
   }
 
   .message-box__access {
-    min-width: 94px;
-    max-width: 104px;
+    min-width: 142px;
+    max-width: 100%;
     padding-right: 24px;
-    font-size: 13px;
   }
 
   .message-box__model {
-    width: 126px;
+    width: 152px;
   }
 
   .message-box__reasoning {
-    width: 88px;
+    width: 112px;
   }
 }

@@ -69,30 +69,37 @@
 
 .chat-list-section__action {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   flex: none;
   place-items: center;
-  border: 1px solid var(--glass-line);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 9px;
   color: var(--quiet);
   background: transparent;
+  opacity: 0;
+  pointer-events: none;
   transition:
     color 160ms ease,
     background 160ms ease,
-    border-color 160ms ease;
+    opacity 160ms ease;
+}
+
+.chat-list-section__header:hover .chat-list-section__action,
+.chat-list-section__header:focus-within .chat-list-section__action {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .chat-list-section__action:hover,
 .chat-list-section__action:focus-visible {
   color: var(--ink);
   background: var(--glass-subtle);
-  border-color: color-mix(in srgb, var(--muted) 24%, var(--glass-line));
 }
 
 .chat-list-section__action svg {
-  width: 17px;
-  height: 17px;
+  width: 19px;
+  height: 19px;
 }
 
 .chat-list-section__quote {

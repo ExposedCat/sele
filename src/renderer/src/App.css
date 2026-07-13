@@ -100,7 +100,7 @@
 }
 
 .chat-sidebar .chat-list-item__main {
-  padding: 14px 76px 14px 14px;
+  padding: 14px 88px 14px 14px;
 }
 
 .chat-sidebar .chat-list-item:hover {
@@ -110,10 +110,6 @@
 .chat-sidebar .chat-list-item__title {
   font-size: 16px;
   letter-spacing: 0;
-}
-
-.chat-sidebar .chat-list-item__context {
-  font-size: 14px;
 }
 
 .chat-panel {
@@ -149,7 +145,6 @@
   gap: 8px;
   margin: 0 10px 8px;
   color: var(--quiet);
-  font-size: 14px;
   font-weight: 650;
 }
 
@@ -451,15 +446,11 @@
   }
 
   .chat-sidebar .chat-list-item__main {
-    padding: 16px 82px 16px 16px;
+    padding: 16px 88px 16px 16px;
   }
 
   .chat-sidebar .chat-list-item__title {
     font-size: 18px;
-  }
-
-  .chat-sidebar .chat-list-item__context {
-    font-size: 17px;
   }
 
   .chat-detail__header {
