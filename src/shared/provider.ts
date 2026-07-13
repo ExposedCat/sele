@@ -42,16 +42,19 @@ export type ProviderFileDiff = {
   diff: string
 }
 
-export type ProviderToolActivity = 'read' | 'edit' | 'create' | 'delete' | 'command' | 'other'
+export type ProviderToolActivity =
+  'read' | 'search' | 'git' | 'edit' | 'create' | 'delete' | 'command' | 'other'
 
 export type ProviderWorkingTool = {
   type: 'tool'
   id: string
+  toolId: string
   activity: ProviderToolActivity
   label: string
   command: string | null
   stdout: string | null
   diffs: ProviderFileDiff[]
+  rawOutput: unknown
   raw: unknown[]
 }
 

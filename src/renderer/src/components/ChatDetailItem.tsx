@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import type {
   ProviderChatItem,
   ProviderWorkingItem,
+  ProviderWorkingStep,
   ProviderWorkingTool
 } from '../../../shared/provider'
 import './ChatDetailItem.css'
@@ -43,18 +45,56 @@ const CommandContent: React.FC<{ tools: ProviderWorkingTool[] }> = ({ tools }) =
   </div>
 )
 
+const formatRawOutput = (value: unknown): string => {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return value
+
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+const RawContent: React.FC<{ tools: ProviderWorkingTool[] }> = ({ tools }) => (
+  <div className="chat-detail__activity-content">
+    {tools.map((tool) => (
+      <section key={tool.id}>
+        <h3>Raw output</h3>
+        <pre>{formatRawOutput(tool.rawOutput)}</pre>
+      </section>
+    ))}
+  </div>
+)
+
 const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[] }> = ({ label, tools }) => {
   const activity = tools[0]?.activity
 
-  if (activity !== 'edit' && activity !== 'command') {
+  if (
+    activity !== 'edit' &&
+    activity !== 'command' &&
+    activity !== 'search' &&
+    activity !== 'git' &&
+    activity !== 'other'
+  ) {
     return <p className="chat-detail__activity-line">{label}</p>
   }
 
+  const detailLabel = label || tools[0]?.toolId
+  const content =
+    activity === 'edit' ? (
+      <DiffContent tools={tools} />
+    ) : activity === 'command' || activity === 'search' || activity === 'git' ? (
+      <CommandContent tools={tools} />
+    ) : (
+      <RawContent tools={tools} />
+    )
+
   return (
-    <div className="chat-detail__tool-group">
-      <p className="chat-detail__activity-line">{label}</p>
-      {activity === 'edit' ? <DiffContent tools={tools} /> : <CommandContent tools={tools} />}
-    </div>
+    <details className="chat-detail__tool-group">
+      <summary>{detailLabel}</summary>
+      {content}
+    </details>
   )
 }
 
@@ -66,15 +106,15 @@ const WorkingItem: React.FC<{ item: ProviderWorkingItem }> = ({ item }) => {
   return <Activity label={item.label} tools={item.type === 'toolGroup' ? item.tools : [item]} />
 }
 
-export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({ item }) => {
-  if (item.type === 'message') {
-    return (
-      <p className={`chat-detail__message chat-detail__message--${item.role}`}>{item.content}</p>
-    )
-  }
+const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
+  const [open, setOpen] = useState(false)
 
   return (
-    <details className="chat-detail__step chat-detail__working">
+    <details
+      className="chat-detail__step chat-detail__working"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+    >
       <summary>Working</summary>
       <div className="chat-detail__step-content">
         {item.items.map((workingItem) => (
@@ -83,4 +123,14 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({ item }) => {
       </div>
     </details>
   )
+}
+
+export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({ item }) => {
+  if (item.type === 'message') {
+    return (
+      <p className={`chat-detail__message chat-detail__message--${item.role}`}>{item.content}</p>
+    )
+  }
+
+  return <WorkingStep item={item} />
 }

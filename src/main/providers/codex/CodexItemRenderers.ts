@@ -32,7 +32,7 @@ export type CodexThreadItem = {
   result?: unknown
   error?: unknown
   customToolName?: string
-  customToolInput?: string
+  customToolInput?: string | null
   customToolOutput?: unknown
   rawToolData?: unknown[]
 }
@@ -47,10 +47,12 @@ type WorkingItemRenderResult =
   | {
       type: 'tool'
       activity: ProviderToolActivity
+      toolId: string
       label: string
       command: string | null
       stdout: string | null
       diffs: ProviderFileDiff[]
+      rawOutput: unknown
       raw: unknown[]
     }
 
@@ -71,6 +73,7 @@ const getFileName = (path: string): string => path.split(/[/\\]/).pop() || path
 
 const tokenizeShellCommand = (command: string): ShellToken[] => {
   const tokens: ShellToken[] = []
+  const normalizedCommand = command.replace(/\r\n?/g, '\n')
   let current = ''
   let quote: string | null = null
   let escaped = false
@@ -83,9 +86,9 @@ const tokenizeShellCommand = (command: string): ShellToken[] => {
     quoted = false
   }
 
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index]
-    const nextCharacter = command[index + 1]
+  for (let index = 0; index < normalizedCommand.length; index += 1) {
+    const character = normalizedCommand[index]
+    const nextCharacter = normalizedCommand[index + 1]
 
     if (escaped) {
       current += character
@@ -107,6 +110,12 @@ const tokenizeShellCommand = (command: string): ShellToken[] => {
     if (character === '"' || character === "'") {
       quote = character
       quoted = true
+      continue
+    }
+
+    if (character === '\n') {
+      pushCurrent()
+      tokens.push({ value: ';', quoted: false })
       continue
     }
 
@@ -229,31 +238,263 @@ const extractReadPathsFromSegment = (segment: ShellToken[]): string[] => {
   return []
 }
 
-const getReadCommandPaths = (command: string): string[] => {
-  const paths: string[] = []
+type ShellSegment = {
+  tokens: ShellToken[]
+  operatorBefore: string | null
+}
+
+type SegmentClassification = {
+  activity: 'read' | 'search' | 'git' | 'command' | 'neutral'
+  command: string
+  args: ShellToken[]
+}
+
+type CommandClassification = {
+  activity: Extract<ProviderToolActivity, 'read' | 'search' | 'git' | 'command'>
+  label: string
+}
+
+const readCommands = new Set([
+  'cat',
+  'less',
+  'head',
+  'tail',
+  'sed',
+  'nl',
+  'wc',
+  'stat',
+  'file',
+  'tree',
+  'du',
+  'realpath',
+  'readlink',
+  'ls'
+])
+
+const searchCommands = new Set(['rg', 'grep', 'find'])
+
+const executionCommands = new Set([
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'node',
+  'python',
+  'python3',
+  'deno',
+  'bun',
+  'cargo',
+  'go',
+  'make',
+  'cmake',
+  'pytest',
+  'vitest',
+  'jest',
+  'eslint',
+  'tsc',
+  'vite',
+  'electron',
+  'codex',
+  'rm',
+  'dd',
+  'esbuild'
+])
+
+const getShellSegments = (command: string): ShellSegment[] => {
+  const segments: ShellSegment[] = []
   let segment: ShellToken[] = []
+  let operatorBefore: string | null = null
 
   for (const token of tokenizeShellCommand(command)) {
     if ([';', '|', '&&'].includes(token.value)) {
-      paths.push(...extractReadPathsFromSegment(segment))
+      if (segment.length > 0) segments.push({ tokens: segment, operatorBefore })
       segment = []
+      operatorBefore = token.value
       continue
     }
+
     segment.push(token)
   }
 
-  paths.push(...extractReadPathsFromSegment(segment))
-  return [...new Set(paths.map(getFileName))]
+  if (segment.length > 0) segments.push({ tokens: segment, operatorBefore })
+  return segments
 }
 
-const getReadToolLabel = (command: string): string => {
-  const files = getReadCommandPaths(command)
-  if (files.length === 0) return 'Read files'
+const getSegmentCommand = (
+  segment: ShellToken[]
+): { command: string; args: ShellToken[] } | null => {
+  if (segment.length === 0) return null
+
+  const [first, second, ...rest] = segment
+  const executable = getFileName(first.value)
+  if (executable === 'command' && second?.value === '-v') {
+    return { command: 'command -v', args: rest }
+  }
+
+  return { command: executable, args: segment.slice(1) }
+}
+
+const classifySegment = (segment: ShellSegment): SegmentClassification | null => {
+  const parsed = getSegmentCommand(segment.tokens)
+  if (!parsed) return null
+
+  const { command, args } = parsed
+  if (['pwd', 'which', 'command -v'].includes(command)) {
+    return { activity: 'neutral', command, args }
+  }
+  if (command === 'git') return { activity: 'git', command, args }
+  if (searchCommands.has(command)) return { activity: 'search', command, args }
+  if (readCommands.has(command)) return { activity: 'read', command, args }
+  if (executionCommands.has(command)) return { activity: 'command', command, args }
+
+  return { activity: 'command', command, args }
+}
+
+const extractReadPathsFromClassification = (classification: SegmentClassification): string[] => {
+  if (classification.activity !== 'read') return []
+  const segment = [{ value: classification.command, quoted: false }, ...classification.args]
+  return extractReadPathsFromSegment(segment)
+}
+
+const getReadCommandTargets = (classifications: SegmentClassification[]): string[] => {
+  const paths: string[] = []
+  for (const classification of classifications) {
+    paths.push(...extractReadPathsFromClassification(classification))
+  }
+  return [...new Set(paths)]
+}
+
+const getSkillNameFromPath = (path: string): string | null => {
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.at(-1) !== 'SKILL.md') return null
+  return parts.at(-2) ?? 'skill'
+}
+
+const getReadToolLabel = (command: string, classifications: SegmentClassification[]): string => {
+  const targets = getReadCommandTargets(classifications)
+  const skillNames = targets
+    .map(getSkillNameFromPath)
+    .filter((name): name is string => name != null)
+  if (skillNames.length > 0 && skillNames.length === targets.length) {
+    const visibleSkills = skillNames.slice(0, 3).join(', ')
+    return skillNames.length === 1
+      ? visibleSkills === 'skill'
+        ? 'Read skill'
+        : `Read ${visibleSkills} skill`
+      : `Read ${visibleSkills}${skillNames.length > 3 ? ', …' : ''} skills`
+  }
+
+  const files = targets.map(getFileName)
+  if (files.length === 0) return `Read ${truncate(command.replace(/\s+/g, ' '), 80)}`
 
   const visibleFiles = files.slice(0, 3).join(', ')
   return files.length === 1
     ? `Read file ${visibleFiles}`
     : `Read files ${visibleFiles}${files.length > 3 ? ', …' : ''}`
+}
+
+const getSearchDetailsFromSegment = (
+  classification: SegmentClassification
+): { query: string | null; paths: string[] } => {
+  if (classification.command === 'find') {
+    const path = skipOptions(classification.args)[0]?.value
+    return { query: null, paths: path && isPathLikeToken(path) ? [path] : [] }
+  }
+
+  const hasFilesMode = classification.args.some((token) => token.value === '--files')
+  const remaining = skipOptions(classification.args)
+  const query = hasFilesMode ? null : (remaining[0]?.value ?? null)
+  const paths = remaining
+    .slice(hasFilesMode ? 0 : 1)
+    .map((token) => token.value)
+    .filter(isPathLikeToken)
+
+  return { query, paths }
+}
+
+const getSearchToolLabel = (command: string, classifications: SegmentClassification[]): string => {
+  const search = classifications.find((classification) => classification.activity === 'search')
+  if (!search) return `Searched ${truncate(command.replace(/\s+/g, ' '), 80)}`
+
+  const details = getSearchDetailsFromSegment(search)
+  const visiblePath = details.paths.map(getFileName).slice(0, 2).join(', ')
+
+  if (details.query && visiblePath)
+    return `Searched ${visiblePath} for ${truncate(details.query, 60)}`
+  if (details.query) return `Searched for ${truncate(details.query, 80)}`
+  if (visiblePath) return `Searched ${visiblePath}`
+  return 'Searched files'
+}
+
+const getGitToolLabel = (classifications: SegmentClassification[]): string => {
+  const git = classifications.find((classification) => classification.activity === 'git')
+  const subcommand = git?.args.find((token) => !token.value.startsWith('-'))?.value
+
+  if (subcommand === 'status') return 'Checked git status'
+  if (subcommand === 'diff') return 'Viewed git diff'
+  if (subcommand === 'log') return 'Viewed git log'
+  if (subcommand === 'show') return 'Viewed git show'
+  if (subcommand === 'branch') return 'Checked git branch'
+  return subcommand ? `Ran git ${subcommand}` : 'Ran git'
+}
+
+const isPagingReadAfterPipe = (
+  segment: ShellSegment,
+  classification: SegmentClassification
+): boolean =>
+  segment.operatorBefore === '|' &&
+  classification.activity === 'read' &&
+  ['head', 'tail', 'sed', 'nl', 'wc'].includes(classification.command)
+
+const getMeaningfulClassifications = (
+  command: string
+): { segment: ShellSegment; classification: SegmentClassification }[] => {
+  const segments = getShellSegments(command)
+  const classifications = segments
+    .map((segment) => ({ segment, classification: classifySegment(segment) }))
+    .filter(
+      (entry): entry is { segment: ShellSegment; classification: SegmentClassification } =>
+        entry.classification != null && entry.classification.activity !== 'neutral'
+    )
+
+  return classifications.filter(
+    ({ segment, classification }, index) =>
+      index === 0 || !isPagingReadAfterPipe(segment, classification)
+  )
+}
+
+const classifyCommand = (command: string): CommandClassification[] => {
+  const meaningful = getMeaningfulClassifications(command)
+  if (meaningful.length === 0) return [{ activity: 'command', label: 'Ran a command' }]
+
+  const activities = [...new Set(meaningful.map((entry) => entry.classification.activity))]
+
+  if (activities.includes('command')) return [{ activity: 'command', label: 'Ran a command' }]
+
+  const orderedActivities = meaningful.reduce<
+    Extract<ProviderToolActivity, 'read' | 'search' | 'git'>[]
+  >((result, entry) => {
+    const activity = entry.classification.activity
+    if (activity !== 'read' && activity !== 'search' && activity !== 'git') return result
+    if (!result.includes(activity)) result.push(activity)
+    return result
+  }, [])
+
+  return orderedActivities.map((activity) => {
+    const segmentClassifications = meaningful
+      .map((entry) => entry.classification)
+      .filter((classification) => classification.activity === activity)
+
+    if (activity === 'read') {
+      return { activity, label: getReadToolLabel(command, segmentClassifications) }
+    }
+
+    if (activity === 'search') {
+      return { activity, label: getSearchToolLabel(command, segmentClassifications) }
+    }
+
+    return { activity, label: getGitToolLabel(segmentClassifications) }
+  })
 }
 
 const getJsonToolArgument = (input: string, toolName: string): Record<string, unknown> | null => {
@@ -335,80 +576,82 @@ const getToolStringArgument = (input: string, toolName: string, key: string): st
   }
 }
 
-const isReadCommand = (command: string): boolean => {
-  const hasReadAction =
-    /(^|[;&|]\s*)(pwd|rg|grep|sed\s+-n|find|ls|cat|head|tail|nl|wc|stat|file|tree|du|realpath|readlink|which|command\s+-v|git\s+(status|diff|log|show|branch))\b/m.test(
-      command
-    )
-  const hasExecutionAction =
-    /(^|[;&|]\s*)(npm|npx|pnpm|yarn|node|python|python3|deno|bun|cargo|go|make|cmake|pytest|vitest|jest|eslint|tsc|vite|electron|codex)\b/m.test(
-      command
-    )
-  return hasReadAction && !hasExecutionAction
-}
-
-const getCustomToolLabel = (item: CodexThreadItem): string | null => {
-  const name = item.customToolName
-  if (!name) return null
-
-  if (name === 'exec_command') {
-    const command = getToolStringArgument(item.customToolInput ?? '', name, 'cmd')
-    return command && isReadCommand(command) ? getReadToolLabel(command) : 'Ran a command'
+const getRawToolOutput = (item: CodexThreadItem): unknown => {
+  if (item.customToolOutput !== undefined) return item.customToolOutput
+  if (item.aggregatedOutput !== undefined) return item.aggregatedOutput
+  if (item.result !== undefined || item.error !== undefined) {
+    return { result: item.result ?? null, error: item.error ?? null }
   }
-
-  if (name === 'write_stdin') return 'Interacted with a command'
-  if (name === 'view_image') return 'Viewed an image'
-  if (name.startsWith('web__')) return 'Searched the web'
-  if (name.startsWith('image_gen__')) return 'Generated an image'
-
-  if (name.startsWith('mcp__')) {
-    const [server, ...toolParts] = name.slice(5).split('__')
-    const tool = toolParts.join('/')
-    return `Called ${tool ? `${server}/${tool}` : server}`
-  }
-
-  return name === 'exec' ? 'Ran a tool' : `Used ${name}`
+  return item.rawToolData ?? item
 }
 
-const getOutputFromEnvelope = (value: unknown): string | null => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const envelope = value as { output?: unknown; stdout?: unknown; result?: unknown }
-  if (typeof envelope.output === 'string') return envelope.output.trimEnd() || null
-  if (typeof envelope.stdout === 'string') return envelope.stdout.trimEnd() || null
-  return getOutputFromEnvelope(envelope.result)
-}
+const getToolId = (item: CodexThreadItem): string =>
+  item.customToolName ??
+  (item.server && item.tool ? `${item.server}/${item.tool}` : null) ??
+  (item.namespace && item.tool ? `${item.namespace}/${item.tool}` : null) ??
+  item.tool ??
+  item.type
 
 const getOutputFromText = (text: string): string | null => {
   const outputMarker = '\nOutput:\n'
-  const outputIndex = text.indexOf(outputMarker)
+  const outputIndex = text.lastIndexOf(outputMarker)
   const output = outputIndex >= 0 ? text.slice(outputIndex + outputMarker.length) : text
   const trimmedOutput = output.trimEnd()
   if (!trimmedOutput) return null
+  return trimmedOutput
+}
 
-  try {
-    const parsed = JSON.parse(trimmedOutput) as unknown
-    return getOutputFromEnvelope(parsed) ?? trimmedOutput
-  } catch {
-    return trimmedOutput
+const getOutputFromEnvelope = (value: unknown): string | null => {
+  if (!value || typeof value !== 'object') return null
+
+  if (Array.isArray(value)) {
+    const text = value
+      .map((part) => {
+        if (!part || typeof part !== 'object') return ''
+        const candidate = part as { text?: unknown }
+        return typeof candidate.text === 'string' ? candidate.text : ''
+      })
+      .join('')
+    return text ? getToolStdout(text) : null
   }
+
+  const envelope = value as {
+    output?: unknown
+    stdout?: unknown
+    result?: unknown
+    content?: unknown
+  }
+  if (typeof envelope.output === 'string') return getToolStdout(envelope.output)
+  if (typeof envelope.stdout === 'string') return getToolStdout(envelope.stdout)
+
+  const contentOutput = getOutputFromEnvelope(envelope.content)
+  if (contentOutput != null) return contentOutput
+
+  return getOutputFromEnvelope(envelope.result)
 }
 
 const getToolStdout = (value: unknown): string | null => {
-  if (typeof value === 'string') return getOutputFromText(value)
+  if (typeof value === 'string') {
+    const output = getOutputFromText(value)
+    if (!output) return null
+
+    const trimmed = output.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        return getOutputFromEnvelope(parsed) ?? output
+      } catch {
+        return output
+      }
+    }
+
+    return output
+  }
 
   const envelopeOutput = getOutputFromEnvelope(value)
   if (envelopeOutput != null) return envelopeOutput
 
-  if (!Array.isArray(value)) return null
-
-  const text = value
-    .map((part) => {
-      if (!part || typeof part !== 'object') return ''
-      const candidate = part as { text?: unknown }
-      return typeof candidate.text === 'string' ? candidate.text : ''
-    })
-    .join('')
-  return getOutputFromText(text)
+  return null
 }
 
 const getFileDiffs = (item: CodexThreadItem): ProviderFileDiff[] =>
@@ -424,20 +667,99 @@ const renderTool = (
   label: string,
   command: string | null = null,
   stdout: string | null = null,
-  diffs: ProviderFileDiff[] = []
+  diffs: ProviderFileDiff[] = [],
+  toolId = getToolId(item),
+  rawOutput: unknown = getRawToolOutput(item)
 ): WorkingItemRenderResult => ({
   type: 'tool',
+  toolId,
   activity,
   label,
   command,
   stdout,
   diffs,
+  rawOutput,
   raw: item.rawToolData ?? [item]
 })
 
+const openAiDocsSearchTools = new Set([
+  'search_openai_docs',
+  'mcp__openaiDeveloperDocs__search_openai_docs'
+])
+
+const openAiDocsFetchTools = new Set([
+  'fetch_openai_doc',
+  'mcp__openaiDeveloperDocs__fetch_openai_doc'
+])
+
+const getCustomToolArgument = (item: CodexThreadItem, key: string): string | null =>
+  item.customToolName && item.customToolInput
+    ? getToolStringArgument(item.customToolInput, item.customToolName, key)
+    : null
+
+const formatOpenAiDocTarget = (url: string | null, anchor: string | null): string => {
+  if (!url) return 'OpenAI doc'
+
+  try {
+    const parsedUrl = new URL(url)
+    const page = parsedUrl.pathname.split('/').filter(Boolean).at(-1) ?? parsedUrl.hostname
+    return `${page}${anchor ? `#${anchor}` : parsedUrl.hash}`
+  } catch {
+    return `${getFileName(url)}${anchor ? `#${anchor}` : ''}`
+  }
+}
+
+const renderKnownCustomTool = (item: CodexThreadItem): WorkingItemRenderResult | null => {
+  const name = item.customToolName
+  if (!name) return null
+
+  if (name === 'tool_search') {
+    const query = getCustomToolArgument(item, 'query')
+    return renderTool(
+      item,
+      'search',
+      query ? `Searched tools for ${truncate(query, 80)}` : 'Searched tools',
+      item.customToolInput ?? null,
+      getToolStdout(item.customToolOutput),
+      [],
+      name
+    )
+  }
+
+  if (openAiDocsSearchTools.has(name)) {
+    const query = getCustomToolArgument(item, 'query')
+    return renderTool(
+      item,
+      'search',
+      query ? `Searched OpenAI docs for ${truncate(query, 80)}` : 'Searched OpenAI docs',
+      item.customToolInput ?? null,
+      getToolStdout(item.customToolOutput),
+      [],
+      name
+    )
+  }
+
+  if (openAiDocsFetchTools.has(name)) {
+    const url = getCustomToolArgument(item, 'url')
+    const anchor = getCustomToolArgument(item, 'anchor')
+    return renderTool(
+      item,
+      'other',
+      `Read ${formatOpenAiDocTarget(url, anchor)} from OpenAI docs`,
+      null,
+      null,
+      [],
+      name,
+      getToolStdout(item.customToolOutput) ?? getRawToolOutput(item)
+    )
+  }
+
+  return null
+}
+
 const renderFileChanges = (item: CodexThreadItem): WorkingItemRenderResult[] => {
   const diffs = getFileDiffs(item)
-  if (diffs.length === 0) return [renderTool(item, 'edit', 'Changed files')]
+  if (diffs.length === 0) return []
 
   const results: WorkingItemRenderResult[] = []
   for (const diff of diffs) {
@@ -476,39 +798,47 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
   {
     matches: (item) => item.type === 'customToolCall',
     render: (item) => {
-      if (item.customToolName === 'apply_patch') return renderFileChanges(item)
+      if ((item.changes?.length ?? 0) > 0) {
+        return renderFileChanges(item)
+      }
 
-      const label = getCustomToolLabel(item)
-      if (!label) return null
+      const name = item.customToolName
+      if (!name) return null
 
-      const command =
-        item.customToolName === 'exec_command'
-          ? getToolStringArgument(item.customToolInput ?? '', item.customToolName, 'cmd')
-          : null
-      const isRead = command != null && isReadCommand(command)
-      return renderTool(
-        item,
-        isRead ? 'read' : item.customToolName === 'exec_command' ? 'command' : 'other',
-        label,
-        command,
-        getToolStdout(item.customToolOutput)
-      )
+      const knownTool = renderKnownCustomTool(item)
+      if (knownTool) return knownTool
+
+      if (name === 'exec_command') {
+        const command = getToolStringArgument(item.customToolInput ?? '', name, 'cmd')
+        const classifications = command
+          ? classifyCommand(command)
+          : [{ activity: 'command', label: 'Ran a command' } satisfies CommandClassification]
+        return classifications.map((classification) =>
+          renderTool(
+            item,
+            classification.activity,
+            classification.label,
+            command,
+            getToolStdout(item.customToolOutput)
+          )
+        )
+      }
+
+      return renderTool(item, 'other', name, null, null, [], name)
     }
   },
   {
     matches: (item) => item.type === 'commandExecution',
     render: (item) => {
-      const command = item.command?.replace(/\s+/g, ' ')
-      const activity = item.command && isReadCommand(item.command) ? 'read' : 'command'
-      return command
-        ? renderTool(
-            item,
-            activity,
-            activity === 'read' && item.command
-              ? getReadToolLabel(item.command)
-              : `Ran ${truncate(command)}`,
-            item.command ?? null,
-            getToolStdout(item.aggregatedOutput)
+      return item.command
+        ? classifyCommand(item.command).map((classification) =>
+            renderTool(
+              item,
+              classification.activity,
+              classification.label,
+              item.command ?? null,
+              getToolStdout(item.aggregatedOutput)
+            )
           )
         : null
     }
@@ -522,7 +852,7 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
     render: (item) => {
       if (!item.tool) return null
       const name = item.server ? `${item.server}/${item.tool}` : item.tool
-      return renderTool(item, 'other', `Called ${name}`)
+      return renderTool(item, 'other', name, null, null, [], name)
     }
   },
   {
@@ -530,25 +860,27 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
     render: (item) => {
       if (!item.tool) return null
       const name = item.namespace ? `${item.namespace}/${item.tool}` : item.tool
-      return renderTool(item, 'other', `Called ${name}`)
+      return renderTool(item, 'other', name, null, null, [], name)
     }
   },
   {
     matches: (item) => item.type === 'collabAgentToolCall',
-    render: (item) => (item.tool ? renderTool(item, 'other', `Used ${item.tool}`) : null)
+    render: (item) =>
+      item.tool ? renderTool(item, 'other', item.tool, null, null, [], item.tool) : null
   },
   {
     matches: (item) => item.type === 'webSearch',
     render: (item) =>
-      item.query ? renderTool(item, 'other', `Searched for “${truncate(item.query, 80)}”`) : null
+      item.query ? renderTool(item, 'other', 'webSearch', null, null, [], 'webSearch') : null
   },
   {
     matches: (item) => item.type === 'imageView',
-    render: (item) => renderTool(item, 'other', 'Viewed an image')
+    render: (item) => renderTool(item, 'other', 'imageView', null, null, [], 'imageView')
   },
   {
     matches: (item) => item.type === 'imageGeneration',
-    render: (item) => renderTool(item, 'other', 'Generated an image')
+    render: (item) =>
+      renderTool(item, 'other', 'imageGeneration', null, null, [], 'imageGeneration')
   }
 ]
 
