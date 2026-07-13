@@ -1,12 +1,13 @@
 :root {
   color-scheme: light;
   --bg: #f4f1eb;
-  --ink: #181a1c;
-  --lead: #373b40;
-  --muted: #666b70;
-  --quiet: #858a8d;
-  --accent: #086e67;
-  --accent-soft: rgb(8 110 103 / 10%);
+  --ink: #0d0f10;
+  --lead: #1e2123;
+  --muted: #454b50;
+  --quiet: #62696f;
+  --accent: #555b60;
+  --accent-soft: rgb(24 26 28 / 7%);
+  --focus-ring: rgb(24 26 28 / 22%);
   --glass: rgb(255 255 255 / 50%);
   --glass-strong: rgb(255 255 255 / 68%);
   --glass-subtle: rgb(255 255 255 / 34%);
@@ -33,7 +34,7 @@
     BlinkMacSystemFont,
     'Segoe UI',
     sans-serif;
-  font-size: 16px;
+  font-size: 18px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -43,12 +44,13 @@
   :root {
     color-scheme: dark;
     --bg: #101419;
-    --ink: #f1f4f5;
-    --lead: #d1d6da;
-    --muted: #a1a9af;
-    --quiet: #828b93;
-    --accent: #66c8bd;
-    --accent-soft: rgb(102 200 189 / 12%);
+    --ink: #ffffff;
+    --lead: #f2f4f5;
+    --muted: #ccd2d6;
+    --quiet: #aeb6bc;
+    --accent: #d1d6da;
+    --accent-soft: rgb(240 246 252 / 8%);
+    --focus-ring: rgb(240 246 252 / 24%);
     --glass: rgb(240 246 252 / 6.5%);
     --glass-strong: rgb(240 246 252 / 10%);
     --glass-subtle: rgb(240 246 252 / 4.5%);

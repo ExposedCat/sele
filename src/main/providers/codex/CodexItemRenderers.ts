@@ -3,8 +3,7 @@ import type {
   ProviderFileDiff,
   ProviderMessage,
   ProviderToolActivity,
-  ProviderWorkingItem,
-  ProviderWorkingTool
+  ProviderWorkingItem
 } from '../../../shared/provider'
 
 export type CodexUserInput =
@@ -39,6 +38,7 @@ export type CodexThreadItem = {
 
 export type CodexTurn = {
   id: string
+  status?: string | null
   items: CodexThreadItem[]
 }
 
@@ -244,13 +244,16 @@ type ShellSegment = {
 }
 
 type SegmentClassification = {
-  activity: 'read' | 'search' | 'git' | 'command' | 'neutral'
+  activity: 'read' | 'search' | 'git' | 'npm' | 'npx' | 'script' | 'command' | 'neutral'
   command: string
   args: ShellToken[]
 }
 
 type CommandClassification = {
-  activity: Extract<ProviderToolActivity, 'read' | 'search' | 'git' | 'command'>
+  activity: Extract<
+    ProviderToolActivity,
+    'read' | 'search' | 'git' | 'npm' | 'npx' | 'script' | 'command'
+  >
   label: string
 }
 
@@ -272,15 +275,12 @@ const readCommands = new Set([
 ])
 
 const searchCommands = new Set(['rg', 'grep', 'find'])
+const scriptCommands = new Set(['bash', 'sh', 'node', 'python', 'python3'])
 
 const executionCommands = new Set([
   'npm',
-  'npx',
   'pnpm',
   'yarn',
-  'node',
-  'python',
-  'python3',
   'deno',
   'bun',
   'cargo',
@@ -345,6 +345,11 @@ const classifySegment = (segment: ShellSegment): SegmentClassification | null =>
   if (command === 'git') return { activity: 'git', command, args }
   if (searchCommands.has(command)) return { activity: 'search', command, args }
   if (readCommands.has(command)) return { activity: 'read', command, args }
+  if (command === 'npm' && args.some((token) => token.value === 'run')) {
+    return { activity: 'npm', command, args }
+  }
+  if (command === 'npx') return { activity: 'npx', command, args }
+  if (scriptCommands.has(command)) return { activity: 'script', command, args }
   if (executionCommands.has(command)) return { activity: 'command', command, args }
 
   return { activity: 'command', command, args }
@@ -428,7 +433,10 @@ const getSearchToolLabel = (command: string, classifications: SegmentClassificat
 
 const getGitToolLabel = (classifications: SegmentClassification[]): string => {
   const git = classifications.find((classification) => classification.activity === 'git')
-  const subcommand = git?.args.find((token) => !token.value.startsWith('-'))?.value
+  const subcommand = git
+    ? skipOptions(git.args, new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']))[0]
+        ?.value
+    : null
 
   if (subcommand === 'status') return 'Checked git status'
   if (subcommand === 'diff') return 'Viewed git diff'
@@ -438,63 +446,71 @@ const getGitToolLabel = (classifications: SegmentClassification[]): string => {
   return subcommand ? `Ran git ${subcommand}` : 'Ran git'
 }
 
-const isPagingReadAfterPipe = (
-  segment: ShellSegment,
-  classification: SegmentClassification
-): boolean =>
-  segment.operatorBefore === '|' &&
-  classification.activity === 'read' &&
-  ['head', 'tail', 'sed', 'nl', 'wc'].includes(classification.command)
+const getNpmToolLabel = (classification: SegmentClassification): string => {
+  const runIndex = classification.args.findIndex((token) => token.value === 'run')
+  const script = classification.args
+    .slice(runIndex + 1)
+    .find((token) => !token.value.startsWith('-'))?.value
 
-const getMeaningfulClassifications = (
-  command: string
-): { segment: ShellSegment; classification: SegmentClassification }[] => {
-  const segments = getShellSegments(command)
-  const classifications = segments
-    .map((segment) => ({ segment, classification: classifySegment(segment) }))
-    .filter(
-      (entry): entry is { segment: ShellSegment; classification: SegmentClassification } =>
-        entry.classification != null && entry.classification.activity !== 'neutral'
-    )
+  return script ? `Ran npm script ${truncate(script, 60)}` : 'Ran npm script'
+}
 
-  return classifications.filter(
-    ({ segment, classification }, index) =>
-      index === 0 || !isPagingReadAfterPipe(segment, classification)
+const getNpxToolLabel = (classification: SegmentClassification): string => {
+  const tool = classification.args.find((token) => !token.value.startsWith('-'))?.value
+  return tool ? `Ran npx tool ${truncate(tool, 60)}` : 'Ran npx tool'
+}
+
+const getScriptToolLabel = (classification: SegmentClassification): string => {
+  const runtimeNames: Record<string, string> = {
+    bash: 'Bash',
+    sh: 'shell',
+    node: 'Node',
+    python: 'Python',
+    python3: 'Python'
+  }
+  const evaluatesInline = classification.args.some((token) =>
+    ['-c', '-lc', '-e', '--eval'].includes(token.value)
   )
+  const target = evaluatesInline
+    ? null
+    : classification.args.find((token) => !token.value.startsWith('-'))?.value
+  const runtime = runtimeNames[classification.command] ?? classification.command
+
+  return target && isPathLikeToken(target)
+    ? `Ran ${runtime} script ${truncate(getFileName(target), 60)}`
+    : `Ran ${runtime} script`
 }
 
 const classifyCommand = (command: string): CommandClassification[] => {
-  const meaningful = getMeaningfulClassifications(command)
-  if (meaningful.length === 0) return [{ activity: 'command', label: 'Ran a command' }]
+  const firstClassification = getShellSegments(command)
+    .map(classifySegment)
+    .find((classification) => classification != null)
 
-  const activities = [...new Set(meaningful.map((entry) => entry.classification.activity))]
+  if (!firstClassification || firstClassification.activity === 'neutral') {
+    return [{ activity: 'command', label: 'Ran a command' }]
+  }
 
-  if (activities.includes('command')) return [{ activity: 'command', label: 'Ran a command' }]
+  const { activity } = firstClassification
+  if (activity === 'read') {
+    return [{ activity, label: getReadToolLabel(command, [firstClassification]) }]
+  }
+  if (activity === 'search') {
+    return [{ activity, label: getSearchToolLabel(command, [firstClassification]) }]
+  }
+  if (activity === 'git') {
+    return [{ activity, label: getGitToolLabel([firstClassification]) }]
+  }
+  if (activity === 'npm') {
+    return [{ activity, label: getNpmToolLabel(firstClassification) }]
+  }
+  if (activity === 'npx') {
+    return [{ activity, label: getNpxToolLabel(firstClassification) }]
+  }
+  if (activity === 'script') {
+    return [{ activity, label: getScriptToolLabel(firstClassification) }]
+  }
 
-  const orderedActivities = meaningful.reduce<
-    Extract<ProviderToolActivity, 'read' | 'search' | 'git'>[]
-  >((result, entry) => {
-    const activity = entry.classification.activity
-    if (activity !== 'read' && activity !== 'search' && activity !== 'git') return result
-    if (!result.includes(activity)) result.push(activity)
-    return result
-  }, [])
-
-  return orderedActivities.map((activity) => {
-    const segmentClassifications = meaningful
-      .map((entry) => entry.classification)
-      .filter((classification) => classification.activity === activity)
-
-    if (activity === 'read') {
-      return { activity, label: getReadToolLabel(command, segmentClassifications) }
-    }
-
-    if (activity === 'search') {
-      return { activity, label: getSearchToolLabel(command, segmentClassifications) }
-    }
-
-    return { activity, label: getGitToolLabel(segmentClassifications) }
-  })
+  return [{ activity: 'command', label: `Ran ${firstClassification.command}` }]
 }
 
 const getJsonToolArgument = (input: string, toolName: string): Record<string, unknown> | null => {
@@ -759,32 +775,17 @@ const renderKnownCustomTool = (item: CodexThreadItem): WorkingItemRenderResult |
 
 const renderFileChanges = (item: CodexThreadItem): WorkingItemRenderResult[] => {
   const diffs = getFileDiffs(item)
-  if (diffs.length === 0) return []
+  return diffs.map((diff) => {
+    const file = getFileName(diff.path)
+    const label =
+      diff.kind === 'create'
+        ? `Created ${file}`
+        : diff.kind === 'delete'
+          ? `Deleted ${file}`
+          : `Changed ${file}`
 
-  const results: WorkingItemRenderResult[] = []
-  for (const diff of diffs) {
-    const previous = results.at(-1)
-    if (previous?.type === 'tool' && previous.activity === diff.kind) {
-      previous.diffs.push(diff)
-      continue
-    }
-
-    results.push(renderTool(item, diff.kind, '', null, null, [diff]))
-  }
-
-  for (const result of results) {
-    if (result.type !== 'tool') continue
-    const files = [...new Set(result.diffs.map((diff) => getFileName(diff.path)))]
-    const visibleFiles = files.slice(0, 3).join(', ')
-    result.label =
-      result.activity === 'create'
-        ? `Created ${visibleFiles || 'a file'}${files.length > 3 ? ', …' : ''}`
-        : result.activity === 'delete'
-          ? `Deleted ${visibleFiles || 'a file'}${files.length > 3 ? ', …' : ''}`
-          : `Changed ${visibleFiles || 'files'}${files.length > 3 ? ', …' : ''}`
-  }
-
-  return results
+    return renderTool(item, diff.kind, label, null, null, [diff])
+  })
 }
 
 const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
@@ -896,42 +897,6 @@ const renderWorkingItems = (item: CodexThreadItem, turnId: string): ProviderWork
   }))
 }
 
-const groupConsecutiveEdits = (items: ProviderWorkingItem[]): ProviderWorkingItem[] => {
-  const groupedItems: ProviderWorkingItem[] = []
-
-  for (let index = 0; index < items.length;) {
-    const item = items[index]
-    if (item.type !== 'tool' || item.activity !== 'edit') {
-      groupedItems.push(item)
-      index += 1
-      continue
-    }
-
-    const tools: ProviderWorkingTool[] = []
-    while (
-      index < items.length &&
-      items[index].type === 'tool' &&
-      (items[index] as ProviderWorkingTool).activity === item.activity
-    ) {
-      tools.push(items[index] as ProviderWorkingTool)
-      index += 1
-    }
-
-    if (tools.length === 1) {
-      groupedItems.push(tools[0])
-    } else {
-      const files = [
-        ...new Set(tools.flatMap((tool) => tool.diffs.map((diff) => getFileName(diff.path))))
-      ]
-      const visibleFiles = files.slice(0, 3).join(', ')
-      const label = `Changed ${visibleFiles || 'files'}${files.length > 3 ? ', …' : ''}`
-      groupedItems.push({ type: 'toolGroup', id: `${tools[0].id}:group`, label, tools })
-    }
-  }
-
-  return groupedItems
-}
-
 const getUserInputText = (input: CodexUserInput): string => {
   if (input.type === 'text') return input.text
   if (input.type === 'skill') return `$${input.name}`
@@ -955,6 +920,8 @@ export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
   const chatItems: ProviderChatItem[] = []
 
   for (const turn of turns) {
+    const stopped =
+      turn.status === 'interrupted' || turn.items.some((item) => item.type === 'turnAborted')
     const finalMessageIndex = getFinalMessageIndex(turn.items)
     let finalMessage: ProviderMessage | null = null
     const workingItems: ProviderWorkingItem[] = []
@@ -986,11 +953,12 @@ export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
       workingItems.push(...renderWorkingItems(item, turn.id))
     }
 
-    if (workingItems.length > 0) {
+    if (workingItems.length > 0 || stopped) {
       chatItems.push({
         type: 'working',
         id: `${turn.id}:working`,
-        items: groupConsecutiveEdits(workingItems)
+        status: stopped ? 'stopped' : 'working',
+        items: workingItems
       })
     }
     if (finalMessage) chatItems.push(finalMessage)

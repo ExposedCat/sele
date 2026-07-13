@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ArrowUp } from 'lucide-react'
 import './MessageBox.css'
 
 export const MessageBox: React.FC = () => {
@@ -24,8 +25,13 @@ export const MessageBox: React.FC = () => {
         placeholder="Message the assistant"
         onChange={(event) => setMessage(event.target.value)}
       />
-      <button type="submit" disabled={!message.trim()}>
-        Send
+      <button
+        type="submit"
+        aria-label="Send message"
+        title="Send message"
+        disabled={!message.trim()}
+      >
+        <ArrowUp aria-hidden="true" />
       </button>
     </form>
   )

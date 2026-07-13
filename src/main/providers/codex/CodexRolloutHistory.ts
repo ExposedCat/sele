@@ -389,6 +389,15 @@ const createTurn = (turnId: string, entries: RolloutEntry[]): CodexTurn => {
 
     if (payload.type === 'context_compacted') {
       items.push(createContextCompactionItem(entry))
+      return
+    }
+
+    if (payload.type === 'turn_aborted') {
+      items.push({
+        type: 'turnAborted',
+        id: payload.turn_id ?? payload.id ?? `turn-aborted:${entry.index}`,
+        rawToolData: [entry.record]
+      })
     }
   })
 

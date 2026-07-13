@@ -43,7 +43,17 @@ export type ProviderFileDiff = {
 }
 
 export type ProviderToolActivity =
-  'read' | 'search' | 'git' | 'edit' | 'create' | 'delete' | 'command' | 'other'
+  | 'read'
+  | 'search'
+  | 'git'
+  | 'edit'
+  | 'create'
+  | 'delete'
+  | 'npm'
+  | 'npx'
+  | 'script'
+  | 'command'
+  | 'other'
 
 export type ProviderWorkingTool = {
   type: 'tool'
@@ -71,6 +81,7 @@ export type ProviderWorkingItem =
 export type ProviderWorkingStep = {
   type: 'working'
   id: string
+  status: 'working' | 'stopped'
   items: ProviderWorkingItem[]
 }
 

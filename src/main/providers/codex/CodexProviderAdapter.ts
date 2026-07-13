@@ -38,6 +38,10 @@ type CodexThread = {
   updatedAt: number
   status: CodexThreadStatus
   path: string | null
+  turns: {
+    id: string
+    status: string
+  }[]
 }
 
 type ThreadListResponse = {
@@ -121,10 +125,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
   getChat = async (chatId: string): Promise<ProviderChatDetail> => {
     const response = await this.client.request<ThreadReadResponse>('thread/read', {
       threadId: chatId,
-      includeTurns: false
+      includeTurns: true
     })
 
-    const turns = await loadRolloutHistory(response.thread.path)
+    const turnStatuses = new Map(response.thread.turns.map((turn) => [turn.id, turn.status]))
+    const turns = (await loadRolloutHistory(response.thread.path)).map((turn) => ({
+      ...turn,
+      status: turnStatuses.get(turn.id) ?? null
+    }))
 
     return {
       id: response.thread.id,

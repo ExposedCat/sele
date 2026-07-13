@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Search, X } from 'lucide-react'
 import type { ProviderChat, ProviderChatDetail } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatList } from './components/ChatList'
@@ -15,7 +15,10 @@ export const App: React.FC = () => {
   const [selectedChat, setSelectedChat] = useState<ProviderChat | null>(null)
   const [chatDetail, setChatDetail] = useState<ProviderChatDetail | null>(null)
   const [chatLoadState, setChatLoadState] = useState<LoadState>('loading')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const contentRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let active = true
@@ -69,6 +72,19 @@ export const App: React.FC = () => {
     contentRef.current?.scrollTo({ top: 0 })
   }, [selectedChat])
 
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus()
+  }, [searchOpen])
+
+  const searchTerms = searchQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  const filteredChats =
+    searchTerms.length === 0
+      ? chats
+      : chats.filter((chat) => {
+          const title = chat.title.toLocaleLowerCase()
+          return searchTerms.every((term) => title.includes(term))
+        })
+
   const handleSelectChat = (chat: ProviderChat): void => {
     setChatDetail(null)
     setChatLoadState('loading')
@@ -86,9 +102,8 @@ export const App: React.FC = () => {
         {selectedChat ? (
           <section className="chat-detail" aria-label={selectedChat.title}>
             <header className="chat-detail__header">
-              <button type="button" onClick={handleBack}>
+              <button type="button" aria-label="Back" title="Back" onClick={handleBack}>
                 <ArrowLeft aria-hidden="true" />
-                Back
               </button>
               <h1>{selectedChat.title}</h1>
             </header>
@@ -106,29 +121,81 @@ export const App: React.FC = () => {
             </div>
           </section>
         ) : (
-          <section className="chat-home" aria-labelledby="chat-home-title">
+          <section className="chat-home" aria-label="Recent conversations">
             <header className="chat-home__header">
-              <div className="chat-home__identity">
-                <span className="chat-home__mark" aria-hidden="true">
-                  S
-                </span>
-                <div>
-                  <p className="chat-home__eyebrow">Sele</p>
-                  <h1 id="chat-home-title">Recent conversations</h1>
-                </div>
+              <div
+                className={`chat-home__search${searchOpen ? ' chat-home__search--open' : ''}`}
+                onBlur={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+
+                  setSearchQuery('')
+                  setSearchOpen(false)
+                }}
+              >
+                {searchOpen && (
+                  <>
+                    <label className="sr-only" htmlFor="chat-search">
+                      Search conversations
+                    </label>
+                    <div className="chat-home__search-field">
+                      <input
+                        ref={searchInputRef}
+                        id="chat-search"
+                        type="search"
+                        value={searchQuery}
+                        placeholder="Search conversations"
+                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            setSearchQuery('')
+                            setSearchOpen(false)
+                          }
+                        }}
+                      />
+                      {searchQuery && (
+                        <button
+                          className="chat-home__search-clear"
+                          type="button"
+                          aria-label="Clear search"
+                          title="Clear search"
+                          onClick={() => {
+                            setSearchQuery('')
+                            searchInputRef.current?.focus()
+                          }}
+                        >
+                          <X aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+                <button
+                  className="chat-home__search-trigger"
+                  type="button"
+                  aria-label="Search conversations"
+                  aria-expanded={searchOpen}
+                  aria-controls={searchOpen ? 'chat-search' : undefined}
+                  title="Search conversations"
+                  onClick={() => {
+                    setSearchOpen(true)
+                    searchInputRef.current?.focus()
+                  }}
+                >
+                  <Search aria-hidden="true" />
+                </button>
               </div>
-              {loadState === 'ready' && chats.length > 0 && (
-                <p className="chat-home__count">
-                  {chats.length} {chats.length === 1 ? 'chat' : 'chats'}
-                </p>
-              )}
             </header>
             {loadState === 'loading' && <p className="chat__status">Loading chats…</p>}
             {loadState === 'error' && <p className="chat__status">Unable to load chats.</p>}
             {loadState === 'ready' && chats.length === 0 && (
               <p className="chat__status">No chats found.</p>
             )}
-            {chats.length > 0 && <ChatList chats={chats} onSelect={handleSelectChat} />}
+            {loadState === 'ready' && chats.length > 0 && filteredChats.length === 0 && (
+              <p className="chat__status">No matching chats.</p>
+            )}
+            {filteredChats.length > 0 && (
+              <ChatList chats={filteredChats} onSelect={handleSelectChat} />
+            )}
           </section>
         )}
       </div>

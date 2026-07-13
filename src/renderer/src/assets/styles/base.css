@@ -34,7 +34,7 @@ textarea {
 button:focus-visible,
 summary:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid var(--accent);
+  outline: 3px solid var(--focus-ring);
   outline-offset: 3px;
 }
 

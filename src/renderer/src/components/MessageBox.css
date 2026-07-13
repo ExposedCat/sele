@@ -18,8 +18,8 @@
 }
 
 .message-box:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  box-shadow: var(--glass-shadow-hover);
+  border-color: var(--glass-line);
+  box-shadow: var(--glass-shadow);
 }
 
 .message-box textarea {
@@ -32,7 +32,7 @@
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.5;
 }
 
@@ -42,9 +42,12 @@
 }
 
 .message-box button {
-  min-width: 68px;
-  min-height: 42px;
-  padding: 9px 15px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  padding: 0;
   border: 1px solid rgb(255 255 255 / 20%);
   border-radius: 12px;
   color: var(--dark-ink);
@@ -52,12 +55,15 @@
   box-shadow:
     0 9px 22px rgb(24 26 28 / 16%),
     inset 0 1px 0 rgb(255 255 255 / 18%);
-  font-size: 15px;
-  font-weight: 700;
   transition:
     background 160ms ease,
     opacity 160ms ease,
     transform 160ms ease;
+}
+
+.message-box button svg {
+  width: 21px;
+  height: 21px;
 }
 
 .message-box button:not(:disabled):hover {
