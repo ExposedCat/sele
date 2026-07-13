@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { ArrowLeft } from 'lucide-react'
 import type { ProviderChat, ProviderChatDetail } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatList } from './components/ChatList'
 import { MessageBox } from './components/MessageBox'
 import { providerApi } from './providerApi'
+import './App.css'
 
 type LoadState = 'loading' | 'ready' | 'error'
 
@@ -61,6 +63,12 @@ export const App: React.FC = () => {
     contentRef.current?.scrollTo({ top: contentRef.current.scrollHeight })
   }, [chatDetail])
 
+  useEffect(() => {
+    if (selectedChat) return
+
+    contentRef.current?.scrollTo({ top: 0 })
+  }, [selectedChat])
+
   const handleSelectChat = (chat: ProviderChat): void => {
     setChatDetail(null)
     setChatLoadState('loading')
@@ -79,7 +87,8 @@ export const App: React.FC = () => {
           <section className="chat-detail" aria-label={selectedChat.title}>
             <header className="chat-detail__header">
               <button type="button" onClick={handleBack}>
-                <span aria-hidden="true">←</span> Back
+                <ArrowLeft aria-hidden="true" />
+                Back
               </button>
               <h1>{selectedChat.title}</h1>
             </header>
@@ -97,14 +106,30 @@ export const App: React.FC = () => {
             </div>
           </section>
         ) : (
-          <>
+          <section className="chat-home" aria-labelledby="chat-home-title">
+            <header className="chat-home__header">
+              <div className="chat-home__identity">
+                <span className="chat-home__mark" aria-hidden="true">
+                  S
+                </span>
+                <div>
+                  <p className="chat-home__eyebrow">Sele</p>
+                  <h1 id="chat-home-title">Recent conversations</h1>
+                </div>
+              </div>
+              {loadState === 'ready' && chats.length > 0 && (
+                <p className="chat-home__count">
+                  {chats.length} {chats.length === 1 ? 'chat' : 'chats'}
+                </p>
+              )}
+            </header>
             {loadState === 'loading' && <p className="chat__status">Loading chats…</p>}
             {loadState === 'error' && <p className="chat__status">Unable to load chats.</p>}
             {loadState === 'ready' && chats.length === 0 && (
               <p className="chat__status">No chats found.</p>
             )}
             {chats.length > 0 && <ChatList chats={chats} onSelect={handleSelectChat} />}
-          </>
+          </section>
         )}
       </div>
       {selectedChat && <MessageBox />}

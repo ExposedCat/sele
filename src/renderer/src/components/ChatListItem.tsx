@@ -1,5 +1,6 @@
-import { LoaderCircle } from 'lucide-react'
+import { ChevronRight, LoaderCircle } from 'lucide-react'
 import type { ProviderChat } from '../../../shared/provider'
+import './ChatListItem.css'
 
 type ChatListItemProps = {
   chat: ProviderChat
@@ -39,6 +40,9 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, onClick }) => 
         )}
       </span>
     </span>
-    <span className="chat-list-item__preview">{chat.preview}</span>
+    <span className="chat-list-item__body">
+      <span className="chat-list-item__preview">{chat.preview}</span>
+      <ChevronRight className="chat-list-item__chevron" aria-hidden="true" />
+    </span>
   </button>
 )

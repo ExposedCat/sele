@@ -3,6 +3,7 @@ import type {
   ProviderWorkingItem,
   ProviderWorkingTool
 } from '../../../shared/provider'
+import './ChatDetailItem.css'
 
 type ChatDetailItemProps = {
   item: ProviderChatItem
@@ -50,10 +51,10 @@ const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[] }> = ({ l
   }
 
   return (
-    <details className="chat-detail__tool-group">
-      <summary>{label}</summary>
+    <div className="chat-detail__tool-group">
+      <p className="chat-detail__activity-line">{label}</p>
       {activity === 'edit' ? <DiffContent tools={tools} /> : <CommandContent tools={tools} />}
-    </details>
+    </div>
   )
 }
 

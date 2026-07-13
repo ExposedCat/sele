@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import './MessageBox.css'
 
 export const MessageBox: React.FC = () => {
   const [message, setMessage] = useState('')

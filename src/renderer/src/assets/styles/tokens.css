@@ -1,0 +1,69 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f1eb;
+  --ink: #181a1c;
+  --lead: #373b40;
+  --muted: #666b70;
+  --quiet: #858a8d;
+  --accent: #086e67;
+  --accent-soft: rgb(8 110 103 / 10%);
+  --glass: rgb(255 255 255 / 50%);
+  --glass-strong: rgb(255 255 255 / 68%);
+  --glass-subtle: rgb(255 255 255 / 34%);
+  --glass-line: rgb(255 255 255 / 72%);
+  --glass-edge: rgb(39 39 37 / 10%);
+  --glass-shadow: 0 18px 48px rgb(42 38 32 / 12%), inset 0 1px 0 rgb(255 255 255 / 82%);
+  --glass-shadow-hover: 0 22px 58px rgb(42 38 32 / 16%), inset 0 1px 0 rgb(255 255 255 / 92%);
+  --dark: rgb(25 26 27 / 92%);
+  --dark-hover: rgb(25 26 27 / 100%);
+  --dark-ink: #ffffff;
+  --assistant-message: rgb(255 255 255 / 56%);
+  --activity-bg: rgb(255 255 255 / 35%);
+  --line: rgb(39 39 37 / 11%);
+  --error: #c53c35;
+  --warning: #c47b0a;
+  --info: #2f64b3;
+  color: var(--ink);
+  background: var(--bg);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-size: 16px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #101419;
+    --ink: #f1f4f5;
+    --lead: #d1d6da;
+    --muted: #a1a9af;
+    --quiet: #828b93;
+    --accent: #66c8bd;
+    --accent-soft: rgb(102 200 189 / 12%);
+    --glass: rgb(240 246 252 / 6.5%);
+    --glass-strong: rgb(240 246 252 / 10%);
+    --glass-subtle: rgb(240 246 252 / 4.5%);
+    --glass-line: rgb(240 246 252 / 15%);
+    --glass-edge: rgb(240 246 252 / 6%);
+    --glass-shadow: 0 20px 52px rgb(0 0 0 / 32%), inset 0 1px 0 rgb(255 255 255 / 12%);
+    --glass-shadow-hover: 0 24px 64px rgb(0 0 0 / 40%), inset 0 1px 0 rgb(255 255 255 / 17%);
+    --dark: rgb(239 243 244 / 92%);
+    --dark-hover: #ffffff;
+    --dark-ink: #161819;
+    --assistant-message: rgb(240 246 252 / 8%);
+    --activity-bg: rgb(240 246 252 / 4.5%);
+    --line: rgb(240 246 252 / 11%);
+    --error: #ff7b72;
+    --warning: #e5a63c;
+    --info: #79a9ec;
+  }
+}

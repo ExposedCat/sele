@@ -1,5 +1,6 @@
 import type { ProviderChat } from '../../../shared/provider'
 import { ChatListItem } from './ChatListItem'
+import './ChatList.css'
 
 type ChatListProps = {
   chats: ProviderChat[]
