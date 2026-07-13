@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import type { ProviderId } from '../../shared/provider'
 import { isProviderId, providerIpcChannels } from '../../shared/provider'
 import { providerApi } from './providerService'
@@ -13,7 +13,18 @@ const requireChatId = (value: unknown): string => {
   return value
 }
 
+const requireMessage = (value: unknown): string => {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('Invalid message')
+  return value
+}
+
 export const registerProviderIpc = (): void => {
+  providerApi.onChatUpdated((event) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      window.webContents.send(providerIpcChannels.chatUpdated, event)
+    })
+  })
+
   ipcMain.handle(providerIpcChannels.login, (_, providerId: unknown) =>
     providerApi.login(requireProviderId(providerId))
   )
@@ -24,5 +35,19 @@ export const registerProviderIpc = (): void => {
 
   ipcMain.handle(providerIpcChannels.getChat, (_, providerId: unknown, chatId: unknown) =>
     providerApi.getChat(requireProviderId(providerId), requireChatId(chatId))
+  )
+
+  ipcMain.handle(providerIpcChannels.startChat, (_, providerId: unknown, message: unknown) =>
+    providerApi.startChat(requireProviderId(providerId), requireMessage(message))
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.continueChat,
+    (_, providerId: unknown, chatId: unknown, message: unknown) =>
+      providerApi.continueChat(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireMessage(message)
+      )
   )
 }

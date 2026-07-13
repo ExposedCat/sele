@@ -43,7 +43,7 @@
   color: var(--ink);
   font-size: 19px;
   font-weight: 700;
-  letter-spacing: -0.012em;
+  letter-spacing: 0;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -64,16 +64,16 @@
 
 .chat-list-item__status-container {
   display: grid;
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   place-items: center;
 }
 
 .chat-list-item__loading {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   color: var(--muted);
-  animation: chat-list-item-spin 1s linear infinite;
+  animation: chat-list-item-spin 900ms linear infinite;
 }
 
 .chat-list-item__status {
@@ -86,14 +86,6 @@
 
 .chat-list-item__status--error {
   background: var(--error);
-}
-
-.chat-list-item__status--waitingOnApproval {
-  background: var(--warning);
-}
-
-.chat-list-item__status--waitingOnUserInput {
-  background: var(--info);
 }
 
 @keyframes chat-list-item-spin {

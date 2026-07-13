@@ -81,7 +81,7 @@ export type ProviderWorkingItem =
 export type ProviderWorkingStep = {
   type: 'working'
   id: string
-  status: 'working' | 'stopped'
+  status: 'working' | 'worked' | 'stopped'
   items: ProviderWorkingItem[]
 }
 
@@ -90,19 +90,36 @@ export type ProviderChatItem = ProviderMessage | ProviderWorkingStep
 export type ProviderChatDetail = {
   id: string
   title: string
+  status: ProviderChatStatus | null
   items: ProviderChatItem[]
+}
+
+export type ProviderChatUpdatedEvent = {
+  providerId: ProviderId
+  chatId: string
+  detail: ProviderChatDetail
 }
 
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
   getChats: (providerId: ProviderId) => Promise<ProviderChat[]>
   getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
+  startChat: (providerId: ProviderId, message: string) => Promise<ProviderChatDetail>
+  continueChat: (
+    providerId: ProviderId,
+    chatId: string,
+    message: string
+  ) => Promise<ProviderChatDetail>
+  onChatUpdated: (listener: (event: ProviderChatUpdatedEvent) => void) => () => void
 }
 
 export const providerIpcChannels = {
   login: 'provider:login',
   getChats: 'provider:get-chats',
-  getChat: 'provider:get-chat'
+  getChat: 'provider:get-chat',
+  startChat: 'provider:start-chat',
+  continueChat: 'provider:continue-chat',
+  chatUpdated: 'provider:chat-updated'
 } as const
 
 export const isProviderId = (value: unknown): value is ProviderId =>

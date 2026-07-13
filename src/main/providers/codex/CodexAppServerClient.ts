@@ -12,6 +12,11 @@ type RpcResponse = {
   error?: RpcError
 }
 
+export type RpcNotification = {
+  method: string
+  params?: unknown
+}
+
 type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
@@ -24,12 +29,18 @@ export class CodexAppServerClient {
   private process: ChildProcessWithoutNullStreams | null = null
   private startPromise: Promise<void> | null = null
   private pendingRequests = new Map<number, PendingRequest>()
+  private notificationListeners = new Set<(notification: RpcNotification) => void>()
   private nextRequestId = 1
   private stderr = ''
 
   request = async <Result>(method: string, params: unknown): Promise<Result> => {
     await this.start()
     return this.sendRequest<Result>(method, params)
+  }
+
+  onNotification = (listener: (notification: RpcNotification) => void): (() => void) => {
+    this.notificationListeners.add(listener)
+    return () => this.notificationListeners.delete(listener)
   }
 
   dispose = (): void => {
@@ -119,14 +130,29 @@ export class CodexAppServerClient {
   }
 
   private handleLine = (line: string): void => {
-    let response: RpcResponse
+    let message: Record<string, unknown>
 
     try {
-      response = JSON.parse(line) as RpcResponse
+      message = JSON.parse(line) as Record<string, unknown>
     } catch {
       return
     }
 
+    const method = message.method
+    if (typeof method === 'string') {
+      if (typeof message.id !== 'number') {
+        const notification = {
+          method,
+          params: 'params' in message ? message.params : undefined
+        }
+
+        this.notificationListeners.forEach((listener) => listener(notification))
+      }
+
+      return
+    }
+
+    const response = message as RpcResponse
     if (typeof response.id !== 'number') return
 
     const pending = this.pendingRequests.get(response.id)

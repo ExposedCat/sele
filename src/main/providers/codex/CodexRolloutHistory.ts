@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import type { CodexThreadItem, CodexTurn } from './CodexItemRenderers'
+import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
 
 type RolloutPatchChange = {
   type?: 'add' | 'delete' | 'update'
@@ -36,11 +37,6 @@ type RolloutEntry = {
   index: number
 }
 
-type NestedToolCall = {
-  name: string
-  offset: number
-}
-
 const isToolCallPayload = (payload: RolloutPayload): boolean =>
   payload.type === 'custom_tool_call' ||
   payload.type === 'function_call' ||
@@ -55,72 +51,6 @@ const getToolCallOutputType = (payload: RolloutPayload): string | null => {
 
 const getToolCallName = (payload: RolloutPayload): string =>
   payload.name ?? (payload.type === 'tool_search_call' ? 'tool_search' : 'tool')
-
-const isNestedToolName = (name: string): boolean =>
-  name === 'exec_command' ||
-  name === 'apply_patch' ||
-  name === 'write_stdin' ||
-  name === 'view_image' ||
-  name.startsWith('mcp__') ||
-  name.startsWith('web__') ||
-  name.startsWith('image_gen__')
-
-const getNestedToolCalls = (input: string): NestedToolCall[] => {
-  const calls: NestedToolCall[] = []
-  let quote: string | null = null
-  let escaped = false
-  let lineComment = false
-  let blockComment = false
-
-  for (let index = 0; index < input.length; index += 1) {
-    const character = input[index]
-    const nextCharacter = input[index + 1]
-
-    if (lineComment) {
-      if (character === '\n') lineComment = false
-      continue
-    }
-
-    if (blockComment) {
-      if (character === '*' && nextCharacter === '/') {
-        blockComment = false
-        index += 1
-      }
-      continue
-    }
-
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = null
-      continue
-    }
-
-    if (character === '/' && nextCharacter === '/') {
-      lineComment = true
-      index += 1
-      continue
-    }
-
-    if (character === '/' && nextCharacter === '*') {
-      blockComment = true
-      index += 1
-      continue
-    }
-
-    if (character === '"' || character === "'" || character === '`') {
-      quote = character
-      continue
-    }
-
-    if (!input.startsWith('tools.', index)) continue
-
-    const match = input.slice(index).match(/^tools\.([A-Za-z0-9_]+)\s*\(/)
-    if (match && isNestedToolName(match[1])) calls.push({ name: match[1], offset: index })
-  }
-
-  return calls
-}
 
 const parseRollout = (contents: string): RolloutEntry[] => {
   const entries: RolloutEntry[] = []
@@ -199,9 +129,6 @@ const getPatchEntryForToolCall = (
 
   return null
 }
-
-const isPatchToolCall = (input: string, calls: NestedToolCall[]): boolean =>
-  calls.some((call) => call.name === 'apply_patch') || input.includes('*** Begin Patch')
 
 const getPatchChanges = (payload: RolloutPayload): CodexThreadItem['changes'] => {
   if (!payload.changes) return []

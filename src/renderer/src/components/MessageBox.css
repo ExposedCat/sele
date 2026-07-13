@@ -2,9 +2,10 @@
   position: relative;
   z-index: 3;
   display: flex;
+  width: 100%;
   gap: 12px;
   align-items: center;
-  margin: 0 10px;
+  margin: 0;
   padding: 10px 10px 10px 16px;
   border: 1px solid var(--glass-line);
   border-radius: 18px;
@@ -39,6 +40,28 @@
 .message-box textarea::placeholder {
   color: var(--quiet);
   opacity: 1;
+}
+
+.message-box textarea:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.message-box__error {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 14px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--error) 34%, transparent);
+  border-radius: 9px;
+  color: var(--error);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  font-size: 14px;
+  line-height: 1.3;
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
 }
 
 .message-box button {
@@ -78,6 +101,6 @@
 
 @media (max-width: 600px) {
   .message-box {
-    margin: 0 7px;
+    padding-left: 14px;
   }
 }

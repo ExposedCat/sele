@@ -4,6 +4,7 @@ import {
   FileCode2,
   FileText,
   GitBranch,
+  LoaderCircle,
   Package,
   Pencil,
   Search,
@@ -221,12 +222,23 @@ const groupWorkingItems = (
 
 const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   const blocks = groupWorkingItems(item.items)
-  const label = item.status === 'stopped' ? 'Stopped' : 'Working'
+  const label =
+    item.status === 'stopped' ? 'Stopped' : item.status === 'worked' ? 'Worked' : 'Working'
+  const heading = (
+    <span className="chat-detail__working-label">
+      {item.status === 'working' && (
+        <LoaderCircle className="chat-detail__working-spinner" aria-hidden="true" />
+      )}
+      <span>{label}</span>
+    </span>
+  )
 
   if (blocks.length === 0) {
     return (
-      <div className="chat-detail__step chat-detail__working chat-detail__working--stopped">
-        <div className="chat-detail__working-heading">{label}</div>
+      <div
+        className={`chat-detail__step chat-detail__working chat-detail__working--${item.status}`}
+      >
+        <div className="chat-detail__working-heading">{heading}</div>
       </div>
     )
   }
@@ -234,7 +246,7 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   return (
     <details className="chat-detail__step chat-detail__working">
       <summary>
-        <span>{label}</span>
+        {heading}
         <ChevronRight className="chat-detail__summary-chevron" aria-hidden="true" />
       </summary>
       <div className="chat-detail__step-content">

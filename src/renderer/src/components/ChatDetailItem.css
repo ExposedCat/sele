@@ -101,6 +101,26 @@
   align-items: center;
 }
 
+.chat-detail__working-label {
+  display: inline-flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-detail__working-spinner {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  animation: chat-detail-spin 900ms linear infinite;
+}
+
+@keyframes chat-detail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .chat-detail__step-content {
   display: flex;
   flex-direction: column;

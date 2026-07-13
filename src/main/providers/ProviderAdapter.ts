@@ -10,5 +10,8 @@ export type ProviderAdapter = {
   login: () => Promise<ProviderLoginResult>
   getChats: () => Promise<ProviderChat[]>
   getChat: (chatId: string) => Promise<ProviderChatDetail>
+  startChat: (message: string) => Promise<ProviderChatDetail>
+  continueChat: (chatId: string, message: string) => Promise<ProviderChatDetail>
+  onChatUpdated: (listener: (detail: ProviderChatDetail) => void) => () => void
   dispose: () => void
 }

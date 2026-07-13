@@ -3,8 +3,10 @@ import type {
   ProviderFileDiff,
   ProviderMessage,
   ProviderToolActivity,
-  ProviderWorkingItem
+  ProviderWorkingItem,
+  ProviderWorkingStep
 } from '../../../shared/provider'
+import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
 
 export type CodexUserInput =
   | { type: 'text'; text: string }
@@ -34,6 +36,7 @@ export type CodexThreadItem = {
   customToolInput?: string | null
   customToolOutput?: unknown
   rawToolData?: unknown[]
+  summary?: string[]
 }
 
 export type CodexTurn = {
@@ -255,6 +258,7 @@ type CommandClassification = {
     'read' | 'search' | 'git' | 'npm' | 'npx' | 'script' | 'command'
   >
   label: string
+  command: string
 }
 
 const readCommands = new Set([
@@ -276,6 +280,7 @@ const readCommands = new Set([
 
 const searchCommands = new Set(['rg', 'grep', 'find'])
 const scriptCommands = new Set(['bash', 'sh', 'node', 'python', 'python3'])
+const shellEvalCommands = new Set(['bash', 'sh', 'zsh'])
 
 const executionCommands = new Set([
   'npm',
@@ -481,40 +486,118 @@ const getScriptToolLabel = (classification: SegmentClassification): string => {
     : `Ran ${runtime} script`
 }
 
+const isShellEvalOption = (option: string): boolean =>
+  option.startsWith('-') && !option.startsWith('--') && option.includes('c')
+
+const getShellEvalCommand = (classification: SegmentClassification): string | null => {
+  if (!shellEvalCommands.has(classification.command)) return null
+
+  const commandOptionIndex = classification.args.findIndex((token) =>
+    isShellEvalOption(token.value)
+  )
+  const commandToken =
+    commandOptionIndex >= 0 ? classification.args[commandOptionIndex + 1] : undefined
+  const innerCommand = commandToken?.value.trim()
+  return innerCommand || null
+}
+
+const getClassifiedShellCommand = (
+  command: string,
+  depth = 0
+): { command: string; classification: SegmentClassification | null } => {
+  const firstClassification =
+    getShellSegments(command)
+      .map(classifySegment)
+      .find((classification) => classification != null && classification.activity !== 'neutral') ??
+    null
+
+  if (!firstClassification || depth >= 3) {
+    return { command, classification: firstClassification }
+  }
+
+  const innerCommand = getShellEvalCommand(firstClassification)
+  return innerCommand
+    ? getClassifiedShellCommand(innerCommand, depth + 1)
+    : { command, classification: firstClassification }
+}
+
 const classifyCommand = (command: string): CommandClassification[] => {
-  const firstClassification = getShellSegments(command)
-    .map(classifySegment)
-    .find((classification) => classification != null)
+  const classifiedShellCommand = getClassifiedShellCommand(command)
+  const classifiedCommand = classifiedShellCommand.command
+  const firstClassification = classifiedShellCommand.classification
 
   if (!firstClassification || firstClassification.activity === 'neutral') {
-    return [{ activity: 'command', label: 'Ran a command' }]
+    return [{ activity: 'command', label: 'Ran a command', command: classifiedCommand }]
   }
 
   const { activity } = firstClassification
   if (activity === 'read') {
-    return [{ activity, label: getReadToolLabel(command, [firstClassification]) }]
+    return [
+      {
+        activity,
+        label: getReadToolLabel(classifiedCommand, [firstClassification]),
+        command: classifiedCommand
+      }
+    ]
   }
   if (activity === 'search') {
-    return [{ activity, label: getSearchToolLabel(command, [firstClassification]) }]
+    return [
+      {
+        activity,
+        label: getSearchToolLabel(classifiedCommand, [firstClassification]),
+        command: classifiedCommand
+      }
+    ]
   }
   if (activity === 'git') {
-    return [{ activity, label: getGitToolLabel([firstClassification]) }]
+    return [{ activity, label: getGitToolLabel([firstClassification]), command: classifiedCommand }]
   }
   if (activity === 'npm') {
-    return [{ activity, label: getNpmToolLabel(firstClassification) }]
+    return [{ activity, label: getNpmToolLabel(firstClassification), command: classifiedCommand }]
   }
   if (activity === 'npx') {
-    return [{ activity, label: getNpxToolLabel(firstClassification) }]
+    return [{ activity, label: getNpxToolLabel(firstClassification), command: classifiedCommand }]
   }
   if (activity === 'script') {
-    return [{ activity, label: getScriptToolLabel(firstClassification) }]
+    return [
+      { activity, label: getScriptToolLabel(firstClassification), command: classifiedCommand }
+    ]
   }
 
-  return [{ activity: 'command', label: `Ran ${firstClassification.command}` }]
+  return [
+    {
+      activity: 'command',
+      label: `Ran ${firstClassification.command}`,
+      command: classifiedCommand
+    }
+  ]
+}
+
+const getToolCallMarkerIndex = (input: string, toolName: string): number => {
+  const toolMarkerIndex = input.indexOf(`tools.${toolName}(`)
+  if (toolMarkerIndex >= 0) return toolMarkerIndex
+  return input.indexOf(`functions.${toolName}(`)
+}
+
+const getJsonRecord = (value: string): Record<string, unknown> | null => {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
 }
 
 const getJsonToolArgument = (input: string, toolName: string): Record<string, unknown> | null => {
-  const markerIndex = input.indexOf(`tools.${toolName}(`)
+  const trimmedInput = input.trim()
+  if (trimmedInput.startsWith('{')) {
+    const parsedInput = getJsonRecord(trimmedInput)
+    if (parsedInput) return parsedInput
+  }
+
+  const markerIndex = getToolCallMarkerIndex(input, toolName)
   const objectStart = input.indexOf('{', markerIndex)
   if (markerIndex < 0 || objectStart < 0) return null
 
@@ -555,13 +638,13 @@ const getToolStringArgument = (input: string, toolName: string, key: string): st
   const parsedValue = getJsonToolArgument(input, toolName)?.[key]
   if (typeof parsedValue === 'string') return parsedValue
 
-  const markerIndex = input.indexOf(`tools.${toolName}(`)
-  if (markerIndex < 0) return null
+  const markerIndex = getToolCallMarkerIndex(input, toolName)
+  const searchInput = markerIndex >= 0 ? input.slice(markerIndex) : input
 
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = input
-    .slice(markerIndex)
-    .match(new RegExp(`["']?${escapedKey}["']?\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`))
+  const match = searchInput.match(
+    new RegExp(`["']?${escapedKey}["']?\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`)
+  )
   if (!match) return null
 
   try {
@@ -742,6 +825,31 @@ const renderKnownCustomTool = (item: CodexThreadItem): WorkingItemRenderResult |
     )
   }
 
+  if (name === 'apply_patch') {
+    return renderTool(
+      item,
+      'edit',
+      'Applied patch',
+      null,
+      getToolStdout(item.customToolOutput),
+      [],
+      name
+    )
+  }
+
+  if (name === 'update_plan') {
+    return renderTool(
+      item,
+      'other',
+      'Updated plan',
+      null,
+      null,
+      [],
+      name,
+      getToolStdout(item.customToolOutput) ?? getRawToolOutput(item)
+    )
+  }
+
   if (openAiDocsSearchTools.has(name)) {
     const query = getCustomToolArgument(item, 'query')
     return renderTool(
@@ -771,6 +879,44 @@ const renderKnownCustomTool = (item: CodexThreadItem): WorkingItemRenderResult |
   }
 
   return null
+}
+
+const renderNestedToolCommand = (item: CodexThreadItem): WorkingItemRenderResult[] | null => {
+  if (!item.command) return null
+
+  const nestedCalls = getNestedToolCalls(item.command, { includeQuoted: true })
+  if (isPatchToolCall(item.command, nestedCalls)) {
+    if ((item.changes?.length ?? 0) > 0) return renderFileChanges(item)
+
+    return [
+      renderTool(
+        item,
+        'edit',
+        'Applied patch',
+        null,
+        getToolStdout(item.aggregatedOutput),
+        [],
+        'apply_patch'
+      )
+    ]
+  }
+
+  if (nestedCalls.length === 0) return null
+
+  return nestedCalls.map((call) => {
+    const toolItem: CodexThreadItem = {
+      ...item,
+      type: 'customToolCall',
+      customToolName: call.name,
+      customToolInput: item.command?.slice(call.offset) ?? null,
+      customToolOutput: item.aggregatedOutput,
+      rawToolData: item.rawToolData ?? [item]
+    }
+    return (
+      renderKnownCustomTool(toolItem) ??
+      renderTool(toolItem, 'other', call.name, null, null, [], call.name)
+    )
+  })
 }
 
 const renderFileChanges = (item: CodexThreadItem): WorkingItemRenderResult[] => {
@@ -813,13 +959,19 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
         const command = getToolStringArgument(item.customToolInput ?? '', name, 'cmd')
         const classifications = command
           ? classifyCommand(command)
-          : [{ activity: 'command', label: 'Ran a command' } satisfies CommandClassification]
+          : [
+              {
+                activity: 'command',
+                label: 'Ran a command',
+                command: ''
+              } satisfies CommandClassification
+            ]
         return classifications.map((classification) =>
           renderTool(
             item,
             classification.activity,
             classification.label,
-            command,
+            shouldShowCommandText(classification.activity) ? classification.command || null : null,
             getToolStdout(item.customToolOutput)
           )
         )
@@ -831,13 +983,18 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
   {
     matches: (item) => item.type === 'commandExecution',
     render: (item) => {
+      const nestedToolCommand = renderNestedToolCommand(item)
+      if (nestedToolCommand) return nestedToolCommand
+
       return item.command
         ? classifyCommand(item.command).map((classification) =>
             renderTool(
               item,
               classification.activity,
               classification.label,
-              item.command ?? null,
+              shouldShowCommandText(classification.activity)
+                ? classification.command || null
+                : null,
               getToolStdout(item.aggregatedOutput)
             )
           )
@@ -904,7 +1061,11 @@ const getUserInputText = (input: CodexUserInput): string => {
   return '[Image]'
 }
 
-const getFinalMessageIndex = (items: CodexThreadItem[]): number => {
+const shouldShowCommandText = (activity: ProviderToolActivity): boolean => activity !== 'script'
+
+const getFinalMessageIndex = (items: CodexThreadItem[], turnStatus: string | null): number => {
+  if (turnStatus === 'inProgress') return -1
+
   const explicitFinalIndex = items.findLastIndex(
     (item) => item.type === 'agentMessage' && item.phase === 'final_answer'
   )
@@ -916,13 +1077,26 @@ const getFinalMessageIndex = (items: CodexThreadItem[]): number => {
   return items[lastAgentMessageIndex].phase === 'commentary' ? -1 : lastAgentMessageIndex
 }
 
+const getWorkingStatus = (turn: CodexTurn): ProviderWorkingStep['status'] => {
+  if (
+    turn.status === 'interrupted' ||
+    turn.status === 'failed' ||
+    turn.items.some((item) => item.type === 'turnAborted')
+  ) {
+    return 'stopped'
+  }
+
+  if (turn.status === 'completed') return 'worked'
+
+  return 'working'
+}
+
 export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
   const chatItems: ProviderChatItem[] = []
 
   for (const turn of turns) {
-    const stopped =
-      turn.status === 'interrupted' || turn.items.some((item) => item.type === 'turnAborted')
-    const finalMessageIndex = getFinalMessageIndex(turn.items)
+    const workingStatus = getWorkingStatus(turn)
+    const finalMessageIndex = getFinalMessageIndex(turn.items, turn.status ?? null)
     let finalMessage: ProviderMessage | null = null
     const workingItems: ProviderWorkingItem[] = []
 
@@ -953,11 +1127,11 @@ export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
       workingItems.push(...renderWorkingItems(item, turn.id))
     }
 
-    if (workingItems.length > 0 || stopped) {
+    if (workingItems.length > 0 || workingStatus === 'stopped' || workingStatus === 'working') {
       chatItems.push({
         type: 'working',
         id: `${turn.id}:working`,
-        status: stopped ? 'stopped' : 'working',
+        status: workingStatus,
         items: workingItems
       })
     }

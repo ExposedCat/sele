@@ -14,6 +14,12 @@ const statusLabels = {
   waitingOnUserInput: 'Waiting for your input'
 } as const
 
+const workingStatuses = new Set<NonNullable<ProviderChat['status']>>([
+  'active',
+  'waitingOnApproval',
+  'waitingOnUserInput'
+])
+
 export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, onClick }) => (
   <button className="chat-list-item" type="button" onClick={onClick}>
     <span className="chat-list-item__header">
@@ -24,7 +30,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, onClick }) => 
         </time>
         {chat.status && (
           <span className="chat-list-item__status-container" title={statusLabels[chat.status]}>
-            {chat.status === 'active' ? (
+            {workingStatuses.has(chat.status) ? (
               <LoaderCircle
                 className="chat-list-item__loading"
                 aria-label={statusLabels[chat.status]}
