@@ -198,7 +198,7 @@
 }
 
 .changes-sidebar__file--create .changes-sidebar__file-icon {
-  color: #7a5638;
+  color: var(--accent);
 }
 
 .changes-sidebar__file--delete .changes-sidebar__file-icon {
@@ -267,7 +267,7 @@
 
 .changes-sidebar__commit-message input:focus {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: #ffffff;
+  background: var(--control-surface);
   box-shadow:
     0 0 0 3px var(--focus-ring),
     var(--control-shadow);
@@ -292,32 +292,16 @@
 }
 
 .chat-panel {
-  --ink: #272725;
-  --lead: #111110;
   --muted: var(--floating-muted);
   --quiet: var(--floating-muted);
-  --accent: #7a5638;
-  --accent-hover: #63442c;
-  --accent-ink: #ffffff;
-  --accent-soft: rgb(122 86 56 / 12%);
   --control-bg: var(--floating-control-bg);
-  --control-hover-bg: #e7e7e4;
-  --control-border: rgb(27 27 24 / 12%);
+  --control-hover-bg: var(--floating-control-hover-bg);
   --control-disabled-color: var(--floating-control-disabled-color);
   --glass: var(--floating-bg);
-  --glass-strong: #fbfbfa;
-  --glass-subtle: rgb(27 27 24 / 5%);
-  --glass-line: rgb(27 27 24 / 9%);
-  --glass-edge: rgb(27 27 24 / 18%);
-  --glass-shadow: 0 18px 45px rgb(27 27 24 / 10%), inset 0 1px 0 rgb(255 255 255 / 72%);
-  --glass-shadow-hover: 0 20px 52px rgb(27 27 24 / 13%), inset 0 1px 0 rgb(255 255 255 / 80%);
   --dark: var(--floating-control-bg);
-  --dark-hover: #e7e7e4;
-  --dark-ink: #111110;
-  --assistant-message: #f3eee9;
-  --activity-bg: #f7f7f5;
-  --line: rgb(27 27 24 / 12%);
-  --composer-bg: #fbfbfa;
+  --dark-hover: var(--floating-control-hover-bg);
+  --dark-ink: var(--lead);
+  --composer-bg: var(--glass-strong);
 
   display: flex;
   width: 100%;
@@ -328,12 +312,10 @@
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid rgb(27 27 24 / 7%);
+  border: 1px solid var(--panel-border);
   border-radius: 18px;
   background: var(--floating-bg);
-  box-shadow:
-    0 24px 60px rgb(27 27 24 / 9%),
-    0 1px 0 rgb(255 255 255 / 80%) inset;
+  box-shadow: var(--panel-shadow);
 }
 
 .chat-panel--empty {
@@ -508,7 +490,7 @@
 
 .chat-home__search-field input:focus {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: #ffffff;
+  background: var(--control-surface);
   box-shadow:
     0 0 0 3px var(--focus-ring),
     var(--control-shadow);

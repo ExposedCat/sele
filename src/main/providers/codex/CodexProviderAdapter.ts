@@ -70,6 +70,10 @@ type TurnStartResponse = {
   turn: CodexTurn
 }
 
+type ThreadNameGenerationResult = {
+  title: string
+}
+
 type ThreadRollbackResponse = {
   thread: CodexThread
 }
@@ -295,11 +299,99 @@ const codexCapabilities = {
   editMessages: true
 } satisfies ProviderCapabilities
 
+const titleGenerationModel = 'gpt-5.4-mini'
+const titleGenerationTimeoutMs = 30_000
+const titleGenerationPromptLimit = 2_000
+
+const titleGenerationOutputSchema = {
+  type: 'object',
+  properties: {
+    title: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 36
+    }
+  },
+  required: ['title'],
+  additionalProperties: false
+}
+
 const createUserTextInput = (
   text: string
 ): Array<{ type: 'text'; text: string; text_elements: [] }> => [
   { type: 'text', text, text_elements: [] }
 ]
+
+const truncateTitle = (value: string, maxLength: number): string => {
+  if (value.length <= maxLength) return value
+  if (maxLength <= 3) return value.slice(0, maxLength)
+  return `${value.slice(0, maxLength - 3).trimEnd()}...`
+}
+
+const normalizeGeneratedTitle = (value: string, maxLength = 36): string | null => {
+  const firstLine = value
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .find((line) => line.trim().length > 0)
+    ?.trim()
+  if (!firstLine) return null
+
+  const title = firstLine
+    .replace(/^title[:\s]+/i, '')
+    .replace(/^[`"']+|[`"']+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.?!]+$/g, '')
+    .trim()
+
+  return title ? truncateTitle(title, maxLength) : null
+}
+
+const createFallbackThreadTitle = (prompt: string): string | null =>
+  normalizeGeneratedTitle(prompt, 60)
+
+const createThreadTitlePrompt = (prompt: string): string =>
+  [
+    'You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task that will be created from that prompt.',
+    'The tasks typically have to do with coding-related tasks, for example requests for bug fixes or questions about a codebase. The title you generate will be shown in the UI to represent the prompt.',
+    'Generate a concise UI title, up to 36 characters.',
+    'Fill the structured title field with plain text.',
+    'Do not include quotes, markdown, formatting characters, or trailing punctuation.',
+    'If the task includes a ticket reference, include it verbatim.',
+    'Use an imperative verb first for change requests, such as Add, Fix, Update, Refactor, Remove, Locate, or Find.',
+    'If the user prompt is already a short clear title, reuse it verbatim.',
+    'Do not answer the prompt or do any other work; only fill the title field.',
+    '',
+    'Examples:',
+    'User: Can we add dark-mode support to the settings page? -> Add dark-mode support',
+    'User: How do I fix our login bug? -> Troubleshoot login bug',
+    'User: Where in the codebase is foo_bar created -> Locate foo_bar',
+    '',
+    'User prompt:',
+    prompt.slice(0, titleGenerationPromptLimit)
+  ].join('\n')
+
+const isNonEmptyAgentMessage = (item: CodexThreadItem): boolean =>
+  item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim().length > 0
+
+const getAgentMessageText = (turn: CodexTurn): string | null => {
+  const message = turn.items.findLast(isNonEmptyAgentMessage)
+  return message?.text?.trim() || null
+}
+
+const parseThreadTitleGenerationResult = (text: string): ThreadNameGenerationResult | null => {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+
+  const rawTitle = getStringValue(getRecordValue(parsed)?.title)
+  const title = rawTitle ? normalizeGeneratedTitle(rawTitle) : null
+  return title ? { title } : null
+}
 
 const getAccessMode = (options?: ProviderTurnOptions): ProviderTurnOptions['accessMode'] =>
   options?.accessMode ?? 'sandbox'
@@ -511,6 +603,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
       if (pendingTurn) this.removePendingTurn(thread.id, pendingTurn.id)
       throw error
     }
+
+    this.startThreadTitleGeneration(thread.id, text, cwd)
 
     const detail = this.getCachedChatDetail(thread.id)
     if (!detail) throw new Error('Unable to start chat')
@@ -779,6 +873,139 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
   private resolveThreadName = async (thread: CodexThread): Promise<string | null> =>
     (await loadSessionThreadName(thread.id)) ?? getThreadName(thread)
+
+  private startThreadTitleGeneration = (
+    threadId: string,
+    prompt: string,
+    cwd: string | null
+  ): void => {
+    void this.generateAndSetThreadTitle(threadId, prompt, cwd).catch(() => {})
+  }
+
+  private generateAndSetThreadTitle = async (
+    threadId: string,
+    prompt: string,
+    cwd: string | null
+  ): Promise<void> => {
+    const currentThread = this.threads.get(threadId)
+    if (currentThread && getThreadName(currentThread)) return
+
+    const fallbackTitle = createFallbackThreadTitle(prompt)
+    const generatedTitle = await this.generateThreadTitle(prompt, cwd).catch(() => null)
+    const title = generatedTitle ?? fallbackTitle
+    if (!title) return
+
+    await this.setThreadNameIfUntitled(threadId, title)
+  }
+
+  private generateThreadTitle = async (
+    prompt: string,
+    cwd: string | null
+  ): Promise<string | null> => {
+    const startedThread = await this.client.request<ThreadStartResponse>('thread/start', {
+      cwd,
+      model: titleGenerationModel,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      config: {
+        'features.enable_fanout': false,
+        'features.hooks': false,
+        'features.multi_agent': false,
+        'features.multi_agent_v2': false,
+        web_search: 'disabled'
+      },
+      ephemeral: true
+    })
+    const titleThreadId = startedThread.thread.id
+    const completedTurn = this.waitForTitleGenerationTurn(titleThreadId)
+
+    try {
+      await this.client.request<TurnStartResponse>('turn/start', {
+        threadId: titleThreadId,
+        input: createUserTextInput(createThreadTitlePrompt(prompt)),
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: false },
+        model: titleGenerationModel,
+        effort: 'low',
+        summary: null,
+        outputSchema: titleGenerationOutputSchema
+      })
+
+      const turn = await completedTurn
+      const text = getAgentMessageText(turn)
+      if (!text) return null
+
+      return parseThreadTitleGenerationResult(text)?.title ?? null
+    } catch (error) {
+      completedTurn.catch(() => {})
+      throw error
+    } finally {
+      await this.client.request('thread/unsubscribe', { threadId: titleThreadId }).catch(() => {})
+    }
+  }
+
+  private waitForTitleGenerationTurn = (threadId: string): Promise<CodexTurn> =>
+    new Promise((resolve, reject) => {
+      let turnId: string | null = null
+
+      const cleanup = (): void => {
+        clearTimeout(timeout)
+        dispose()
+      }
+
+      const timeout = setTimeout(() => {
+        cleanup()
+        reject(new Error('Timed out waiting for thread title generation'))
+      }, titleGenerationTimeoutMs)
+
+      const dispose = this.client.onNotification((notification) => {
+        const params = getRecordValue(notification.params)
+        const notificationThreadId = getThreadId(params ?? {})
+        if (notificationThreadId !== threadId) return
+
+        if (notification.method === 'turn/started') {
+          const turn = getRecordValue(params?.turn)
+          const startedTurnId = getStringValue(turn?.id)
+          if (startedTurnId) turnId = startedTurnId
+          return
+        }
+
+        if (notification.method !== 'turn/completed') return
+
+        const completedTurn = getRecordValue(params?.turn) as CodexTurn | null
+        if (!completedTurn || !Array.isArray(completedTurn.items)) return
+        if (turnId && completedTurn.id !== turnId) return
+
+        cleanup()
+
+        if (completedTurn.status && completedTurn.status !== 'completed') {
+          reject(new Error(`Thread title generation ended with status ${completedTurn.status}`))
+          return
+        }
+
+        resolve(completedTurn)
+      })
+    })
+
+  private setThreadNameIfUntitled = async (threadId: string, title: string): Promise<void> => {
+    const normalizedTitle = normalizeGeneratedTitle(title, 60)
+    const currentThread = this.threads.get(threadId)
+    if (!normalizedTitle || (currentThread && getThreadName(currentThread))) return
+
+    await this.client.request('thread/name/set', {
+      threadId,
+      name: normalizedTitle
+    })
+
+    const updatedThread = this.threads.get(threadId)
+    if (updatedThread && getThreadName(updatedThread)) return
+
+    this.updateThread(threadId, (thread) => ({
+      ...thread,
+      name: normalizedTitle
+    }))
+    this.emitChatUpdated(threadId)
+  }
 
   private resumeThreadForMutation = async (
     threadId: string,

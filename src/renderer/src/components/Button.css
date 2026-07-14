@@ -217,11 +217,11 @@
   max-height: min(280px, 42vh);
   overflow: auto;
   padding: 5px;
-  border: 1px solid rgb(27 27 24 / 8%);
+  border: 1px solid var(--menu-border);
   border-radius: 12px;
   color: var(--lead);
-  background: #ffffff;
-  box-shadow: 0 18px 45px rgb(27 27 24 / 14%);
+  background: var(--menu-bg);
+  box-shadow: var(--menu-shadow);
 }
 
 .ui-button-menu__item {
@@ -250,7 +250,7 @@
 .ui-button-menu__item:not(:disabled):hover,
 .ui-button-menu__item:focus-visible {
   color: var(--ink);
-  background: rgb(122 86 56 / 9%);
+  background: var(--menu-option-active-bg);
   outline: 0;
 }
 

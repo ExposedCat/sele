@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -7,12 +7,22 @@ import { disposeProviderAdapters } from './providers/providerService'
 import { registerProviderIpc } from './providers/registerProviderIpc'
 import { registerAppIpc } from './registerAppIpc'
 
+const getWindowBackgroundColor = (): string =>
+  nativeTheme.shouldUseDarkColors ? '#141516' : '#f5f5f3'
+
+const updateWindowBackgroundColors = (): void => {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.setBackgroundColor(getWindowBackgroundColor())
+  })
+}
+
 const createWindow = (): void => {
   const mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
     autoHideMenuBar: true,
+    backgroundColor: getWindowBackgroundColor(),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js')
@@ -31,6 +41,8 @@ const createWindow = (): void => {
 }
 
 app.whenReady().then(() => {
+  nativeTheme.themeSource = 'system'
+  nativeTheme.on('updated', updateWindowBackgroundColors)
   electronApp.setAppUserModelId('com.sele')
   registerAppIpc()
   registerProviderIpc()
