@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import type {
+  AppGitCommitAction,
+  AppGitCommitOptions,
   AppGitChangeKind,
   AppGitChangesOptions,
   AppGitFileChange,
@@ -31,10 +33,12 @@ const runGit = (cwd: string, args: string[], required = false): Promise<string |
         maxBuffer: 10 * 1024 * 1024,
         timeout: 10_000
       },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error) {
-          if (required) reject(error)
-          else resolve(null)
+          if (required) {
+            const message = stderr.trim() || error.message
+            reject(new Error(message))
+          } else resolve(null)
           return
         }
 
@@ -58,6 +62,55 @@ const getGitChangesOptions = (value: unknown): AppGitChangesOptions => {
   return {
     cwd: getDefaultPath(options.cwd),
     source
+  }
+}
+
+const isValidGitPath = (value: string): boolean =>
+  value.length > 0 &&
+  !isAbsolute(value) &&
+  value !== '..' &&
+  !value.startsWith('../') &&
+  !value.includes('/../') &&
+  !value.includes('\\..\\')
+
+const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Git commit options')
+  }
+
+  const options = value as { action?: unknown; cwd?: unknown; files?: unknown; message?: unknown }
+  const action =
+    options.action === 'amend' || options.action === 'commitAndPush' ? options.action : 'commit'
+  const message = typeof options.message === 'string' ? options.message.trim() : ''
+
+  if (action !== 'amend' && !message) throw new Error('Commit message is required')
+  if (!Array.isArray(options.files)) throw new Error('Commit files are required')
+
+  const files = [
+    ...new Set(
+      options.files.filter((file): file is string => typeof file === 'string').map((file) => file)
+    )
+  ]
+
+  if (files.length === 0 || files.some((file) => !isValidGitPath(file))) {
+    throw new Error('Invalid commit files')
+  }
+
+  return {
+    action,
+    cwd: getDefaultPath(options.cwd),
+    files,
+    message
+  }
+}
+
+const getGitPushOptions = (value: unknown): { cwd?: string | null } => {
+  if (value == null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Git push options')
+
+  const options = value as { cwd?: unknown }
+  return {
+    cwd: getDefaultPath(options.cwd)
   }
 }
 
@@ -120,6 +173,13 @@ const getBranchBase = async (
   }
 
   return null
+}
+
+const getUnpushedCount = async (cwd: string): Promise<number> => {
+  const count = await runGit(cwd, ['rev-list', '--count', '@{upstream}..HEAD'])
+  const parsedCount = Number(count)
+
+  return Number.isFinite(parsedCount) ? parsedCount : 0
 }
 
 const getChangeKind = (status: string): AppGitChangeKind => {
@@ -227,12 +287,14 @@ const getGitChanges = async (
   repositoryRoot: string
   branchName: string | null
   baseRef: string | null
+  unpushedCount: number
   files: AppGitFileChange[]
 }> => {
   const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
   if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
 
   const branchName = await getCurrentBranchName(repositoryRoot)
+  const unpushedCount = await getUnpushedCount(repositoryRoot)
 
   if (source === 'uncommitted') {
     const status = await runGit(repositoryRoot, ['status', '--porcelain=v1', '-z'], true)
@@ -241,6 +303,7 @@ const getGitChanges = async (
       repositoryRoot,
       branchName,
       baseRef: null,
+      unpushedCount,
       files: parsePorcelainChanges(status ?? '')
     }
   }
@@ -251,6 +314,7 @@ const getGitChanges = async (
       repositoryRoot,
       branchName,
       baseRef: null,
+      unpushedCount,
       files: []
     }
   }
@@ -265,8 +329,48 @@ const getGitChanges = async (
     repositoryRoot,
     branchName,
     baseRef: branchBase.ref,
+    unpushedCount,
     files: parseNameStatusChanges(diff ?? '')
   }
+}
+
+const commitGitChanges = async (
+  cwd: string,
+  files: string[],
+  message: string | null | undefined,
+  action: AppGitCommitAction
+): Promise<{ commitHash: string; pushed: boolean }> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  await runGit(repositoryRoot, ['add', '-A', '--', ...files], true)
+
+  if (action === 'amend') {
+    await runGit(repositoryRoot, ['commit', '--amend', '--no-edit', '--only', '--', ...files], true)
+  } else {
+    const commitMessage = message?.trim()
+    if (!commitMessage) throw new Error('Commit message is required')
+
+    await runGit(repositoryRoot, ['commit', '--only', '-m', commitMessage, '--', ...files], true)
+  }
+
+  if (action === 'commitAndPush') {
+    await runGit(repositoryRoot, ['push'], true)
+  }
+
+  const commitHash = await runGit(repositoryRoot, ['rev-parse', 'HEAD'], true)
+  if (!commitHash) throw new Error('Unable to read commit hash')
+
+  return { commitHash, pushed: action === 'commitAndPush' }
+}
+
+const pushGitChanges = async (cwd: string): Promise<{ pushed: boolean }> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  await runGit(repositoryRoot, ['push'], true)
+
+  return { pushed: true }
 }
 
 export const registerAppIpc = (): void => {
@@ -275,6 +379,21 @@ export const registerAppIpc = (): void => {
   ipcMain.handle(appIpcChannels.getGitChanges, async (_event, value: unknown) => {
     const options = getGitChangesOptions(value)
     return getGitChanges(options.cwd ?? process.cwd(), options.source)
+  })
+
+  ipcMain.handle(appIpcChannels.commitGitChanges, async (_event, value: unknown) => {
+    const options = getGitCommitOptions(value)
+    return commitGitChanges(
+      options.cwd ?? process.cwd(),
+      options.files,
+      options.message,
+      options.action ?? 'commit'
+    )
+  })
+
+  ipcMain.handle(appIpcChannels.pushGitChanges, async (_event, value: unknown) => {
+    const options = getGitPushOptions(value)
+    return pushGitChanges(options.cwd ?? process.cwd())
   })
 
   ipcMain.handle(appIpcChannels.selectFolder, async (event, options: unknown) => {

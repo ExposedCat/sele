@@ -8,6 +8,8 @@ import { providerIpcChannels } from '../shared/provider'
 const appApi: AppApi = {
   getDefaultCwd: () => ipcRenderer.invoke(appIpcChannels.getDefaultCwd),
   getGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.getGitChanges, options),
+  commitGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.commitGitChanges, options),
+  pushGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pushGitChanges, options),
   selectFolder: (options) => ipcRenderer.invoke(appIpcChannels.selectFolder, options)
 }
 

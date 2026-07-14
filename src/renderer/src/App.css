@@ -346,8 +346,61 @@
 }
 
 .changes-sidebar__footer {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px var(--changes-sidebar-x) 16px;
   border-top: 1px solid var(--line);
+}
+
+.changes-sidebar__commit-message {
+  display: block;
+  min-width: 0;
+}
+
+.changes-sidebar__commit-message input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  outline: 0;
+  color: var(--lead);
+  background: var(--glass);
+  font: inherit;
+}
+
+.changes-sidebar__commit-message input::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+
+.changes-sidebar__commit-message input:focus {
+  border-color: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
+.changes-sidebar__commit-message input:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.changes-sidebar__commit-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+}
+
+.changes-sidebar__commit-control {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  overflow: hidden;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  background: var(--dark);
 }
 
 .changes-sidebar__commit {
@@ -359,10 +412,10 @@
   justify-content: center;
   gap: 8px;
   padding: 0 14px;
-  border: 1px solid var(--glass-line);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   color: var(--dark-ink);
-  background: var(--dark);
+  background: transparent;
   font: inherit;
   font-weight: 760;
   transition:
@@ -385,6 +438,98 @@
   width: 18px;
   height: 18px;
   flex: none;
+}
+
+.changes-sidebar__commit span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-sidebar__commit-action {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 6px;
+  border: 0;
+  border-left: 1px solid rgb(255 255 255 / 18%);
+  outline: 0;
+  color: var(--dark-ink);
+  background: transparent;
+  font: inherit;
+}
+
+.changes-sidebar__commit-action:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+
+.changes-sidebar__commit-mode {
+  display: grid;
+  width: 44px;
+  min-height: 44px;
+  place-items: center;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  color: var(--lead);
+  background: var(--glass);
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.changes-sidebar__commit-mode:hover,
+.changes-sidebar__commit-mode:focus-visible {
+  color: var(--ink);
+  background: var(--glass-strong);
+}
+
+.changes-sidebar__commit-mode svg {
+  width: 18px;
+  height: 18px;
+}
+
+.changes-sidebar__push {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--glass-line);
+  border-radius: 10px;
+  color: var(--lead);
+  background: var(--glass);
+  font: inherit;
+  font-weight: 720;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    opacity 160ms ease;
+}
+
+.changes-sidebar__push:hover,
+.changes-sidebar__push:focus-visible {
+  color: var(--ink);
+  background: var(--glass-strong);
+}
+
+.changes-sidebar__push:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.changes-sidebar__push svg {
+  width: 18px;
+  height: 18px;
+}
+
+.changes-sidebar__commit-error {
+  margin: 0;
+  color: var(--error);
+  line-height: 1.35;
 }
 
 .chat-panel {

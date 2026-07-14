@@ -12,12 +12,14 @@ import {
   PinOff,
   RefreshCw,
   Search,
+  Sparkles,
   SquarePen,
   Trash2,
+  Upload,
   X
 } from 'lucide-react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { AppGitChangeKind, AppGitChangesResult } from '../../shared/app'
+import type { AppGitChangeKind, AppGitChangesResult, AppGitCommitAction } from '../../shared/app'
 import type {
   ProviderChat,
   ProviderChatDetail,
@@ -52,6 +54,7 @@ type ApprovalResolutionState = {
   error: string | null
 }
 type ChangeSource = 'branch' | 'lastTurn' | 'uncommitted'
+type CommitMode = 'agent' | 'manual'
 type ChangedFile = {
   path: string
   previousPath?: string | null
@@ -81,6 +84,12 @@ const changeKindLabels = {
   delete: 'Deleted',
   rename: 'Renamed'
 } satisfies Record<AppGitChangeKind, string>
+
+const commitActionLabels = {
+  commit: 'Commit',
+  amend: 'Amend',
+  commitAndPush: 'Commit & push'
+} satisfies Record<AppGitCommitAction, string>
 
 const approvalTypeLabels = {
   command: 'Command approval',
@@ -329,8 +338,33 @@ const getGitChangedFiles = (result: AppGitChangesResult | null): ChangedFile[] =
 const formatCommitFile = (file: ChangedFile): string =>
   file.previousPath ? `${file.previousPath} -> ${file.path}` : file.path
 
-const getCommitMessage = (files: ChangedFile[]): string =>
-  `Following repo commit preferences and naming, commit: ${files.map(formatCommitFile).join(', ')}`
+const getCommitFiles = (files: ChangedFile[]): string[] =>
+  Array.from(
+    new Set(
+      files.flatMap((file) =>
+        [file.previousPath, file.path].filter((path): path is string => Boolean(path))
+      )
+    )
+  )
+
+const getCommitMessage = (files: ChangedFile[], action: AppGitCommitAction): string => {
+  const fileList = files.map(formatCommitFile).join(', ')
+
+  if (action === 'amend') return `Amend last commit with these files: ${fileList}`
+  if (action === 'commitAndPush') {
+    return `Following repo commit preferences and naming, commit and push: ${fileList}`
+  }
+
+  return `Following repo commit preferences and naming, commit: ${fileList}`
+}
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (!(error instanceof Error)) return fallback
+
+  const message = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '').trim()
+
+  return message || fallback
+}
 
 const getChangesEmptyMessage = (
   source: ChangeSource,
@@ -393,6 +427,13 @@ export const App: React.FC = () => {
   const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
   const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
   const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
+  const [commitMode, setCommitMode] = useState<CommitMode>('agent')
+  const [commitAction, setCommitAction] = useState<AppGitCommitAction>('commit')
+  const [manualCommitMessage, setManualCommitMessage] = useState('')
+  const [commitState, setCommitState] = useState<SendState>('idle')
+  const [commitError, setCommitError] = useState<string | null>(null)
+  const [pushState, setPushState] = useState<SendState>('idle')
+  const [pushError, setPushError] = useState<string | null>(null)
   const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const chatLoadTriggerRef = useRef<HTMLDivElement>(null)
@@ -599,28 +640,31 @@ export const App: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    if (changeSource === 'lastTurn' || !changesCwd) return
+    if (!changesCwd) return
 
     let active = true
+    const gitChangeSource = changeSource === 'lastTurn' ? 'uncommitted' : changeSource
 
-    queueMicrotask(() => {
-      if (active) setGitChangeLoadState('loading')
-    })
+    if (changeSource !== 'lastTurn') {
+      queueMicrotask(() => {
+        if (active) setGitChangeLoadState('loading')
+      })
+    }
 
     appApi
       .getGitChanges({
         cwd: changesCwd,
-        source: changeSource
+        source: gitChangeSource
       })
       .then((result) => {
         if (!active) return
         setGitChanges(result)
-        setGitChangeLoadState('ready')
+        if (changeSource !== 'lastTurn') setGitChangeLoadState('ready')
       })
       .catch(() => {
         if (!active) return
         setGitChanges(null)
-        setGitChangeLoadState('error')
+        if (changeSource !== 'lastTurn') setGitChangeLoadState('error')
       })
 
     return () => {
@@ -1027,12 +1071,23 @@ export const App: React.FC = () => {
   )
   const changedFiles = changeSource === 'lastTurn' ? lastTurnChangedFiles : gitChangedFiles
   const changesLoadState = changeSource === 'lastTurn' || !changesCwd ? 'ready' : gitChangeLoadState
+  const unpushedCount = gitChanges?.unpushedCount ?? 0
+  const hasUnpushedChanges = unpushedCount > 0
+  const manualCommitMessageValue = manualCommitMessage.trim()
+  const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
+  const manualCommitNeedsMessage = commitMode === 'manual' && commitAction !== 'amend'
   const commitDisabled =
     changedFiles.length === 0 ||
+    commitFiles.length === 0 ||
     changesLoadState !== 'ready' ||
-    sendState === 'sending' ||
-    Boolean(editingMessage) ||
-    (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false)
+    commitState === 'sending' ||
+    pushState === 'sending' ||
+    (commitMode === 'manual'
+      ? !changesCwd || (manualCommitNeedsMessage && !manualCommitMessageValue)
+      : sendState === 'sending' ||
+        Boolean(editingMessage) ||
+        (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false))
+  const pushDisabled = !changesCwd || pushState === 'sending' || commitState === 'sending'
   const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, gitChanges)
   const changesContextLabel =
     changeSource === 'branch' && gitChanges?.branchName
@@ -1075,9 +1130,62 @@ export const App: React.FC = () => {
     </li>
   )
 
-  const handleCommitChangedFiles = (): void => {
+  const handleCommitModeToggle = (): void => {
+    setCommitState('idle')
+    setCommitError(null)
+    setCommitMode((currentMode) => (currentMode === 'manual' ? 'agent' : 'manual'))
+  }
+
+  const handleCommitActionChange = (action: AppGitCommitAction): void => {
+    setCommitAction(action)
+    setCommitState('idle')
+    setCommitError(null)
+  }
+
+  const handleCommitChangedFiles = async (): Promise<void> => {
     if (commitDisabled) return
-    void handleSendMessage(getCommitMessage(changedFiles))
+
+    if (commitMode === 'manual') {
+      if (!changesCwd) return
+
+      setCommitState('sending')
+      setCommitError(null)
+
+      try {
+        await appApi.commitGitChanges({
+          cwd: changesCwd,
+          action: commitAction,
+          files: commitFiles,
+          message: commitAction === 'amend' ? null : manualCommitMessageValue
+        })
+        setManualCommitMessage('')
+        setCommitState('idle')
+        setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
+      } catch (error) {
+        setCommitState('error')
+        setCommitError(getErrorMessage(error, 'Unable to commit these files.'))
+      }
+
+      return
+    }
+
+    await handleSendMessage(getCommitMessage(changedFiles, commitAction))
+  }
+
+  const handlePushChanges = async (): Promise<void> => {
+    if (pushDisabled || !changesCwd) return
+
+    setPushState('sending')
+    setPushError(null)
+
+    try {
+      await appApi.pushGitChanges({ cwd: changesCwd })
+      setPushState('idle')
+      setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
+    } catch (error) {
+      setPushState('error')
+      setPushError(getErrorMessage(error, 'Unable to push changes.'))
+    }
   }
 
   return (
@@ -1417,15 +1525,94 @@ export const App: React.FC = () => {
               )}
             </div>
             <footer className="changes-sidebar__footer">
-              <button
-                className="changes-sidebar__commit"
-                type="button"
-                disabled={commitDisabled}
-                onClick={handleCommitChangedFiles}
-              >
-                <GitCommitHorizontal aria-hidden="true" />
-                <span>Commit</span>
-              </button>
+              {commitMode === 'manual' && (
+                <label className="changes-sidebar__commit-message">
+                  <span className="sr-only">Commit message</span>
+                  <input
+                    type="text"
+                    disabled={commitAction === 'amend'}
+                    value={manualCommitMessage}
+                    placeholder={
+                      commitAction === 'amend' ? 'Uses last commit message' : 'Commit message'
+                    }
+                    onChange={(event) => {
+                      setCommitState('idle')
+                      setCommitError(null)
+                      setManualCommitMessage(event.target.value)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !commitDisabled) {
+                        void handleCommitChangedFiles()
+                      }
+                    }}
+                  />
+                </label>
+              )}
+              <div className="changes-sidebar__commit-row">
+                <div className="changes-sidebar__commit-control">
+                  <button
+                    className="changes-sidebar__commit"
+                    type="button"
+                    disabled={commitDisabled}
+                    onClick={() => void handleCommitChangedFiles()}
+                  >
+                    <GitCommitHorizontal aria-hidden="true" />
+                    <span>{commitActionLabels[commitAction]}</span>
+                  </button>
+                  <label className="sr-only" htmlFor="changes-commit-action">
+                    Commit action
+                  </label>
+                  <select
+                    className="changes-sidebar__commit-action"
+                    id="changes-commit-action"
+                    value={commitAction}
+                    onChange={(event) =>
+                      handleCommitActionChange(event.target.value as AppGitCommitAction)
+                    }
+                  >
+                    <option value="commit">Commit</option>
+                    <option value="amend">Amend</option>
+                    <option value="commitAndPush">Commit &amp; push</option>
+                  </select>
+                </div>
+                <button
+                  className="changes-sidebar__commit-mode"
+                  type="button"
+                  aria-label={
+                    commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'
+                  }
+                  title={commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'}
+                  onClick={handleCommitModeToggle}
+                >
+                  {commitMode === 'manual' ? (
+                    <Sparkles aria-hidden="true" />
+                  ) : (
+                    <Pencil aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+              {hasUnpushedChanges && (
+                <button
+                  className="changes-sidebar__push"
+                  type="button"
+                  title={`${unpushedCount} unpushed commit${unpushedCount === 1 ? '' : 's'}`}
+                  disabled={pushDisabled}
+                  onClick={() => void handlePushChanges()}
+                >
+                  <Upload aria-hidden="true" />
+                  <span>{pushState === 'sending' ? 'Pushing' : 'Push'}</span>
+                </button>
+              )}
+              {commitState === 'error' && (
+                <p className="changes-sidebar__commit-error" role="status">
+                  {commitError ?? 'Unable to commit these files.'}
+                </p>
+              )}
+              {pushState === 'error' && (
+                <p className="changes-sidebar__commit-error" role="status">
+                  {pushError ?? 'Unable to push changes.'}
+                </p>
+              )}
             </footer>
           </aside>
         </Panel>

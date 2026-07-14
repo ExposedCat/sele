@@ -6,6 +6,8 @@ export type AppGitChangeSource = 'branch' | 'uncommitted'
 
 export type AppGitChangeKind = 'edit' | 'create' | 'delete' | 'rename'
 
+export type AppGitCommitAction = 'commit' | 'amend' | 'commitAndPush'
+
 export type AppGitFileChange = {
   path: string
   previousPath?: string | null
@@ -22,17 +24,42 @@ export type AppGitChangesResult = {
   repositoryRoot: string
   branchName: string | null
   baseRef: string | null
+  unpushedCount: number
   files: AppGitFileChange[]
+}
+
+export type AppGitCommitOptions = {
+  cwd?: string | null
+  action?: AppGitCommitAction
+  files: string[]
+  message?: string | null
+}
+
+export type AppGitCommitResult = {
+  commitHash: string
+  pushed: boolean
+}
+
+export type AppGitPushOptions = {
+  cwd?: string | null
+}
+
+export type AppGitPushResult = {
+  pushed: boolean
 }
 
 export type AppApi = {
   getDefaultCwd: () => Promise<string>
   getGitChanges: (options: AppGitChangesOptions) => Promise<AppGitChangesResult>
+  commitGitChanges: (options: AppGitCommitOptions) => Promise<AppGitCommitResult>
+  pushGitChanges: (options?: AppGitPushOptions) => Promise<AppGitPushResult>
   selectFolder: (options?: FolderSelectionOptions) => Promise<string | null>
 }
 
 export const appIpcChannels = {
   getDefaultCwd: 'app:get-default-cwd',
   getGitChanges: 'app:get-git-changes',
+  commitGitChanges: 'app:commit-git-changes',
+  pushGitChanges: 'app:push-git-changes',
   selectFolder: 'app:select-folder'
 } as const
