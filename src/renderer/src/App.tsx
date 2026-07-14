@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Check,
@@ -15,7 +15,6 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { AppGitChangeKind, AppGitChangesResult, AppGitCommitAction } from '../../shared/app'
 import type {
   ProviderChat,
@@ -61,8 +60,20 @@ type ChangedFile = {
   status?: string
   diff?: string
 }
+type ChatPaneWidths = {
+  sidebar: number
+  changes: number
+}
+type ChatResizeEdge = 'left' | 'right'
 
 const chatPageSize = 20
+const chatSidebarDefaultWidth = 280
+const changesSidebarDefaultWidth = 240
+const chatSidebarMinWidth = 220
+const changesSidebarMinWidth = 220
+const chatBlockMinWidth = 320
+const chatResizeHandleWidth = 9
+const chatResizeHandleCount = 2
 const pinnedGroupKey = 'pinned'
 const unknownCwdGroupKey = 'cwd:unknown'
 const doneGroupKey = 'done'
@@ -97,6 +108,9 @@ const getDropdownOptions = <TValue extends string>(
     value: value as TValue,
     label: label as string
   }))
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), Math.max(min, max))
 
 const providerOptions = getDropdownOptions(providerLabels)
 const changeSourceOptions = getDropdownOptions(changeSourceLabels)
@@ -437,6 +451,11 @@ export const App: React.FC = () => {
   const [commitError, setCommitError] = useState<string | null>(null)
   const [pushState, setPushState] = useState<SendState>('idle')
   const [pushError, setPushError] = useState<string | null>(null)
+  const [paneWidths, setPaneWidths] = useState<ChatPaneWidths>({
+    sidebar: chatSidebarDefaultWidth,
+    changes: changesSidebarDefaultWidth
+  })
+  const panelsRef = useRef<HTMLDivElement>(null)
   const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const chatLoadTriggerRef = useRef<HTMLDivElement>(null)
@@ -444,6 +463,115 @@ export const App: React.FC = () => {
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
+
+  const clampPaneWidthsToAvailable = useCallback((widths: ChatPaneWidths): ChatPaneWidths => {
+    const totalWidth = panelsRef.current?.getBoundingClientRect().width ?? 0
+    if (!totalWidth) return widths
+
+    const handleWidth = chatResizeHandleWidth * chatResizeHandleCount
+    const availableForSidebars = Math.max(0, totalWidth - handleWidth - chatBlockMinWidth)
+    const minimumSidebarTotal = chatSidebarMinWidth + changesSidebarMinWidth
+
+    if (availableForSidebars <= minimumSidebarTotal) {
+      return {
+        sidebar: chatSidebarMinWidth,
+        changes: changesSidebarMinWidth
+      }
+    }
+
+    let sidebar = Math.max(widths.sidebar, chatSidebarMinWidth)
+    let changes = Math.max(widths.changes, changesSidebarMinWidth)
+    const overflow = sidebar + changes - availableForSidebars
+
+    if (overflow > 0) {
+      const sidebarShrinkCapacity = sidebar - chatSidebarMinWidth
+      const changesShrinkCapacity = changes - changesSidebarMinWidth
+      const shrinkCapacity = sidebarShrinkCapacity + changesShrinkCapacity
+
+      if (shrinkCapacity > 0) {
+        sidebar -= overflow * (sidebarShrinkCapacity / shrinkCapacity)
+        changes -= overflow * (changesShrinkCapacity / shrinkCapacity)
+      }
+    }
+
+    return {
+      sidebar: Math.round(sidebar),
+      changes: Math.round(changes)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handleResize = (): void => {
+      setPaneWidths((currentWidths) => clampPaneWidthsToAvailable(currentWidths))
+    }
+
+    handleResize()
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [clampPaneWidthsToAvailable])
+
+  const handleStartChatResize = useCallback(
+    (edge: ChatResizeEdge, event: React.PointerEvent<HTMLDivElement>): void => {
+      if (event.button !== 0) return
+
+      const panels = panelsRef.current
+      if (!panels) return
+
+      event.preventDefault()
+      event.currentTarget.blur()
+
+      const startX = event.clientX
+      const startWidths = paneWidths
+      const totalWidth = panels.getBoundingClientRect().width
+      const handleWidth = chatResizeHandleWidth * chatResizeHandleCount
+      const previousCursor = document.body.style.cursor
+      const previousUserSelect = document.body.style.userSelect
+
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+
+      const handlePointerMove = (moveEvent: PointerEvent): void => {
+        const deltaX = moveEvent.clientX - startX
+
+        setPaneWidths(() => {
+          if (edge === 'left') {
+            const maxSidebarWidth =
+              totalWidth - startWidths.changes - handleWidth - chatBlockMinWidth
+
+            return {
+              sidebar: Math.round(
+                clamp(startWidths.sidebar + deltaX, chatSidebarMinWidth, maxSidebarWidth)
+              ),
+              changes: startWidths.changes
+            }
+          }
+
+          const maxChangesWidth = totalWidth - startWidths.sidebar - handleWidth - chatBlockMinWidth
+
+          return {
+            sidebar: startWidths.sidebar,
+            changes: Math.round(
+              clamp(startWidths.changes - deltaX, changesSidebarMinWidth, maxChangesWidth)
+            )
+          }
+        })
+      }
+
+      const handlePointerUp = (): void => {
+        document.body.style.cursor = previousCursor
+        document.body.style.userSelect = previousUserSelect
+        window.removeEventListener('pointermove', handlePointerMove)
+        window.removeEventListener('pointerup', handlePointerUp)
+      }
+
+      window.addEventListener('pointermove', handlePointerMove)
+      window.addEventListener('pointerup', handlePointerUp)
+    },
+    [paneWidths]
+  )
 
   useEffect(() => {
     let active = true
@@ -1060,6 +1188,10 @@ export const App: React.FC = () => {
       : changesCwd
         ? getFolderName(changesCwd)
         : 'No folder'
+  const panelsStyle = {
+    '--chat-sidebar-width': `${paneWidths.sidebar}px`,
+    '--chat-changes-width': `${paneWidths.changes}px`
+  } as CSSProperties
 
   const renderChangedFile = (file: ChangedFile): React.ReactElement => (
     <li className={`changes-sidebar__file changes-sidebar__file--${file.kind}`} key={file.path}>
@@ -1147,15 +1279,8 @@ export const App: React.FC = () => {
 
   return (
     <main className={`chat${chatPanelOpen ? ' chat--has-selection' : ' chat--no-selection'}`}>
-      <Group className="chat__panels" orientation="horizontal">
-        <Panel
-          className="chat__sidebar-panel"
-          defaultSize={320}
-          minSize={280}
-          maxSize={560}
-          groupResizeBehavior="preserve-pixel-size"
-          id="sidebar"
-        >
+      <div className="chat__panels" ref={panelsRef} style={panelsStyle}>
+        <div className="chat__sidebar-panel" data-panel="true" id="sidebar">
           <aside className="chat-sidebar" aria-label="Recent conversations">
             <header
               className={`chat-home__header${searchOpen ? ' chat-home__header--searching' : ''}`}
@@ -1240,18 +1365,21 @@ export const App: React.FC = () => {
               )}
             </div>
           </aside>
-        </Panel>
+        </div>
 
-        <Separator
+        <div
           className="chat__resize-handle"
-          elementRef={resizeHandleRef}
+          ref={resizeHandleRef}
           id="chat-sidebar-resize"
+          role="separator"
+          aria-label="Resize chat from left"
+          aria-orientation="vertical"
           onFocus={(event) => event.currentTarget.blur()}
-          onPointerDown={(event) => event.currentTarget.blur()}
+          onPointerDown={(event) => handleStartChatResize('left', event)}
           onPointerUp={(event) => event.currentTarget.blur()}
         />
 
-        <Panel className="chat__detail-panel" minSize={0} id="detail">
+        <div className="chat__detail-panel" data-panel="true" id="detail">
           <section
             className={`chat-panel${selectedChat ? ' chat-panel--selected' : ' chat-panel--empty'}${newChatOpen ? ' chat-panel--new' : ''}`}
             aria-label={selectedChat?.title ?? 'No chat selected'}
@@ -1390,25 +1518,21 @@ export const App: React.FC = () => {
               />
             </div>
           </section>
-        </Panel>
+        </div>
 
-        <Separator
+        <div
           className="chat__resize-handle chat__resize-handle--changes"
-          elementRef={changesResizeHandleRef}
+          ref={changesResizeHandleRef}
           id="chat-changes-resize"
+          role="separator"
+          aria-label="Resize chat from right"
+          aria-orientation="vertical"
           onFocus={(event) => event.currentTarget.blur()}
-          onPointerDown={(event) => event.currentTarget.blur()}
+          onPointerDown={(event) => handleStartChatResize('right', event)}
           onPointerUp={(event) => event.currentTarget.blur()}
         />
 
-        <Panel
-          className="chat__changes-panel"
-          defaultSize={300}
-          minSize={240}
-          maxSize={420}
-          groupResizeBehavior="preserve-pixel-size"
-          id="changes"
-        >
+        <div className="chat__changes-panel" data-panel="true" id="changes">
           <aside className="changes-sidebar" aria-label="Changed files">
             <header className="changes-sidebar__header">
               <div className="changes-sidebar__title-row">
@@ -1546,8 +1670,8 @@ export const App: React.FC = () => {
               )}
             </footer>
           </aside>
-        </Panel>
-      </Group>
+        </div>
+      </div>
     </main>
   )
 }
