@@ -114,7 +114,6 @@ const clamp = (value: number, min: number, max: number): number =>
 
 const providerOptions = getDropdownOptions(providerLabels)
 const changeSourceOptions = getDropdownOptions(changeSourceLabels)
-const commitActionOptions = getDropdownOptions(commitActionLabels)
 
 const approvalTypeLabels = {
   command: 'Command approval',
@@ -445,7 +444,6 @@ export const App: React.FC = () => {
   const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
   const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
   const [commitMode, setCommitMode] = useState<CommitMode>('agent')
-  const [commitAction, setCommitAction] = useState<AppGitCommitAction>('commit')
   const [manualCommitMessage, setManualCommitMessage] = useState('')
   const [commitState, setCommitState] = useState<SendState>('idle')
   const [commitError, setCommitError] = useState<string | null>(null)
@@ -1166,18 +1164,20 @@ export const App: React.FC = () => {
   const hasUnpushedChanges = unpushedCount > 0
   const manualCommitMessageValue = manualCommitMessage.trim()
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
-  const manualCommitNeedsMessage = commitMode === 'manual' && commitAction !== 'amend'
-  const commitDisabled =
+  const commitBaseDisabled =
     changedFiles.length === 0 ||
     commitFiles.length === 0 ||
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
-    pushState === 'sending' ||
+    pushState === 'sending'
+  const getCommitActionDisabled = (action: AppGitCommitAction): boolean =>
+    commitBaseDisabled ||
     (commitMode === 'manual'
-      ? !changesCwd || (manualCommitNeedsMessage && !manualCommitMessageValue)
+      ? !changesCwd || (action !== 'amend' && !manualCommitMessageValue)
       : sendState === 'sending' ||
         Boolean(editingMessage) ||
         (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false))
+  const commitDisabled = getCommitActionDisabled('commit')
   const pushDisabled = !changesCwd || pushState === 'sending' || commitState === 'sending'
   const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, gitChanges)
   const changesContextLabel =
@@ -1225,14 +1225,8 @@ export const App: React.FC = () => {
     setCommitMode((currentMode) => (currentMode === 'manual' ? 'agent' : 'manual'))
   }
 
-  const handleCommitActionChange = (action: AppGitCommitAction): void => {
-    setCommitAction(action)
-    setCommitState('idle')
-    setCommitError(null)
-  }
-
-  const handleCommitChangedFiles = async (): Promise<void> => {
-    if (commitDisabled) return
+  const handleCommitChangedFiles = async (action: AppGitCommitAction = 'commit'): Promise<void> => {
+    if (getCommitActionDisabled(action)) return
 
     if (commitMode === 'manual') {
       if (!changesCwd) return
@@ -1243,9 +1237,9 @@ export const App: React.FC = () => {
       try {
         await appApi.commitGitChanges({
           cwd: changesCwd,
-          action: commitAction,
+          action,
           files: commitFiles,
-          message: commitAction === 'amend' ? null : manualCommitMessageValue
+          message: action === 'amend' ? null : manualCommitMessageValue
         })
         setManualCommitMessage('')
         setCommitState('idle')
@@ -1258,7 +1252,7 @@ export const App: React.FC = () => {
       return
     }
 
-    await handleSendMessage(getCommitMessage(changedFiles, commitAction))
+    await handleSendMessage(getCommitMessage(changedFiles, action))
   }
 
   const handlePushChanges = async (): Promise<void> => {
@@ -1587,11 +1581,8 @@ export const App: React.FC = () => {
                   <span className="sr-only">Commit message</span>
                   <input
                     type="text"
-                    disabled={commitAction === 'amend'}
                     value={manualCommitMessage}
-                    placeholder={
-                      commitAction === 'amend' ? 'Uses last commit message' : 'Commit message'
-                    }
+                    placeholder="Commit message"
                     onChange={(event) => {
                       setCommitState('idle')
                       setCommitError(null)
@@ -1606,31 +1597,31 @@ export const App: React.FC = () => {
                 </label>
               )}
               <div className="changes-sidebar__commit-row">
-                <div className="changes-sidebar__commit-control">
-                  <Button
-                    disabled={commitDisabled}
-                    callback={() => void handleCommitChangedFiles()}
-                    icon={<GitCommitHorizontal aria-hidden="true" />}
-                    label={<span>{commitActionLabels[commitAction]}</span>}
-                    theme="primary"
-                    fill
-                  />
-                  <label className="sr-only" htmlFor="changes-commit-action">
-                    Commit action
-                  </label>
-                  <Dropdown
-                    id="changes-commit-action"
-                    appearance="splitAction"
-                    fill
-                    menuAlign="end"
-                    options={commitActionOptions}
-                    placement="top"
-                    title={commitActionLabels[commitAction]}
-                    value={commitAction}
-                    valueDisplay="icon"
-                    onChange={handleCommitActionChange}
-                  />
-                </div>
+                <Button
+                  disabled={commitDisabled}
+                  callback={() => void handleCommitChangedFiles('commit')}
+                  dropdownActions={[
+                    {
+                      id: 'amend',
+                      label: commitActionLabels.amend,
+                      disabled: getCommitActionDisabled('amend'),
+                      callback: () => void handleCommitChangedFiles('amend')
+                    },
+                    {
+                      id: 'commitAndPush',
+                      label: commitActionLabels.commitAndPush,
+                      disabled: getCommitActionDisabled('commitAndPush'),
+                      callback: () => void handleCommitChangedFiles('commitAndPush')
+                    }
+                  ]}
+                  dropdownLabel="Commit actions"
+                  dropdownMenuAlign="end"
+                  dropdownPlacement="top"
+                  icon={<GitCommitHorizontal aria-hidden="true" />}
+                  label={<span>{commitActionLabels.commit}</span>}
+                  theme="primary"
+                  fill
+                />
                 <Button
                   aria-label={
                     commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'

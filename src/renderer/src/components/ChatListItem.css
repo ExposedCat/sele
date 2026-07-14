@@ -165,14 +165,14 @@
 
 .chat-list-item__actions .ui-button {
   border-color: rgb(27 27 24 / 11%);
-  background: var(--glass);
-  box-shadow: 0 1px 4px rgb(27 27 24 / 9%);
+  background: var(--control-surface);
+  box-shadow: var(--control-shadow);
 }
 
 .chat-list-item__actions .ui-button:not(:disabled):hover {
   border-color: rgb(27 27 24 / 17%);
-  background: #ffffff;
-  box-shadow: 0 2px 8px rgb(27 27 24 / 13%);
+  background: var(--control-surface-hover);
+  box-shadow: var(--control-shadow-hover);
 }
 
 @media (max-width: 600px) {

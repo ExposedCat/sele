@@ -249,14 +249,14 @@
 .changes-sidebar__commit-message input {
   width: 100%;
   min-width: 0;
-  min-height: 42px;
+  min-height: var(--control-height);
   padding: 0 12px;
-  border: 1px solid var(--glass-line);
-  border-radius: 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
   outline: 0;
   color: var(--lead);
-  background: var(--glass);
-  box-shadow: 0 1px 1px rgb(27 27 24 / 4%);
+  background: var(--control-surface);
+  box-shadow: var(--control-shadow);
   font: inherit;
 }
 
@@ -266,7 +266,11 @@
 }
 
 .changes-sidebar__commit-message input:focus {
-  border-color: color-mix(in srgb, var(--muted) 40%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: #ffffff;
+  box-shadow:
+    0 0 0 3px var(--focus-ring),
+    var(--control-shadow);
 }
 
 .changes-sidebar__commit-message input:disabled {
@@ -279,32 +283,6 @@
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-}
-
-.changes-sidebar__commit-control {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 58px;
-  border: 1px solid color-mix(in srgb, var(--accent) 78%, black);
-  border-radius: 10px;
-  background: var(--accent);
-  box-shadow: 0 1px 2px rgb(27 27 24 / 12%);
-  overflow: hidden;
-}
-
-.changes-sidebar__commit-control .ui-button {
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.changes-sidebar__commit-control .ui-dropdown--split-action .ui-dropdown__trigger {
-  border-left-color: rgb(255 255 255 / 24%);
-  color: var(--accent-ink);
-}
-
-.changes-sidebar__commit-control .ui-dropdown--split-action .ui-dropdown__trigger:hover {
-  background: var(--accent-hover);
 }
 
 .changes-sidebar__commit-error {
@@ -501,21 +479,21 @@
 .chat-home__search-field {
   position: relative;
   min-width: 0;
-  height: 44px;
+  height: var(--control-height);
   flex: 1;
 }
 
 .chat-home__search-field input {
   width: 100%;
   min-width: 0;
-  height: 44px;
+  height: var(--control-height);
   padding: 0 14px;
-  border: 1px solid var(--glass-line);
-  border-radius: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
   outline: 0;
   color: var(--ink);
-  background: var(--glass);
-  box-shadow: 0 1px 1px rgb(27 27 24 / 4%);
+  background: var(--control-surface);
+  box-shadow: var(--control-shadow);
   appearance: none;
 }
 
@@ -529,7 +507,11 @@
 }
 
 .chat-home__search-field input:focus {
-  border-color: color-mix(in srgb, var(--muted) 40%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: #ffffff;
+  box-shadow:
+    0 0 0 3px var(--focus-ring),
+    var(--control-shadow);
 }
 
 .chat-detail__header {

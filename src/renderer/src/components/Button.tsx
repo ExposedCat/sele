@@ -1,8 +1,19 @@
-import type { ButtonHTMLAttributes, FC, ReactNode } from 'react'
+import { ChevronDown } from 'lucide-react'
+import type { ButtonHTMLAttributes, CSSProperties, FC, ReactNode } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import './Button.css'
 
 export type ButtonTheme = 'primary' | 'secondary' | 'transparent'
 export type ButtonSize = 'normal' | 'small'
+export type ButtonDropdownAction = {
+  id: string
+  label: ReactNode
+  callback: () => Promise<void> | void
+  disabled?: boolean
+  icon?: ReactNode
+  title?: string
+}
 
 type NativeButtonProps = Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
@@ -16,6 +27,10 @@ type ButtonProps = NativeButtonProps & {
   theme?: ButtonTheme
   size?: ButtonSize
   fill?: boolean
+  dropdownActions?: readonly ButtonDropdownAction[]
+  dropdownLabel?: string
+  dropdownMenuAlign?: 'start' | 'end'
+  dropdownPlacement?: 'bottom' | 'top'
 }
 
 const getButtonClassName = (
@@ -23,20 +38,57 @@ const getButtonClassName = (
   size: ButtonSize,
   icon: ReactNode,
   label: ReactNode,
-  fill: boolean
+  fill: boolean,
+  splitPart?: 'main' | 'toggle'
 ): string =>
   [
     'ui-button',
     `ui-button--${theme}`,
     `ui-button--${size}`,
     icon && !label ? 'ui-button--icon-only' : null,
-    fill ? 'ui-button--fill' : null
+    fill ? 'ui-button--fill' : null,
+    splitPart ? `ui-button--split-${splitPart}` : null
   ]
     .filter(Boolean)
     .join(' ')
 
+const getButtonGroupClassName = (
+  theme: ButtonTheme,
+  size: ButtonSize,
+  fill: boolean,
+  open: boolean
+): string =>
+  [
+    'ui-button-group',
+    `ui-button-group--${theme}`,
+    `ui-button-group--${size}`,
+    fill ? 'ui-button-group--fill' : null,
+    open ? 'ui-button-group--open' : null
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+const getMenuRootClassName = (
+  theme: ButtonTheme,
+  size: ButtonSize,
+  placement: 'bottom' | 'top',
+  menuAlign: 'start' | 'end'
+): string =>
+  [
+    'ui-button-menu-root',
+    `ui-button-menu-root--${theme}`,
+    `ui-button-menu-root--${size}`,
+    `ui-button-menu-root--${placement}`,
+    `ui-button-menu-root--${menuAlign}`
+  ].join(' ')
+
 export const Button: FC<ButtonProps> = ({
   callback,
+  disabled = false,
+  dropdownActions,
+  dropdownLabel = 'More actions',
+  dropdownMenuAlign = 'start',
+  dropdownPlacement = 'bottom',
   icon = null,
   label = null,
   theme = 'secondary',
@@ -44,14 +96,218 @@ export const Button: FC<ButtonProps> = ({
   fill = false,
   ...buttonProps
 }) => {
+  const reactId = useId().replace(/:/g, '')
+  const buttonId = buttonProps.id ?? `button-${reactId}`
+  const menuId = `${buttonId}-menu`
+  const rootRef = useRef<HTMLSpanElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null)
+  const enabledDropdownActions = dropdownActions?.filter((action) => !action.disabled) ?? []
+  const hasDropdownActions = Boolean(dropdownActions?.length)
+  const dropdownDisabled = enabledDropdownActions.length === 0
+
+  useEffect(() => {
+    if (!open) return
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node
+
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false)
+        setMenuStyle(null)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+
+    const closeMenu = (): void => {
+      setOpen(false)
+      setMenuStyle(null)
+    }
+
+    window.addEventListener('resize', closeMenu)
+    window.addEventListener('scroll', closeMenu, true)
+
+    return () => {
+      window.removeEventListener('resize', closeMenu)
+      window.removeEventListener('scroll', closeMenu, true)
+    }
+  }, [open])
+
+  const getMenuStyle = (buttonRect: DOMRect): CSSProperties => {
+    const viewportInset = 12
+    const menuOffset = 6
+    const maxMenuWidth = 280
+    const startLeft = Math.min(
+      Math.max(viewportInset, buttonRect.left),
+      Math.max(viewportInset, window.innerWidth - maxMenuWidth - viewportInset)
+    )
+    const nextMenuStyle: CSSProperties = {
+      minWidth: buttonRect.width
+    }
+
+    if (dropdownPlacement === 'top') {
+      nextMenuStyle.bottom = window.innerHeight - buttonRect.top + menuOffset
+    } else {
+      nextMenuStyle.top = buttonRect.bottom + menuOffset
+    }
+
+    if (dropdownMenuAlign === 'end') {
+      nextMenuStyle.right = Math.max(viewportInset, window.innerWidth - buttonRect.right)
+    } else {
+      nextMenuStyle.left = startLeft
+    }
+
+    return nextMenuStyle
+  }
+
+  const openMenu = (): void => {
+    if (dropdownDisabled || typeof window === 'undefined') return
+
+    const buttonRect = rootRef.current?.getBoundingClientRect()
+    if (!buttonRect) return
+
+    setMenuStyle(getMenuStyle(buttonRect))
+    setOpen(true)
+  }
+
+  const closeMenu = (): void => {
+    setOpen(false)
+    setMenuStyle(null)
+  }
+
   const handleClick = (): void => {
     void callback()
+  }
+
+  const handleToggleClick = (): void => {
+    if (open) {
+      closeMenu()
+      return
+    }
+
+    openMenu()
+  }
+
+  const handleToggleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      openMenu()
+    }
+
+    if (event.key === 'Escape' && open) {
+      event.preventDefault()
+      closeMenu()
+    }
+  }
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMenu()
+      toggleRef.current?.focus({ preventScroll: true })
+    }
+  }
+
+  const handleActionClick = (action: ButtonDropdownAction): void => {
+    if (action.disabled) return
+
+    closeMenu()
+    void action.callback()
+  }
+
+  if (hasDropdownActions) {
+    const menu =
+      open && dropdownActions ? (
+        <div
+          ref={menuRef}
+          className={getMenuRootClassName(theme, size, dropdownPlacement, dropdownMenuAlign)}
+          style={menuStyle ?? undefined}
+        >
+          <div
+            className="ui-button-menu"
+            id={menuId}
+            role="menu"
+            aria-labelledby={buttonId}
+            onKeyDown={handleMenuKeyDown}
+          >
+            {dropdownActions.map((action) => (
+              <button
+                className="ui-button-menu__item"
+                disabled={action.disabled}
+                key={action.id}
+                role="menuitem"
+                title={action.title}
+                type="button"
+                onClick={() => handleActionClick(action)}
+              >
+                {action.icon && <span className="ui-button-menu__icon">{action.icon}</span>}
+                <span className="ui-button-menu__label">{action.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null
+
+    return (
+      <span
+        className={getButtonGroupClassName(theme, size, fill, open)}
+        ref={rootRef}
+        data-button-menu-root="true"
+      >
+        <button
+          {...buttonProps}
+          aria-haspopup={undefined}
+          className={getButtonClassName(theme, size, icon, label, false, 'main')}
+          disabled={disabled}
+          id={buttonId}
+          type="button"
+          onClick={handleClick}
+        >
+          {icon}
+          {label && <span className="ui-button__label">{label}</span>}
+        </button>
+        <button
+          aria-controls={open ? menuId : undefined}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label={dropdownLabel}
+          className={getButtonClassName(
+            theme,
+            size,
+            <ChevronDown aria-hidden="true" />,
+            null,
+            false,
+            'toggle'
+          )}
+          disabled={dropdownDisabled}
+          ref={toggleRef}
+          title={dropdownLabel}
+          type="button"
+          onClick={handleToggleClick}
+          onKeyDown={handleToggleKeyDown}
+        >
+          <ChevronDown aria-hidden="true" />
+        </button>
+        {menu && createPortal(menu, document.body)}
+      </span>
+    )
   }
 
   return (
     <button
       {...buttonProps}
       className={getButtonClassName(theme, size, icon, label, fill)}
+      disabled={disabled}
+      id={buttonProps.id}
       type="button"
       onClick={handleClick}
     >
