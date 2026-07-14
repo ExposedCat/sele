@@ -163,6 +163,18 @@
   transform: translateY(0);
 }
 
+.chat-list-item__actions .ui-button {
+  border-color: rgb(27 27 24 / 11%);
+  background: var(--glass);
+  box-shadow: 0 1px 4px rgb(27 27 24 / 9%);
+}
+
+.chat-list-item__actions .ui-button:not(:disabled):hover {
+  border-color: rgb(27 27 24 / 17%);
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgb(27 27 24 / 13%);
+}
+
 @media (max-width: 600px) {
   .chat-list-item {
     border-radius: 16px;
@@ -175,5 +187,4 @@
   .chat-list-item__header {
     align-items: center;
   }
-
 }

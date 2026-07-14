@@ -8,6 +8,7 @@
   color: var(--lead);
   cursor: pointer;
   background: var(--control-bg);
+  box-shadow: 0 1px 1px rgb(27 27 24 / 4%);
   font: inherit;
   text-align: center;
   -webkit-tap-highlight-color: transparent;
@@ -15,6 +16,7 @@
     color 160ms ease,
     background 160ms ease,
     border-color 160ms ease,
+    box-shadow 160ms ease,
     opacity 160ms ease,
     transform 160ms ease;
 }
@@ -70,13 +72,17 @@
 }
 
 :where(.ui-button--primary) {
-  color: var(--lead);
-  background: var(--control-bg);
+  border-color: color-mix(in srgb, var(--accent) 78%, black);
+  color: var(--accent-ink);
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgb(27 27 24 / 12%);
   font-weight: 760;
 }
 
 :where(.ui-button--primary:not(:disabled):hover) {
-  background: var(--control-hover-bg);
+  border-color: color-mix(in srgb, var(--accent-hover) 84%, black);
+  background: var(--accent-hover);
+  box-shadow: 0 2px 5px rgb(27 27 24 / 14%);
 }
 
 :where(.ui-button--secondary) {
@@ -88,17 +94,21 @@
 :where(.ui-button--secondary:not(:disabled):hover) {
   color: var(--ink);
   background: var(--control-hover-bg);
+  box-shadow: 0 1px 3px rgb(27 27 24 / 7%);
 }
 
 :where(.ui-button--transparent) {
+  border-color: transparent;
   color: var(--lead);
-  background: var(--control-bg);
+  background: transparent;
+  box-shadow: none;
   font-weight: 700;
 }
 
 :where(.ui-button--transparent:not(:disabled):hover) {
   color: var(--ink);
   background: var(--control-hover-bg);
+  box-shadow: none;
 }
 
 .ui-button:disabled {
@@ -108,6 +118,8 @@
 :where(.ui-button:disabled) {
   color: var(--control-disabled-color);
   background: var(--control-bg);
+  border-color: var(--control-border);
+  box-shadow: none;
   opacity: 1;
 }
 
