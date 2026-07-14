@@ -17,13 +17,11 @@
   align-self: flex-end;
   max-width: 82%;
   padding: 13px 16px;
-  border: 1px solid rgb(122 86 56 / 10%);
+  border: 1px solid var(--message-border);
   border-radius: 17px 17px 6px;
   color: var(--lead);
   background: var(--assistant-message);
-  box-shadow:
-    0 8px 24px rgb(27 27 24 / 6%),
-    inset 0 1px 0 rgb(255 255 255 / 62%);
+  box-shadow: var(--message-shadow);
   -webkit-backdrop-filter: blur(12px) saturate(1.25);
   backdrop-filter: blur(12px) saturate(1.25);
 }
@@ -219,9 +217,10 @@
 .chat-detail__message code,
 .chat-detail__working-message code {
   padding: 0.08em 0.28em;
-  border: 1px solid var(--line);
+  border: 1px solid var(--inline-code-border);
   border-radius: 6px;
-  background: var(--accent-soft);
+  color: var(--inline-code-color);
+  background: var(--inline-code-bg);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 
@@ -235,7 +234,7 @@
   border-radius: 10px;
   background: var(--activity-bg);
   color: var(--lead);
-  box-shadow: 0 1px 1px rgb(27 27 24 / 4%);
+  box-shadow: var(--subtle-shadow);
 }
 
 .chat-detail__message pre code,
@@ -274,7 +273,7 @@
   border: 1px solid var(--glass-line);
   border-radius: 12px;
   background: var(--activity-bg);
-  box-shadow: 0 1px 1px rgb(27 27 24 / 4%);
+  box-shadow: var(--subtle-shadow);
   -webkit-backdrop-filter: blur(12px) saturate(1.2);
   backdrop-filter: blur(12px) saturate(1.2);
 }
