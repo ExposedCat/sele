@@ -2,14 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Check,
-  CheckCheck,
-  ChevronRight,
   FilePlus2,
   GitBranch,
   GitCommitHorizontal,
   History,
   Pencil,
-  PinOff,
   RefreshCw,
   Search,
   Sparkles,
@@ -35,7 +32,9 @@ import type {
   ProviderReasoningEffort
 } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
-import { ChatList } from './components/ChatList'
+import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
+import { Button } from './components/Button'
+import { Dropdown, type DropdownOption } from './components/Dropdown'
 import { MessageBox } from './components/MessageBox'
 import { appApi } from './appApi'
 import { providerApi } from './providerApi'
@@ -90,6 +89,18 @@ const commitActionLabels = {
   amend: 'Amend',
   commitAndPush: 'Commit & push'
 } satisfies Record<AppGitCommitAction, string>
+
+const getDropdownOptions = <TValue extends string>(
+  labels: Record<TValue, string>
+): DropdownOption<TValue>[] =>
+  Object.entries(labels).map(([value, label]) => ({
+    value: value as TValue,
+    label: label as string
+  }))
+
+const providerOptions = getDropdownOptions(providerLabels)
+const changeSourceOptions = getDropdownOptions(changeSourceLabels)
+const commitActionOptions = getDropdownOptions(commitActionLabels)
 
 const approvalTypeLabels = {
   command: 'Command approval',
@@ -152,14 +163,6 @@ const getCollapsedGroupState = (
   collapsedGroups: Record<string, boolean>
 ): boolean => collapsedGroups[groupKey] ?? getDefaultCollapsedGroupState(groupKey)
 
-type ChatListGroup = {
-  key: string
-  cwd: string | null
-  label: string
-  chats: ProviderChat[]
-  kind: 'pinned' | 'cwd' | 'done'
-}
-
 const sortChatsForGroup = (chats: ProviderChat[]): ProviderChat[] =>
   [...chats].sort((firstChat, secondChat) => {
     if (secondChat.updatedAt !== firstChat.updatedAt) {
@@ -169,8 +172,8 @@ const sortChatsForGroup = (chats: ProviderChat[]): ProviderChat[] =>
     return secondChat.createdAt - firstChat.createdAt
   })
 
-const groupChatsForSidebar = (chats: ProviderChat[]): ChatListGroup[] => {
-  const groupsByCwd = new Map<string, ChatListGroup>()
+const groupChatsForSidebar = (chats: ProviderChat[]): ChatListGroupData[] => {
+  const groupsByCwd = new Map<string, ChatListGroupData>()
   const pinnedChats: ProviderChat[] = []
   const doneChats: ProviderChat[] = []
 
@@ -807,7 +810,7 @@ export const App: React.FC = () => {
     }
   }
 
-  const handleUnpinPinnedChats = async (group: ChatListGroup): Promise<void> => {
+  const handleUnpinPinnedChats = async (group: ChatListGroupData): Promise<void> => {
     if (group.kind !== 'pinned') return
 
     try {
@@ -820,7 +823,7 @@ export const App: React.FC = () => {
     }
   }
 
-  const handleMarkCwdChatsDone = async (group: ChatListGroup): Promise<void> => {
+  const handleMarkCwdChatsDone = async (group: ChatListGroupData): Promise<void> => {
     if (group.kind !== 'cwd') return
 
     try {
@@ -988,63 +991,23 @@ export const App: React.FC = () => {
     }
   }
 
-  const renderChatGroup = (group: ChatListGroup, contentId: string): React.ReactElement => {
+  const renderChatGroup = (group: ChatListGroupData, contentId: string): React.ReactElement => {
     const groupOpen =
       searchTerms.length > 0 || !getCollapsedGroupState(group.key, collapsedCwdGroups)
 
     return (
-      <section
-        className={`chat-list-section chat-list-section--${group.kind}${groupOpen ? ' chat-list-section--open' : ''}`}
-        aria-label={`${group.label} chats`}
+      <ChatListGroup
+        contentId={contentId}
+        group={group}
         key={group.key}
-      >
-        <div className="chat-list-section__header">
-          <button
-            className="chat-list-section__toggle"
-            type="button"
-            aria-controls={contentId}
-            aria-expanded={groupOpen}
-            title={group.cwd ?? group.label}
-            onClick={() => handleToggleCwdGroup(group.key)}
-          >
-            <ChevronRight className="chat-list-section__chevron" aria-hidden="true" />
-            <span className="chat-list-section__title">{group.label}</span>
-          </button>
-          {group.kind === 'cwd' && (
-            <button
-              className="chat-list-section__action"
-              type="button"
-              aria-label={`Mark all ${group.label} chats done`}
-              title="Mark project chats done"
-              onClick={() => void handleMarkCwdChatsDone(group)}
-            >
-              <CheckCheck aria-hidden="true" />
-            </button>
-          )}
-          {group.kind === 'pinned' && (
-            <button
-              className="chat-list-section__action"
-              type="button"
-              aria-label="Unpin all pinned chats"
-              title="Unpin all"
-              onClick={() => void handleUnpinPinnedChats(group)}
-            >
-              <PinOff aria-hidden="true" />
-            </button>
-          )}
-        </div>
-        {groupOpen && (
-          <blockquote className="chat-list-section__quote" id={contentId}>
-            <ChatList
-              ariaLabel={`${group.label} chats`}
-              chats={group.chats}
-              onMarkDone={handleMarkChatDone}
-              onSelect={handleSelectChat}
-              onTogglePinned={handleToggleChatPinned}
-            />
-          </blockquote>
-        )}
-      </section>
+        open={groupOpen}
+        onMarkChatDone={handleMarkChatDone}
+        onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
+        onSelectChat={handleSelectChat}
+        onToggle={handleToggleCwdGroup}
+        onToggleChatPinned={handleToggleChatPinned}
+        onUnpinPinnedChats={(nextGroup) => void handleUnpinPinnedChats(nextGroup)}
+      />
     )
   }
 
@@ -1221,38 +1184,32 @@ export const App: React.FC = () => {
                       }}
                     />
                   </div>
-                  <button
-                    className="chat-home__icon-button"
-                    type="button"
+                  <Button
+                    theme="secondary"
                     aria-label="Close search"
                     aria-controls="chat-search"
                     title="Close search"
-                    onClick={handleCloseSearch}
-                  >
-                    <X aria-hidden="true" />
-                  </button>
+                    callback={handleCloseSearch}
+                    icon={<X aria-hidden="true" />}
+                  />
                 </>
               ) : (
                 <div className="chat-home__actions">
-                  <button
-                    className="chat-home__icon-button"
-                    type="button"
+                  <Button
+                    theme="secondary"
                     aria-label="New chat"
                     title="New chat"
-                    onClick={handleNewChat}
-                  >
-                    <SquarePen aria-hidden="true" />
-                  </button>
-                  <button
-                    className="chat-home__icon-button"
-                    type="button"
+                    callback={handleNewChat}
+                    icon={<SquarePen aria-hidden="true" />}
+                  />
+                  <Button
+                    theme="secondary"
                     aria-label="Search conversations"
                     aria-expanded={false}
                     title="Search conversations"
-                    onClick={() => setSearchOpen(true)}
-                  >
-                    <Search aria-hidden="true" />
-                  </button>
+                    callback={() => setSearchOpen(true)}
+                    icon={<Search aria-hidden="true" />}
+                  />
                 </div>
               )}
             </header>
@@ -1273,21 +1230,16 @@ export const App: React.FC = () => {
                   )}
                   {hasMoreChats && chatPageLoadState !== 'error' && (
                     <div className="chat-list-section__sentinel" ref={chatLoadTriggerRef}>
-                      {chatPageLoadState === 'loading' ? (
-                        'Loading more chats...'
-                      ) : (
-                        <span className="sr-only">Load more chats</span>
-                      )}
+                      <span className="sr-only">Load more chats</span>
                     </div>
                   )}
                   {chatPageLoadState === 'error' && (
-                    <button
-                      className="chat-list-section__retry"
-                      type="button"
-                      onClick={() => void loadMoreChats()}
-                    >
-                      Retry loading chats
-                    </button>
+                    <Button
+                      theme="secondary"
+                      fill
+                      callback={() => void loadMoreChats()}
+                      label="Retry loading chats"
+                    />
                   )}
                   {doneChatGroup && renderChatGroup(doneChatGroup, 'cwd-chats-list-done')}
                 </div>
@@ -1313,15 +1265,15 @@ export const App: React.FC = () => {
             {selectedChat && (
               <>
                 <header className="chat-detail__header">
-                  <button
-                    className="chat-detail__back"
-                    type="button"
-                    aria-label="Back"
-                    title="Back"
-                    onClick={handleBack}
-                  >
-                    <ArrowLeft aria-hidden="true" />
-                  </button>
+                  <span className="chat-detail__back-slot">
+                    <Button
+                      theme="transparent"
+                      aria-label="Back"
+                      title="Back"
+                      callback={handleBack}
+                      icon={<ArrowLeft aria-hidden="true" />}
+                    />
+                  </span>
                   <h1>{selectedChat.title}</h1>
                 </header>
                 <div className="chat-detail__messages" ref={contentRef}>
@@ -1347,15 +1299,15 @@ export const App: React.FC = () => {
             )}
             {!selectedChat && newChatOpen && (
               <header className="chat-detail__header chat-detail__new-header">
-                <button
-                  className="chat-detail__back"
-                  type="button"
-                  aria-label="Back"
-                  title="Back"
-                  onClick={handleBack}
-                >
-                  <ArrowLeft aria-hidden="true" />
-                </button>
+                <span className="chat-detail__back-slot">
+                  <Button
+                    theme="transparent"
+                    aria-label="Back"
+                    title="Back"
+                    callback={handleBack}
+                    icon={<ArrowLeft aria-hidden="true" />}
+                  />
+                </span>
                 <h1>New chat</h1>
               </header>
             )}
@@ -1363,29 +1315,24 @@ export const App: React.FC = () => {
               {!selectedChat && newChatOpen && (
                 <div className="chat-panel__new-session">
                   <span>New session in</span>
-                  <button
-                    className="chat-panel__new-session-button"
-                    type="button"
+                  <Button
                     title={newSessionCwd ?? 'Choose folder'}
                     disabled={sendState === 'sending'}
-                    onClick={() => void handleSelectNewSessionFolder()}
-                  >
-                    {getFolderName(newSessionCwd)}
-                  </button>
+                    callback={() => void handleSelectNewSessionFolder()}
+                    label={getFolderName(newSessionCwd)}
+                    theme="transparent"
+                    size="small"
+                  />
                   <span>with</span>
-                  <select
+                  <Dropdown
                     className="chat-panel__new-session-select"
                     aria-label="Provider"
                     disabled={sendState === 'sending'}
+                    options={providerOptions}
+                    placement="top"
                     value={newSessionProvider}
-                    onChange={(event) => setNewSessionProvider(event.target.value as ProviderId)}
-                  >
-                    {Object.entries(providerLabels).map(([providerId, label]) => (
-                      <option key={providerId} value={providerId}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setNewSessionProvider}
+                  />
                 </div>
               )}
               {selectedChat && pendingApproval && (
@@ -1412,24 +1359,20 @@ export const App: React.FC = () => {
                     )}
                   </div>
                   <div className="chat-approval__actions">
-                    <button
-                      className="chat-approval__button chat-approval__button--deny"
-                      type="button"
+                    <Button
                       disabled={Boolean(approvalDecisionInFlight)}
-                      onClick={() => void handleResolveApproval('deny')}
-                    >
-                      <X aria-hidden="true" />
-                      <span>Deny</span>
-                    </button>
-                    <button
-                      className="chat-approval__button chat-approval__button--allow"
-                      type="button"
+                      callback={() => void handleResolveApproval('deny')}
+                      icon={<X aria-hidden="true" />}
+                      label={<span>Deny</span>}
+                      theme="secondary"
+                    />
+                    <Button
                       disabled={Boolean(approvalDecisionInFlight)}
-                      onClick={() => void handleResolveApproval('allow')}
-                    >
-                      <Check aria-hidden="true" />
-                      <span>Allow</span>
-                    </button>
+                      callback={() => void handleResolveApproval('allow')}
+                      icon={<Check aria-hidden="true" />}
+                      label={<span>Allow</span>}
+                      theme="primary"
+                    />
                   </div>
                 </section>
               )}
@@ -1480,31 +1423,25 @@ export const App: React.FC = () => {
               <label className="sr-only" htmlFor="changes-source">
                 Change source
               </label>
-              <select
+              <Dropdown
                 className="changes-sidebar__select"
                 id="changes-source"
+                options={changeSourceOptions}
                 value={changeSource}
-                onChange={(event) => setChangeSource(event.target.value as ChangeSource)}
-              >
-                {Object.entries(changeSourceLabels).map(([source, label]) => (
-                  <option key={source} value={source}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                onChange={setChangeSource}
+              />
               <div className="changes-sidebar__meta" title={changesContextLabel}>
                 <span>{changesContextLabel}</span>
                 {changeSource !== 'lastTurn' && (
-                  <button
-                    className="changes-sidebar__refresh"
-                    type="button"
+                  <Button
+                    theme="transparent"
+                    size="small"
                     aria-label="Refresh changes"
                     title="Refresh changes"
                     disabled={!changesCwd || changesLoadState === 'loading'}
-                    onClick={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
-                  >
-                    <RefreshCw aria-hidden="true" />
-                  </button>
+                    callback={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
+                    icon={<RefreshCw aria-hidden="true" />}
+                  />
                 )}
               </div>
             </header>
@@ -1550,58 +1487,53 @@ export const App: React.FC = () => {
               )}
               <div className="changes-sidebar__commit-row">
                 <div className="changes-sidebar__commit-control">
-                  <button
-                    className="changes-sidebar__commit"
-                    type="button"
+                  <Button
                     disabled={commitDisabled}
-                    onClick={() => void handleCommitChangedFiles()}
-                  >
-                    <GitCommitHorizontal aria-hidden="true" />
-                    <span>{commitActionLabels[commitAction]}</span>
-                  </button>
+                    callback={() => void handleCommitChangedFiles()}
+                    icon={<GitCommitHorizontal aria-hidden="true" />}
+                    label={<span>{commitActionLabels[commitAction]}</span>}
+                    theme="primary"
+                    fill
+                  />
                   <label className="sr-only" htmlFor="changes-commit-action">
                     Commit action
                   </label>
-                  <select
+                  <Dropdown
                     className="changes-sidebar__commit-action"
                     id="changes-commit-action"
+                    options={commitActionOptions}
+                    placement="top"
+                    title={commitActionLabels[commitAction]}
                     value={commitAction}
-                    onChange={(event) =>
-                      handleCommitActionChange(event.target.value as AppGitCommitAction)
-                    }
-                  >
-                    <option value="commit">Commit</option>
-                    <option value="amend">Amend</option>
-                    <option value="commitAndPush">Commit &amp; push</option>
-                  </select>
+                    onChange={handleCommitActionChange}
+                  />
                 </div>
-                <button
-                  className="changes-sidebar__commit-mode"
-                  type="button"
+                <Button
                   aria-label={
                     commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'
                   }
                   title={commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'}
-                  onClick={handleCommitModeToggle}
-                >
-                  {commitMode === 'manual' ? (
-                    <Sparkles aria-hidden="true" />
-                  ) : (
-                    <Pencil aria-hidden="true" />
-                  )}
-                </button>
+                  callback={handleCommitModeToggle}
+                  icon={
+                    commitMode === 'manual' ? (
+                      <Sparkles aria-hidden="true" />
+                    ) : (
+                      <Pencil aria-hidden="true" />
+                    )
+                  }
+                  theme="secondary"
+                />
               </div>
               {hasUnpushedChanges && (
-                <button
-                  className="changes-sidebar__push"
-                  type="button"
+                <Button
                   title={`${unpushedCount} unpushed commit${unpushedCount === 1 ? '' : 's'}`}
                   disabled={pushDisabled}
-                  onClick={() => void handlePushChanges()}
-                >
-                  <Upload aria-hidden="true" />
-                  <span>{pushState === 'sending' ? 'Pushing' : 'Push'}</span>
-                </button>
+                  callback={() => void handlePushChanges()}
+                  icon={<Upload aria-hidden="true" />}
+                  label={<span>{pushState === 'sending' ? 'Pushing' : 'Push'}</span>}
+                  theme="secondary"
+                  fill
+                />
               )}
               {commitState === 'error' && (
                 <p className="changes-sidebar__commit-error" role="status">
