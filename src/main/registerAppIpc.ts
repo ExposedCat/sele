@@ -1,5 +1,12 @@
+import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
+import type {
+  AppGitChangeKind,
+  AppGitChangesOptions,
+  AppGitFileChange,
+  AppGitChangeSource
+} from '../shared/app'
 import { appIpcChannels } from '../shared/app'
 
 const getDefaultPath = (value: unknown): string | undefined => {
@@ -8,8 +15,267 @@ const getDefaultPath = (value: unknown): string | undefined => {
   return value
 }
 
+type BranchBase = {
+  ref: string
+  commit: string
+}
+
+const runGit = (cwd: string, args: string[], required = false): Promise<string | null> =>
+  new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      args,
+      {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 10_000
+      },
+      (error, stdout) => {
+        if (error) {
+          if (required) reject(error)
+          else resolve(null)
+          return
+        }
+
+        resolve(stdout.trimEnd())
+      }
+    )
+  })
+
+const getGitChangesOptions = (value: unknown): AppGitChangesOptions => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Git changes options')
+  }
+
+  const options = value as { cwd?: unknown; source?: unknown }
+  const source = options.source
+
+  if (source !== 'branch' && source !== 'uncommitted') {
+    throw new Error('Invalid Git changes source')
+  }
+
+  return {
+    cwd: getDefaultPath(options.cwd),
+    source
+  }
+}
+
+const getCurrentBranchName = async (cwd: string): Promise<string | null> => {
+  const branchName = await runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  return branchName && branchName !== 'HEAD' ? branchName : null
+}
+
+const getOriginHeadBranch = async (cwd: string): Promise<string | null> => {
+  const originHead = await runGit(cwd, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])
+  const prefix = 'refs/remotes/'
+
+  return originHead?.startsWith(prefix) ? originHead.slice(prefix.length) : null
+}
+
+const getVerifiedBranchBase = async (
+  cwd: string,
+  candidateRef: string
+): Promise<BranchBase | null> => {
+  const verifiedRef = await runGit(cwd, ['rev-parse', '--verify', '--quiet', candidateRef])
+  if (!verifiedRef) return null
+
+  const commit = await runGit(cwd, ['merge-base', 'HEAD', candidateRef])
+  return commit ? { ref: candidateRef, commit } : null
+}
+
+const getBranchBase = async (
+  cwd: string,
+  branchName: string | null
+): Promise<BranchBase | null> => {
+  const originHeadBranch = await getOriginHeadBranch(cwd)
+  const candidateRefs = [
+    originHeadBranch,
+    'origin/main',
+    'origin/master',
+    'upstream/main',
+    'upstream/master',
+    'main',
+    'master'
+  ]
+  const uniqueRefs = [...new Set(candidateRefs.filter((ref): ref is string => Boolean(ref)))]
+
+  for (const candidateRef of uniqueRefs) {
+    if (candidateRef === branchName) continue
+
+    const branchBase = await getVerifiedBranchBase(cwd, candidateRef)
+    if (branchBase) return branchBase
+  }
+
+  const upstreamRef = await runGit(cwd, [
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    '@{upstream}'
+  ])
+
+  if (upstreamRef && upstreamRef !== branchName) {
+    const upstreamBase = await getVerifiedBranchBase(cwd, upstreamRef)
+    if (upstreamBase) return upstreamBase
+  }
+
+  return null
+}
+
+const getChangeKind = (status: string): AppGitChangeKind => {
+  const code = status[0]
+  if (code === 'A' || code === 'C' || code === '?') return 'create'
+  if (code === 'D') return 'delete'
+  if (code === 'R') return 'rename'
+  return 'edit'
+}
+
+const getPorcelainChangeKind = (status: string): AppGitChangeKind => {
+  if (status.includes('R')) return 'rename'
+  if (status.includes('A') || status.includes('C') || status.includes('?')) return 'create'
+  if (status.includes('D')) return 'delete'
+  return 'edit'
+}
+
+const parseNameStatusChanges = (output: string): AppGitFileChange[] => {
+  if (!output) return []
+
+  const fields = output.split('\0')
+  const changes: AppGitFileChange[] = []
+  let index = 0
+
+  while (index < fields.length && fields[index]) {
+    const status = fields[index]
+    index += 1
+
+    if (status[0] === 'R' || status[0] === 'C') {
+      const previousPath = fields[index]
+      const path = fields[index + 1]
+      index += 2
+
+      if (path) {
+        changes.push({
+          path,
+          previousPath: previousPath || null,
+          kind: getChangeKind(status),
+          status
+        })
+      }
+
+      continue
+    }
+
+    const path = fields[index]
+    index += 1
+
+    if (path) {
+      changes.push({
+        path,
+        kind: getChangeKind(status),
+        status
+      })
+    }
+  }
+
+  return changes
+}
+
+const parsePorcelainChanges = (output: string): AppGitFileChange[] => {
+  if (!output) return []
+
+  const fields = output.split('\0')
+  const changes: AppGitFileChange[] = []
+  let index = 0
+
+  while (index < fields.length && fields[index]) {
+    const entry = fields[index]
+    index += 1
+
+    if (entry.length < 4) continue
+
+    const status = entry.slice(0, 2)
+    const path = entry.slice(3)
+
+    if (status.includes('R') || status.includes('C')) {
+      const previousPath = fields[index]
+      index += 1
+
+      changes.push({
+        path,
+        previousPath: previousPath || null,
+        kind: getPorcelainChangeKind(status),
+        status
+      })
+
+      continue
+    }
+
+    changes.push({
+      path,
+      kind: getPorcelainChangeKind(status),
+      status
+    })
+  }
+
+  return changes
+}
+
+const getGitChanges = async (
+  cwd: string,
+  source: AppGitChangeSource
+): Promise<{
+  repositoryRoot: string
+  branchName: string | null
+  baseRef: string | null
+  files: AppGitFileChange[]
+}> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  const branchName = await getCurrentBranchName(repositoryRoot)
+
+  if (source === 'uncommitted') {
+    const status = await runGit(repositoryRoot, ['status', '--porcelain=v1', '-z'], true)
+
+    return {
+      repositoryRoot,
+      branchName,
+      baseRef: null,
+      files: parsePorcelainChanges(status ?? '')
+    }
+  }
+
+  const branchBase = await getBranchBase(repositoryRoot, branchName)
+  if (!branchBase) {
+    return {
+      repositoryRoot,
+      branchName,
+      baseRef: null,
+      files: []
+    }
+  }
+
+  const diff = await runGit(
+    repositoryRoot,
+    ['diff', '--name-status', '-z', '--find-renames', `${branchBase.commit}...HEAD`, '--'],
+    true
+  )
+
+  return {
+    repositoryRoot,
+    branchName,
+    baseRef: branchBase.ref,
+    files: parseNameStatusChanges(diff ?? '')
+  }
+}
+
 export const registerAppIpc = (): void => {
   ipcMain.handle(appIpcChannels.getDefaultCwd, () => process.cwd())
+
+  ipcMain.handle(appIpcChannels.getGitChanges, async (_event, value: unknown) => {
+    const options = getGitChangesOptions(value)
+    return getGitChanges(options.cwd ?? process.cwd(), options.source)
+  })
 
   ipcMain.handle(appIpcChannels.selectFolder, async (event, options: unknown) => {
     const browserWindow = BrowserWindow.fromWebContents(event.sender)

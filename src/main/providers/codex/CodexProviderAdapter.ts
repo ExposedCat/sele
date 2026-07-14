@@ -5,10 +5,12 @@ import type {
   ProviderChatStatus,
   ProviderCapabilities,
   ProviderLoginResult,
+  ProviderApprovalDecision,
+  ProviderPendingApproval,
   ProviderTurnOptions
 } from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
-import { CodexAppServerClient, type RpcNotification } from './CodexAppServerClient'
+import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
 import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
 import { loadRolloutCwd, loadRolloutHistory } from './CodexRolloutHistory'
 import { loadSessionThreadName, loadSessionThreadNames } from './CodexSessionIndex'
@@ -136,6 +138,26 @@ type RawResponseItemParams = {
   item?: unknown
 }
 
+type ServerRequestResolvedParams = {
+  threadId?: unknown
+  requestId?: unknown
+}
+
+type CodexPendingApprovalProtocol = 'commandExecution' | 'fileChange' | 'execCommand' | 'applyPatch'
+
+type CodexPendingApproval = {
+  requestId: number
+  protocol: CodexPendingApprovalProtocol
+  type: ProviderPendingApproval['type']
+  threadId: string
+  turnId: string | null
+  itemId: string | null
+  command: string | null
+  cwd: string | null
+  reason: string | null
+  startedAt: number
+}
+
 const getAccountLabel = (account: CodexAccount): string => {
   if (account.type === 'chatgpt') return account.email
   if (account.type === 'apiKey') return 'OpenAI API key'
@@ -144,6 +166,22 @@ const getAccountLabel = (account: CodexAccount): string => {
 
 const getStringValue = (value: unknown): string | null =>
   typeof value === 'string' && value.trim() ? value.trim() : null
+
+const getRecordValue = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+
+const getOptionalStringValue = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value : null
+
+const getOptionalNumberValue = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null
+
+const requireStringValue = (value: unknown, fieldName: string): string => {
+  if (typeof value === 'string' && value) return value
+  throw new Error(`Invalid approval request field: ${fieldName}`)
+}
 
 const getThreadName = (thread: CodexThread): string | null => {
   const threadFields = thread as CodexThread & {
@@ -239,8 +277,16 @@ const getRawResponseMessage = (
   return { text, phase }
 }
 
+const isNoActiveTurnError = (error: unknown): boolean =>
+  error instanceof Error && /no active turn/i.test(error.message)
+
 const isPendingUserMessage = (item: CodexThreadItem): boolean =>
   item.type === 'userMessage' && item.id.startsWith('pending:')
+
+const formatLegacyCommand = (command: unknown): string | null =>
+  Array.isArray(command) && command.every((part) => typeof part === 'string')
+    ? command.join(' ')
+    : null
 
 const hasUserMessage = (items: CodexThreadItem[]): boolean =>
   items.some((item) => item.type === 'userMessage')
@@ -320,15 +366,18 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
   private client = new CodexAppServerClient()
   private disposeNotificationListener: (() => void) | null = null
+  private disposeServerRequestListener: (() => void) | null = null
   private chatUpdatedListeners = new Set<(detail: ProviderChatDetail) => void>()
   private threads = new Map<string, CodexThread>()
   private pendingTurnIds = new Map<string, string>()
   private activeTurnIds = new Map<string, string>()
   private chatUpdatedTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private rolledBackTurnIds = new Map<string, Set<string>>()
+  private pendingApprovalsByThread = new Map<string, CodexPendingApproval[]>()
 
   constructor() {
     this.disposeNotificationListener = this.client.onNotification(this.handleNotification)
+    this.disposeServerRequestListener = this.client.onServerRequest(this.handleServerRequest)
   }
 
   login = async (): Promise<ProviderLoginResult> => {
@@ -576,17 +625,53 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return detail
   }
 
+  resolveApproval = async (
+    chatId: string,
+    decision: ProviderApprovalDecision
+  ): Promise<ProviderChatDetail> => {
+    const approval = this.pendingApprovalsByThread.get(chatId)?.[0]
+    if (!approval) throw new Error('No pending approval to resolve')
+
+    this.client.resolveServerRequest(
+      approval.requestId,
+      this.createApprovalResponse(approval, decision)
+    )
+    this.removePendingApproval(chatId, approval.requestId)
+    this.emitChatUpdated(chatId)
+
+    const detail = this.getCachedChatDetail(chatId)
+    if (detail) return detail
+
+    return this.getChat(chatId)
+  }
+
   stopChat = async (chatId: string): Promise<ProviderChatDetail> => {
     const turnId = this.getActiveTurnId(chatId)
-    if (!turnId) throw new Error('No active turn to stop')
+    this.cancelPendingApprovals(chatId)
 
-    await this.client.request('turn/interrupt', {
-      threadId: chatId,
-      turnId
-    })
+    if (!turnId) {
+      if (!this.threads.has(chatId)) await this.getChat(chatId)
+      this.setThreadStatus(chatId, { type: 'idle' })
+      const detail = this.getCachedChatDetail(chatId)
+      if (!detail) throw new Error('Unable to stop chat')
+      this.emitChatUpdated(chatId)
+      return detail
+    }
+
+    let interrupted = false
+    try {
+      await this.client.request('turn/interrupt', {
+        threadId: chatId,
+        turnId
+      })
+      interrupted = true
+    } catch (error) {
+      if (!isNoActiveTurnError(error)) throw error
+    }
 
     this.activeTurnIds.delete(chatId)
-    this.markTurnInterrupted(chatId, turnId)
+    if (interrupted) this.markTurnInterrupted(chatId, turnId)
+    else this.markTurnCompleted(chatId, turnId)
     this.setThreadStatus(chatId, { type: 'idle' })
 
     const detail = this.getCachedChatDetail(chatId)
@@ -604,6 +689,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
   dispose = (): void => {
     this.disposeNotificationListener?.()
     this.disposeNotificationListener = null
+    this.disposeServerRequestListener?.()
+    this.disposeServerRequestListener = null
     this.chatUpdatedTimers.forEach((timer) => clearTimeout(timer))
     this.chatUpdatedTimers.clear()
     this.client.dispose()
@@ -630,6 +717,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     pinned: false,
     done: false,
     capabilities: codexCapabilities,
+    pendingApproval: this.getProviderPendingApproval(thread.id),
     items: getChatItems(thread.turns)
   })
 
@@ -761,6 +849,124 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }))
   }
 
+  private setThreadActiveFlag = (
+    threadId: string,
+    flag: 'waitingOnApproval' | 'waitingOnUserInput',
+    enabled: boolean
+  ): void => {
+    this.updateThread(threadId, (thread) => {
+      if (!enabled && thread.status.type !== 'active') return thread
+
+      const activeFlags = thread.status.type === 'active' ? thread.status.activeFlags : []
+      const nextFlags = enabled
+        ? [...new Set([...activeFlags, flag])]
+        : activeFlags.filter((activeFlag) => activeFlag !== flag)
+      const status =
+        nextFlags.length > 0 || this.getActiveTurnId(threadId)
+          ? ({
+              type: 'active',
+              activeFlags: nextFlags
+            } satisfies CodexThreadStatus)
+          : ({ type: 'idle' } satisfies CodexThreadStatus)
+
+      return {
+        ...thread,
+        status
+      }
+    })
+  }
+
+  private getProviderPendingApproval = (threadId: string): ProviderPendingApproval | null => {
+    const approval = this.pendingApprovalsByThread.get(threadId)?.[0]
+    if (!approval) return null
+
+    return {
+      id: String(approval.requestId),
+      type: approval.type,
+      command: approval.command,
+      cwd: approval.cwd,
+      reason: approval.reason,
+      startedAt: approval.startedAt
+    }
+  }
+
+  private addPendingApproval = (approval: CodexPendingApproval): void => {
+    const pendingApprovals = this.pendingApprovalsByThread.get(approval.threadId) ?? []
+    const nextApprovals = [
+      ...pendingApprovals.filter(
+        (pendingApproval) => pendingApproval.requestId !== approval.requestId
+      ),
+      approval
+    ]
+
+    this.pendingApprovalsByThread.set(approval.threadId, nextApprovals)
+    if (approval.turnId) this.activeTurnIds.set(approval.threadId, approval.turnId)
+    this.setThreadActiveFlag(approval.threadId, 'waitingOnApproval', true)
+    this.emitChatUpdated(approval.threadId)
+  }
+
+  private removePendingApproval = (threadId: string, requestId: number): void => {
+    const pendingApprovals = this.pendingApprovalsByThread.get(threadId)
+    if (!pendingApprovals) return
+
+    const nextApprovals = pendingApprovals.filter(
+      (pendingApproval) => pendingApproval.requestId !== requestId
+    )
+
+    if (nextApprovals.length > 0) {
+      this.pendingApprovalsByThread.set(threadId, nextApprovals)
+      return
+    }
+
+    this.pendingApprovalsByThread.delete(threadId)
+    this.setThreadActiveFlag(threadId, 'waitingOnApproval', false)
+  }
+
+  private removePendingApprovalByRequestId = (requestId: number): void => {
+    for (const [threadId, pendingApprovals] of this.pendingApprovalsByThread) {
+      if (!pendingApprovals.some((approval) => approval.requestId === requestId)) continue
+      this.removePendingApproval(threadId, requestId)
+      this.emitChatUpdated(threadId)
+      return
+    }
+  }
+
+  private createApprovalResponse = (
+    approval: CodexPendingApproval,
+    decision: ProviderApprovalDecision | 'cancel'
+  ): unknown => {
+    if (approval.protocol === 'commandExecution') {
+      return {
+        decision: decision === 'allow' ? 'accept' : decision === 'cancel' ? 'cancel' : 'decline'
+      }
+    }
+
+    if (approval.protocol === 'fileChange') {
+      return {
+        decision: decision === 'allow' ? 'accept' : decision === 'cancel' ? 'cancel' : 'decline'
+      }
+    }
+
+    return {
+      decision: decision === 'allow' ? 'approved' : decision === 'cancel' ? 'abort' : 'denied'
+    }
+  }
+
+  private cancelPendingApprovals = (threadId: string): void => {
+    const pendingApprovals = this.pendingApprovalsByThread.get(threadId)
+    if (!pendingApprovals) return
+
+    for (const approval of pendingApprovals) {
+      this.client.resolveServerRequest(
+        approval.requestId,
+        this.createApprovalResponse(approval, 'cancel')
+      )
+    }
+
+    this.pendingApprovalsByThread.delete(threadId)
+    this.setThreadActiveFlag(threadId, 'waitingOnApproval', false)
+  }
+
   private createPendingTurn = (turnId: string, text: string): CodexTurn => ({
     id: turnId,
     status: 'inProgress',
@@ -814,6 +1020,15 @@ export class CodexProviderAdapter implements ProviderAdapter {
       ...thread,
       turns: thread.turns.map((turn) =>
         turn.id === turnId ? { ...turn, status: 'interrupted' } : turn
+      )
+    }))
+  }
+
+  private markTurnCompleted = (threadId: string, turnId: string): void => {
+    this.updateThread(threadId, (thread) => ({
+      ...thread,
+      turns: thread.turns.map((turn) =>
+        turn.id === turnId ? { ...turn, status: 'completed' } : turn
       )
     }))
   }
@@ -1033,7 +1248,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
   ): void => {
     const threadId = getThreadId(params)
     if (!threadId || !params.turn || typeof params.turn !== 'object') return
-    const turn = this.normalizeLiveTurn(params.turn as CodexTurn)
+    const liveTurn = params.turn as CodexTurn
+    const turn = this.normalizeLiveTurn({
+      ...liveTurn,
+      status:
+        notification.method === 'turn/completed'
+          ? (liveTurn.status ?? 'completed')
+          : liveTurn.status
+    })
 
     if (this.isRolledBackTurn(threadId, turn.id)) {
       if (notification.method !== 'turn/started' || !this.pendingTurnIds.has(threadId)) return
@@ -1046,6 +1268,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }
     if (notification.method === 'turn/completed') {
       if (this.activeTurnIds.get(threadId) === turn.id) this.activeTurnIds.delete(threadId)
+      this.pendingApprovalsByThread.delete(threadId)
       this.setThreadStatus(threadId, { type: 'idle' })
     }
 
@@ -1227,6 +1450,102 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.scheduleChatUpdated(threadId)
   }
 
+  private handleCommandExecutionApprovalRequest = (request: RpcRequest): void => {
+    const params = getRecordValue(request.params)
+    if (!params) throw new Error('Invalid command approval request params')
+
+    this.addPendingApproval({
+      requestId: request.id,
+      protocol: 'commandExecution',
+      type: 'command',
+      threadId: requireStringValue(params.threadId, 'threadId'),
+      turnId: requireStringValue(params.turnId, 'turnId'),
+      itemId: requireStringValue(params.itemId, 'itemId'),
+      command: getOptionalStringValue(params.command),
+      cwd: getOptionalStringValue(params.cwd),
+      reason: getOptionalStringValue(params.reason),
+      startedAt: getOptionalNumberValue(params.startedAtMs) ?? Date.now()
+    })
+  }
+
+  private handleFileChangeApprovalRequest = (request: RpcRequest): void => {
+    const params = getRecordValue(request.params)
+    if (!params) throw new Error('Invalid file change approval request params')
+
+    this.addPendingApproval({
+      requestId: request.id,
+      protocol: 'fileChange',
+      type: 'fileChange',
+      threadId: requireStringValue(params.threadId, 'threadId'),
+      turnId: requireStringValue(params.turnId, 'turnId'),
+      itemId: requireStringValue(params.itemId, 'itemId'),
+      command: null,
+      cwd: getOptionalStringValue(params.grantRoot),
+      reason: getOptionalStringValue(params.reason),
+      startedAt: getOptionalNumberValue(params.startedAtMs) ?? Date.now()
+    })
+  }
+
+  private handleLegacyExecCommandApprovalRequest = (request: RpcRequest): void => {
+    const params = getRecordValue(request.params)
+    if (!params) throw new Error('Invalid legacy command approval request params')
+
+    this.addPendingApproval({
+      requestId: request.id,
+      protocol: 'execCommand',
+      type: 'command',
+      threadId: requireStringValue(params.conversationId, 'conversationId'),
+      turnId: null,
+      itemId: getOptionalStringValue(params.callId),
+      command: formatLegacyCommand(params.command),
+      cwd: getOptionalStringValue(params.cwd),
+      reason: getOptionalStringValue(params.reason),
+      startedAt: Date.now()
+    })
+  }
+
+  private handleLegacyApplyPatchApprovalRequest = (request: RpcRequest): void => {
+    const params = getRecordValue(request.params)
+    if (!params) throw new Error('Invalid legacy patch approval request params')
+
+    this.addPendingApproval({
+      requestId: request.id,
+      protocol: 'applyPatch',
+      type: 'fileChange',
+      threadId: requireStringValue(params.conversationId, 'conversationId'),
+      turnId: null,
+      itemId: getOptionalStringValue(params.callId),
+      command: null,
+      cwd: getOptionalStringValue(params.grantRoot),
+      reason: getOptionalStringValue(params.reason),
+      startedAt: Date.now()
+    })
+  }
+
+  private handleServerRequest = (request: RpcRequest): boolean => {
+    if (request.method === 'item/commandExecution/requestApproval') {
+      this.handleCommandExecutionApprovalRequest(request)
+      return true
+    }
+
+    if (request.method === 'item/fileChange/requestApproval') {
+      this.handleFileChangeApprovalRequest(request)
+      return true
+    }
+
+    if (request.method === 'execCommandApproval') {
+      this.handleLegacyExecCommandApprovalRequest(request)
+      return true
+    }
+
+    if (request.method === 'applyPatchApproval') {
+      this.handleLegacyApplyPatchApprovalRequest(request)
+      return true
+    }
+
+    return false
+  }
+
   private handleNotification = (notification: RpcNotification): void => {
     const params = notification.params
     if (!params || typeof params !== 'object') return
@@ -1268,6 +1587,12 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
     if (notification.method === 'rawResponseItem/completed') {
       this.handleRawResponseItemCompleted(params as RawResponseItemParams)
+      return
+    }
+
+    if (notification.method === 'serverRequest/resolved') {
+      const requestId = (params as ServerRequestResolvedParams).requestId
+      if (typeof requestId === 'number') this.removePendingApprovalByRequestId(requestId)
       return
     }
 

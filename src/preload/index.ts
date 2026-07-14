@@ -7,6 +7,7 @@ import { providerIpcChannels } from '../shared/provider'
 
 const appApi: AppApi = {
   getDefaultCwd: () => ipcRenderer.invoke(appIpcChannels.getDefaultCwd),
+  getGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.getGitChanges, options),
   selectFolder: (options) => ipcRenderer.invoke(appIpcChannels.selectFolder, options)
 }
 
@@ -29,6 +30,8 @@ const providerApi: ProviderApi = {
       message,
       options
     ),
+  resolveApproval: (providerId, chatId, decision) =>
+    ipcRenderer.invoke(providerIpcChannels.resolveApproval, providerId, chatId, decision),
   stopChat: (providerId, chatId) =>
     ipcRenderer.invoke(providerIpcChannels.stopChat, providerId, chatId),
   markChatDone: (providerId, chatId) =>

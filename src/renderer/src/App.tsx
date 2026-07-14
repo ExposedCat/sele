@@ -1,13 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, CheckCheck, ChevronRight, Search, SquarePen, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ArrowLeft,
+  Check,
+  CheckCheck,
+  ChevronRight,
+  FilePlus2,
+  GitBranch,
+  GitCommitHorizontal,
+  History,
+  Pencil,
+  PinOff,
+  RefreshCw,
+  Search,
+  SquarePen,
+  Trash2,
+  X
+} from 'lucide-react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
+import type { AppGitChangeKind, AppGitChangesResult } from '../../shared/app'
 import type {
   ProviderChat,
   ProviderChatDetail,
+  ProviderFileDiff,
+  ProviderWorkingItem,
   ProviderChatItem,
   ProviderChatMetadata,
   ProviderMessage,
   ProviderAccessMode,
+  ProviderApprovalDecision,
   ProviderId,
   ProviderModelId,
   ProviderReasoningEffort
@@ -26,14 +46,46 @@ type ApplyChatDetailOptions = {
   select?: boolean
 }
 type EditingMessage = Pick<ProviderMessage, 'id' | 'content'>
+type ApprovalResolutionState = {
+  approvalId: string | null
+  decision: ProviderApprovalDecision | null
+  error: string | null
+}
+type ChangeSource = 'branch' | 'lastTurn' | 'uncommitted'
+type ChangedFile = {
+  path: string
+  previousPath?: string | null
+  kind: AppGitChangeKind
+  status?: string
+  diff?: string
+}
 
 const chatPageSize = 20
+const pinnedGroupKey = 'pinned'
 const unknownCwdGroupKey = 'cwd:unknown'
 const doneGroupKey = 'done'
 
 const providerLabels = {
   codex: 'Codex'
 } satisfies Record<ProviderId, string>
+
+const changeSourceLabels = {
+  branch: 'Branch',
+  lastTurn: 'Last turn',
+  uncommitted: 'Uncommitted'
+} satisfies Record<ChangeSource, string>
+
+const changeKindLabels = {
+  edit: 'Modified',
+  create: 'Added',
+  delete: 'Deleted',
+  rename: 'Renamed'
+} satisfies Record<AppGitChangeKind, string>
+
+const approvalTypeLabels = {
+  command: 'Command approval',
+  fileChange: 'File change approval'
+} as const
 
 const getChatKey = (chat: Pick<ProviderChat, 'providerId' | 'id'>): string =>
   `${chat.providerId}:${chat.id}`
@@ -66,6 +118,13 @@ const getLastPathPart = (path: string): string => {
   return parts.at(-1) ?? path
 }
 
+const getParentPath = (path: string): string => {
+  const normalizedPath = path.replace(/\\/g, '/')
+  const pathSeparatorIndex = normalizedPath.lastIndexOf('/')
+
+  return pathSeparatorIndex < 0 ? '.' : normalizedPath.slice(0, pathSeparatorIndex)
+}
+
 const getFolderName = (path: string | null): string =>
   path ? getLastPathPart(path) : 'Choose folder'
 
@@ -84,18 +143,16 @@ const getCollapsedGroupState = (
   collapsedGroups: Record<string, boolean>
 ): boolean => collapsedGroups[groupKey] ?? getDefaultCollapsedGroupState(groupKey)
 
-type ChatCwdGroup = {
+type ChatListGroup = {
   key: string
   cwd: string | null
   label: string
   chats: ProviderChat[]
-  kind: 'cwd' | 'done'
+  kind: 'pinned' | 'cwd' | 'done'
 }
 
 const sortChatsForGroup = (chats: ProviderChat[]): ProviderChat[] =>
   [...chats].sort((firstChat, secondChat) => {
-    if (firstChat.pinned !== secondChat.pinned) return firstChat.pinned ? -1 : 1
-
     if (secondChat.updatedAt !== firstChat.updatedAt) {
       return secondChat.updatedAt - firstChat.updatedAt
     }
@@ -103,11 +160,17 @@ const sortChatsForGroup = (chats: ProviderChat[]): ProviderChat[] =>
     return secondChat.createdAt - firstChat.createdAt
   })
 
-const groupChatsByCwd = (chats: ProviderChat[]): ChatCwdGroup[] => {
-  const groupsByCwd = new Map<string, ChatCwdGroup>()
+const groupChatsForSidebar = (chats: ProviderChat[]): ChatListGroup[] => {
+  const groupsByCwd = new Map<string, ChatListGroup>()
+  const pinnedChats: ProviderChat[] = []
   const doneChats: ProviderChat[] = []
 
   for (const chat of chats) {
+    if (chat.pinned) {
+      pinnedChats.push(chat)
+      continue
+    }
+
     if (chat.done) {
       doneChats.push(chat)
       continue
@@ -135,18 +198,33 @@ const groupChatsByCwd = (chats: ProviderChat[]): ChatCwdGroup[] => {
     ...group,
     chats: sortChatsForGroup(group.chats)
   }))
-
-  if (doneChats.length === 0) return cwdGroups
+  const pinnedGroups =
+    pinnedChats.length === 0
+      ? []
+      : [
+          {
+            key: pinnedGroupKey,
+            cwd: null,
+            label: 'Pinned',
+            chats: sortChatsForGroup(pinnedChats),
+            kind: 'pinned' as const
+          }
+        ]
 
   return [
+    ...pinnedGroups,
     ...cwdGroups,
-    {
-      key: doneGroupKey,
-      cwd: null,
-      label: 'Done',
-      chats: sortChatsForGroup(doneChats),
-      kind: 'done' as const
-    }
+    ...(doneChats.length === 0
+      ? []
+      : [
+          {
+            key: doneGroupKey,
+            cwd: null,
+            label: 'Done',
+            chats: sortChatsForGroup(doneChats),
+            kind: 'done' as const
+          }
+        ])
   ]
 }
 
@@ -209,6 +287,83 @@ const getVisibleChatItems = (
   return editingMessageIndex < 0 ? items : items.slice(0, editingMessageIndex)
 }
 
+const sortChangedFiles = (files: ChangedFile[]): ChangedFile[] =>
+  [...files].sort((firstFile, secondFile) => firstFile.path.localeCompare(secondFile.path))
+
+const getWorkingItemDiffs = (item: ProviderWorkingItem): ProviderFileDiff[] => {
+  if (item.type === 'tool') return item.diffs
+  if (item.type === 'toolGroup') return item.tools.flatMap((tool) => tool.diffs)
+
+  return []
+}
+
+const getLastTurnChangedFiles = (detail: ProviderChatDetail | null): ChangedFile[] => {
+  const lastWorkingStep = detail?.items.findLast((item) => item.type === 'working')
+  if (!lastWorkingStep) return []
+
+  const filesByPath = new Map<string, ChangedFile>()
+
+  for (const workingItem of lastWorkingStep.items) {
+    for (const diff of getWorkingItemDiffs(workingItem)) {
+      filesByPath.set(diff.path, {
+        path: diff.path,
+        kind: diff.kind,
+        diff: diff.diff
+      })
+    }
+  }
+
+  return sortChangedFiles(Array.from(filesByPath.values()))
+}
+
+const getGitChangedFiles = (result: AppGitChangesResult | null): ChangedFile[] =>
+  sortChangedFiles(
+    result?.files.map((file) => ({
+      path: file.path,
+      previousPath: file.previousPath,
+      kind: file.kind,
+      status: file.status
+    })) ?? []
+  )
+
+const formatCommitFile = (file: ChangedFile): string =>
+  file.previousPath ? `${file.previousPath} -> ${file.path}` : file.path
+
+const getCommitMessage = (files: ChangedFile[]): string =>
+  `Following repo commit preferences and naming, commit: ${files.map(formatCommitFile).join(', ')}`
+
+const getChangesEmptyMessage = (
+  source: ChangeSource,
+  cwd: string | null,
+  result: AppGitChangesResult | null
+): string => {
+  if (source === 'lastTurn') return 'No files changed in the last turn.'
+  if (!cwd) return 'Choose a folder to see changes.'
+  if (source === 'branch' && result && !result.baseRef) return 'No branch base found.'
+
+  return `No ${changeSourceLabels[source].toLocaleLowerCase()} changes.`
+}
+
+const getApprovalSummary = (
+  approval: NonNullable<ProviderChatDetail['pendingApproval']>
+): string => {
+  if (approval.command) return approval.command
+  if (approval.reason) return approval.reason
+  if (approval.cwd) return approval.cwd
+
+  return approval.type === 'fileChange'
+    ? 'File changes require approval'
+    : 'Command requires approval'
+}
+
+const ChangeKindIcon: React.FC<{ kind: AppGitChangeKind }> = ({ kind }) => {
+  if (kind === 'create') return <FilePlus2 aria-hidden="true" />
+  if (kind === 'delete') return <Trash2 aria-hidden="true" />
+  if (kind === 'rename') return <History aria-hidden="true" />
+
+  return <Pencil aria-hidden="true" />
+}
+
 export const App: React.FC = () => {
   const [chats, setChats] = useState<ProviderChat[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
@@ -221,6 +376,11 @@ export const App: React.FC = () => {
   const [accessMode, setAccessMode] = useState<ProviderAccessMode>('sandbox')
   const [model, setModel] = useState<ProviderModelId>('gpt-5.5')
   const [reasoningEffort, setReasoningEffort] = useState<ProviderReasoningEffort>('xhigh')
+  const [approvalResolution, setApprovalResolution] = useState<ApprovalResolutionState>({
+    approvalId: null,
+    decision: null,
+    error: null
+  })
   const [newChatOpen, setNewChatOpen] = useState(true)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null)
   const [newSessionProvider, setNewSessionProvider] = useState<ProviderId>('codex')
@@ -229,10 +389,15 @@ export const App: React.FC = () => {
   const [collapsedCwdGroups, setCollapsedCwdGroups] = useState<Record<string, boolean>>({})
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [chatPageLoadState, setChatPageLoadState] = useState<IncrementalLoadState>('ready')
+  const [changeSource, setChangeSource] = useState<ChangeSource>('branch')
+  const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
+  const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
+  const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
   const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const chatLoadTriggerRef = useRef<HTMLDivElement>(null)
   const resizeHandleRef = useRef<HTMLDivElement>(null)
+  const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
 
@@ -345,9 +510,16 @@ export const App: React.FC = () => {
 
   const selectedProviderId = selectedChat?.providerId
   const selectedChatId = selectedChat?.id
+  const changesCwd = selectedChat ? (chatDetail?.cwd ?? selectedChat.cwd) : newSessionCwd
+  const pendingApproval = chatDetail?.pendingApproval ?? null
+  const currentApprovalResolution =
+    approvalResolution.approvalId === pendingApproval?.id ? approvalResolution : null
+  const approvalDecisionInFlight = currentApprovalResolution?.decision ?? null
+  const approvalError = currentApprovalResolution?.error ?? null
 
   useEffect(() => {
     if (!selectedProviderId || !selectedChatId) return
+    if (chatDetail?.id === selectedChatId) return
 
     let active = true
 
@@ -365,26 +537,34 @@ export const App: React.FC = () => {
     return () => {
       active = false
     }
-  }, [chatLoadRequest, selectedProviderId, selectedChatId])
+  }, [chatDetail?.id, chatLoadRequest, selectedProviderId, selectedChatId])
 
   useEffect(() => {
-    const resizeHandle = resizeHandleRef.current
-    if (!resizeHandle) return
+    const resizeHandles = [resizeHandleRef.current, changesResizeHandleRef.current].filter(
+      (resizeHandle): resizeHandle is HTMLDivElement => Boolean(resizeHandle)
+    )
+    if (resizeHandles.length === 0) return
 
-    const removeTabStop = (): void => {
+    const removeTabStop = (resizeHandle: HTMLDivElement): void => {
       resizeHandle.removeAttribute('tabindex')
       if (document.activeElement === resizeHandle) resizeHandle.blur()
     }
 
-    removeTabStop()
+    resizeHandles.forEach(removeTabStop)
 
-    const observer = new MutationObserver(removeTabStop)
-    observer.observe(resizeHandle, {
-      attributeFilter: ['tabindex'],
-      attributes: true
+    const observers = resizeHandles.map((resizeHandle) => {
+      const observer = new MutationObserver(() => removeTabStop(resizeHandle))
+      observer.observe(resizeHandle, {
+        attributeFilter: ['tabindex'],
+        attributes: true
+      })
+
+      return observer
     })
 
-    return () => observer.disconnect()
+    return () => {
+      observers.forEach((observer) => observer.disconnect())
+    }
   }, [])
 
   useEffect(() => {
@@ -418,6 +598,36 @@ export const App: React.FC = () => {
     }
   }, [])
 
+  useEffect(() => {
+    if (changeSource === 'lastTurn' || !changesCwd) return
+
+    let active = true
+
+    queueMicrotask(() => {
+      if (active) setGitChangeLoadState('loading')
+    })
+
+    appApi
+      .getGitChanges({
+        cwd: changesCwd,
+        source: changeSource
+      })
+      .then((result) => {
+        if (!active) return
+        setGitChanges(result)
+        setGitChangeLoadState('ready')
+      })
+      .catch(() => {
+        if (!active) return
+        setGitChanges(null)
+        setGitChangeLoadState('error')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [changeSource, changesCwd, gitChangeLoadRequest])
+
   const searchTerms = searchQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
   const filteredChats =
     searchTerms.length === 0
@@ -430,8 +640,9 @@ export const App: React.FC = () => {
             (term) => title.includes(term) || cwd.includes(term) || cwdLabel.includes(term)
           )
         })
-  const chatGroups = groupChatsByCwd(filteredChats)
-  const activeChatGroups = chatGroups.filter((group) => group.kind !== 'done')
+  const chatGroups = groupChatsForSidebar(filteredChats)
+  const pinnedChatGroup = chatGroups.find((group) => group.kind === 'pinned') ?? null
+  const activeChatGroups = chatGroups.filter((group) => group.kind === 'cwd')
   const doneChatGroup = chatGroups.find((group) => group.kind === 'done') ?? null
   const hasMoreChats = Boolean(nextCursor)
 
@@ -552,7 +763,20 @@ export const App: React.FC = () => {
     }
   }
 
-  const handleMarkCwdChatsDone = async (group: ChatCwdGroup): Promise<void> => {
+  const handleUnpinPinnedChats = async (group: ChatListGroup): Promise<void> => {
+    if (group.kind !== 'pinned') return
+
+    try {
+      const metadataList = await Promise.all(
+        group.chats.map((chat) => providerApi.setChatPinned(chat.providerId, chat.id, false))
+      )
+      applyChatMetadata(metadataList)
+    } catch {
+      // Leave the group as-is if local metadata cannot be updated.
+    }
+  }
+
+  const handleMarkCwdChatsDone = async (group: ChatListGroup): Promise<void> => {
     if (group.kind !== 'cwd') return
 
     try {
@@ -676,6 +900,34 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleResolveApproval = async (decision: ProviderApprovalDecision): Promise<void> => {
+    if (!selectedChat || !pendingApproval || approvalDecisionInFlight) return
+
+    const approvalId = pendingApproval.id
+    setApprovalResolution({ approvalId, decision, error: null })
+
+    try {
+      const detail = await providerApi.resolveApproval(
+        selectedChat.providerId,
+        selectedChat.id,
+        decision
+      )
+      applyChatDetail(selectedChat.providerId, detail)
+    } catch {
+      setApprovalResolution({
+        approvalId,
+        decision: null,
+        error: 'Unable to resolve approval.'
+      })
+    } finally {
+      setApprovalResolution((currentResolution) =>
+        currentResolution.approvalId === approvalId
+          ? { ...currentResolution, decision: null }
+          : currentResolution
+      )
+    }
+  }
+
   const handleStopChat = async (): Promise<void> => {
     if (!selectedChat || sendInFlightRef.current) return
     sendInFlightRef.current = true
@@ -692,13 +944,13 @@ export const App: React.FC = () => {
     }
   }
 
-  const renderChatGroup = (group: ChatCwdGroup, contentId: string): React.ReactElement => {
+  const renderChatGroup = (group: ChatListGroup, contentId: string): React.ReactElement => {
     const groupOpen =
       searchTerms.length > 0 || !getCollapsedGroupState(group.key, collapsedCwdGroups)
 
     return (
       <section
-        className={`chat-list-section chat-list-section--cwd${groupOpen ? ' chat-list-section--open' : ''}`}
+        className={`chat-list-section chat-list-section--${group.kind}${groupOpen ? ' chat-list-section--open' : ''}`}
         aria-label={`${group.label} chats`}
         key={group.key}
       >
@@ -725,6 +977,17 @@ export const App: React.FC = () => {
               <CheckCheck aria-hidden="true" />
             </button>
           )}
+          {group.kind === 'pinned' && (
+            <button
+              className="chat-list-section__action"
+              type="button"
+              aria-label="Unpin all pinned chats"
+              title="Unpin all"
+              onClick={() => void handleUnpinPinnedChats(group)}
+            >
+              <PinOff aria-hidden="true" />
+            </button>
+          )}
         </div>
         {groupOpen && (
           <blockquote className="chat-list-section__quote" id={contentId}>
@@ -743,7 +1006,9 @@ export const App: React.FC = () => {
 
   const chatIsWaiting =
     chatDetail?.status === 'waitingOnApproval' || chatDetail?.status === 'waitingOnUserInput'
-  const chatIsBusy = chatIsWaiting || hasActiveWorkingStep(chatDetail)
+  const chatHasActiveTurn = chatDetail?.status === 'active' || chatIsWaiting
+  const chatIsBusy =
+    chatHasActiveTurn || (sendState === 'sending' && hasActiveWorkingStep(chatDetail))
   const messageBoxDisabled = selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false
   const canEditOwnMessages = Boolean(
     selectedChat &&
@@ -755,6 +1020,65 @@ export const App: React.FC = () => {
   )
   const visibleChatItems = chatDetail ? getVisibleChatItems(chatDetail.items, editingMessage) : []
   const chatPanelOpen = Boolean(selectedChat) || newChatOpen
+  const lastTurnChangedFiles = useMemo(() => getLastTurnChangedFiles(chatDetail), [chatDetail])
+  const gitChangedFiles = useMemo(
+    () => (changesCwd ? getGitChangedFiles(gitChanges) : []),
+    [changesCwd, gitChanges]
+  )
+  const changedFiles = changeSource === 'lastTurn' ? lastTurnChangedFiles : gitChangedFiles
+  const changesLoadState = changeSource === 'lastTurn' || !changesCwd ? 'ready' : gitChangeLoadState
+  const commitDisabled =
+    changedFiles.length === 0 ||
+    changesLoadState !== 'ready' ||
+    sendState === 'sending' ||
+    Boolean(editingMessage) ||
+    (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false)
+  const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, gitChanges)
+  const changesContextLabel =
+    changeSource === 'branch' && gitChanges?.branchName
+      ? gitChanges.baseRef
+        ? `${gitChanges.branchName} from ${gitChanges.baseRef}`
+        : gitChanges.branchName
+      : changesCwd
+        ? getFolderName(changesCwd)
+        : 'No folder'
+
+  const renderChangedFile = (file: ChangedFile): React.ReactElement => (
+    <li className={`changes-sidebar__file changes-sidebar__file--${file.kind}`} key={file.path}>
+      <span className="changes-sidebar__file-icon">
+        <ChangeKindIcon kind={file.kind} />
+      </span>
+      <span className="changes-sidebar__file-main">
+        <span className="changes-sidebar__file-name" title={file.path}>
+          {getLastPathPart(file.path)}
+        </span>
+        <span className="changes-sidebar__file-path" title={file.path}>
+          {getParentPath(file.path)}
+        </span>
+        {file.previousPath && (
+          <span className="changes-sidebar__file-path" title={file.previousPath}>
+            from {file.previousPath}
+          </span>
+        )}
+      </span>
+      {file.kind === 'edit' ? (
+        <span
+          className="changes-sidebar__file-kind-icon"
+          aria-label={changeKindLabels[file.kind]}
+          title={changeKindLabels[file.kind]}
+        >
+          <ChangeKindIcon kind={file.kind} />
+        </span>
+      ) : (
+        <span className="changes-sidebar__file-kind">{changeKindLabels[file.kind]}</span>
+      )}
+    </li>
+  )
+
+  const handleCommitChangedFiles = (): void => {
+    if (commitDisabled) return
+    void handleSendMessage(getCommitMessage(changedFiles))
+  }
 
   return (
     <main className={`chat${chatPanelOpen ? ' chat--has-selection' : ' chat--no-selection'}`}>
@@ -835,6 +1159,7 @@ export const App: React.FC = () => {
               )}
               {filteredChats.length > 0 && (
                 <div className="chat-list-stack">
+                  {pinnedChatGroup && renderChatGroup(pinnedChatGroup, 'pinned-chats-list')}
                   {activeChatGroups.map((group, groupIndex) =>
                     renderChatGroup(group, `cwd-chats-list-${groupIndex}`)
                   )}
@@ -955,8 +1280,53 @@ export const App: React.FC = () => {
                   </select>
                 </div>
               )}
+              {selectedChat && pendingApproval && (
+                <section className="chat-approval" aria-label="Approval request">
+                  <div className="chat-approval__main">
+                    <span className="chat-approval__label">
+                      {approvalTypeLabels[pendingApproval.type]}
+                    </span>
+                    <span
+                      className="chat-approval__summary"
+                      title={getApprovalSummary(pendingApproval)}
+                    >
+                      {getApprovalSummary(pendingApproval)}
+                    </span>
+                    {pendingApproval.cwd && pendingApproval.command && (
+                      <span className="chat-approval__cwd" title={pendingApproval.cwd}>
+                        {pendingApproval.cwd}
+                      </span>
+                    )}
+                    {approvalError && (
+                      <span className="chat-approval__error" role="status">
+                        {approvalError}
+                      </span>
+                    )}
+                  </div>
+                  <div className="chat-approval__actions">
+                    <button
+                      className="chat-approval__button chat-approval__button--deny"
+                      type="button"
+                      disabled={Boolean(approvalDecisionInFlight)}
+                      onClick={() => void handleResolveApproval('deny')}
+                    >
+                      <X aria-hidden="true" />
+                      <span>Deny</span>
+                    </button>
+                    <button
+                      className="chat-approval__button chat-approval__button--allow"
+                      type="button"
+                      disabled={Boolean(approvalDecisionInFlight)}
+                      onClick={() => void handleResolveApproval('allow')}
+                    >
+                      <Check aria-hidden="true" />
+                      <span>Allow</span>
+                    </button>
+                  </div>
+                </section>
+              )}
               <MessageBox
-                active={editingMessage ? false : chatIsBusy}
+                active={editingMessage ? false : chatHasActiveTurn}
                 accessMode={accessMode}
                 autoFocus={!selectedChat && newChatOpen}
                 disabled={messageBoxDisabled}
@@ -974,6 +1344,90 @@ export const App: React.FC = () => {
               />
             </div>
           </section>
+        </Panel>
+
+        <Separator
+          className="chat__resize-handle chat__resize-handle--changes"
+          elementRef={changesResizeHandleRef}
+          id="chat-changes-resize"
+          onFocus={(event) => event.currentTarget.blur()}
+          onPointerDown={(event) => event.currentTarget.blur()}
+          onPointerUp={(event) => event.currentTarget.blur()}
+        />
+
+        <Panel
+          className="chat__changes-panel"
+          defaultSize={300}
+          minSize={240}
+          maxSize={420}
+          groupResizeBehavior="preserve-pixel-size"
+          id="changes"
+        >
+          <aside className="changes-sidebar" aria-label="Changed files">
+            <header className="changes-sidebar__header">
+              <div className="changes-sidebar__title-row">
+                <GitBranch aria-hidden="true" />
+                <h2>Changes</h2>
+              </div>
+              <label className="sr-only" htmlFor="changes-source">
+                Change source
+              </label>
+              <select
+                className="changes-sidebar__select"
+                id="changes-source"
+                value={changeSource}
+                onChange={(event) => setChangeSource(event.target.value as ChangeSource)}
+              >
+                {Object.entries(changeSourceLabels).map(([source, label]) => (
+                  <option key={source} value={source}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <div className="changes-sidebar__meta" title={changesContextLabel}>
+                <span>{changesContextLabel}</span>
+                {changeSource !== 'lastTurn' && (
+                  <button
+                    className="changes-sidebar__refresh"
+                    type="button"
+                    aria-label="Refresh changes"
+                    title="Refresh changes"
+                    disabled={!changesCwd || changesLoadState === 'loading'}
+                    onClick={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            </header>
+            <div className="changes-sidebar__body">
+              {changesLoadState === 'loading' && (
+                <p className="changes-sidebar__status">Loading changes...</p>
+              )}
+              {changesLoadState === 'error' && (
+                <p className="changes-sidebar__status">Unable to load changes.</p>
+              )}
+              {changesLoadState === 'ready' && changedFiles.length === 0 && (
+                <p className="changes-sidebar__status">{changesEmptyMessage}</p>
+              )}
+              {changesLoadState === 'ready' && changedFiles.length > 0 && (
+                <ul className="changes-sidebar__files">
+                  {changedFiles.map((file) => renderChangedFile(file))}
+                </ul>
+              )}
+            </div>
+            <footer className="changes-sidebar__footer">
+              <button
+                className="changes-sidebar__commit"
+                type="button"
+                disabled={commitDisabled}
+                onClick={handleCommitChangedFiles}
+              >
+                <GitCommitHorizontal aria-hidden="true" />
+                <span>Commit</span>
+              </button>
+            </footer>
+          </aside>
         </Panel>
       </Group>
     </main>

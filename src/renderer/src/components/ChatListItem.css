@@ -67,12 +67,6 @@
   margin-left: auto;
 }
 
-.chat-list-item__pin-indicator {
-  width: 15px;
-  height: 15px;
-  color: var(--quiet);
-}
-
 .chat-list-item__status-container {
   display: grid;
   width: 17px;

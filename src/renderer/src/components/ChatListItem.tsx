@@ -1,4 +1,4 @@
-import { Check, Folder, LoaderCircle, Pin } from 'lucide-react'
+import { Check, Folder, LoaderCircle, Pin, PinOff } from 'lucide-react'
 import type { ProviderChat } from '../../../shared/provider'
 import './ChatListItem.css'
 
@@ -59,11 +59,8 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
             </span>
           )}
           <span className="chat-list-item__title">{chat.title}</span>
-          <span className="chat-list-item__meta">
-            {chat.pinned && (
-              <Pin className="chat-list-item__pin-indicator" aria-label="Pinned chat" />
-            )}
-            {trailingStatus && (
+          {trailingStatus && (
+            <span className="chat-list-item__meta">
               <span
                 className="chat-list-item__status-container"
                 title={statusLabels[trailingStatus]}
@@ -74,8 +71,8 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
                   aria-label={statusLabels[trailingStatus]}
                 />
               </span>
-            )}
-          </span>
+            </span>
+          )}
         </span>
         <span className="chat-list-item__body">
           <span className="chat-list-item__context" title={chat.cwd ?? projectName}>
@@ -105,7 +102,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
           title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
           onClick={onTogglePinned}
         >
-          <Pin aria-hidden="true" />
+          {chat.pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
         </button>
       </span>
     </article>
