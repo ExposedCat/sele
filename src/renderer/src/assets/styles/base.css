@@ -16,22 +16,15 @@ body {
   background: var(--bg);
 }
 
-button,
 textarea {
   font: inherit;
 }
 
-button {
-  cursor: pointer;
-}
-
-button,
 summary,
 textarea {
   -webkit-tap-highlight-color: transparent;
 }
 
-button:focus-visible,
 summary:focus-visible,
 textarea:focus-visible {
   outline: 3px solid var(--focus-ring);

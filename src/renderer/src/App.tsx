@@ -1063,7 +1063,12 @@ export const App: React.FC = () => {
 
   const renderChangedFile = (file: ChangedFile): React.ReactElement => (
     <li className={`changes-sidebar__file changes-sidebar__file--${file.kind}`} key={file.path}>
-      <span className="changes-sidebar__file-icon">
+      <span
+        className="changes-sidebar__file-icon"
+        role="img"
+        aria-label={changeKindLabels[file.kind]}
+        title={changeKindLabels[file.kind]}
+      >
         <ChangeKindIcon kind={file.kind} />
       </span>
       <span className="changes-sidebar__file-main">
@@ -1079,17 +1084,6 @@ export const App: React.FC = () => {
           </span>
         )}
       </span>
-      {file.kind === 'edit' ? (
-        <span
-          className="changes-sidebar__file-kind-icon"
-          aria-label={changeKindLabels[file.kind]}
-          title={changeKindLabels[file.kind]}
-        >
-          <ChangeKindIcon kind={file.kind} />
-        </span>
-      ) : (
-        <span className="changes-sidebar__file-kind">{changeKindLabels[file.kind]}</span>
-      )}
     </li>
   )
 
@@ -1325,11 +1319,12 @@ export const App: React.FC = () => {
                   />
                   <span>with</span>
                   <Dropdown
-                    className="chat-panel__new-session-select"
                     aria-label="Provider"
+                    appearance="inline"
                     disabled={sendState === 'sending'}
                     options={providerOptions}
                     placement="top"
+                    size="small"
                     value={newSessionProvider}
                     onChange={setNewSessionProvider}
                   />
@@ -1424,9 +1419,10 @@ export const App: React.FC = () => {
                 Change source
               </label>
               <Dropdown
-                className="changes-sidebar__select"
                 id="changes-source"
+                fill
                 options={changeSourceOptions}
+                size="large"
                 value={changeSource}
                 onChange={setChangeSource}
               />
@@ -1499,12 +1495,15 @@ export const App: React.FC = () => {
                     Commit action
                   </label>
                   <Dropdown
-                    className="changes-sidebar__commit-action"
                     id="changes-commit-action"
+                    appearance="splitAction"
+                    fill
+                    menuAlign="end"
                     options={commitActionOptions}
                     placement="top"
                     title={commitActionLabels[commitAction]}
                     value={commitAction}
+                    valueDisplay="icon"
                     onChange={handleCommitActionChange}
                   />
                 </div>

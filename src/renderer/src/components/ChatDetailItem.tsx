@@ -22,6 +22,7 @@ import type {
   ProviderWorkingStep,
   ProviderWorkingTool
 } from '../../../shared/provider'
+import { Button } from './Button'
 import './ChatDetailItem.css'
 
 type ChatDetailItemProps = {
@@ -407,15 +408,16 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
     if (canEdit) {
       return (
         <div className="chat-detail__message-row chat-detail__message-row--user">
-          <button
-            className="chat-detail__message-edit"
-            type="button"
-            aria-label="Edit message"
-            title="Edit message"
-            onClick={() => onEditMessage?.(item)}
-          >
-            <Pencil aria-hidden="true" />
-          </button>
+          <span className="chat-detail__message-edit-slot">
+            <Button
+              theme="secondary"
+              size="small"
+              aria-label="Edit message"
+              title="Edit message"
+              callback={() => onEditMessage?.(item)}
+              icon={<Pencil aria-hidden="true" />}
+            />
+          </span>
           <MarkdownMessage
             className={`chat-detail__message chat-detail__message--${item.role}`}
             content={item.content}

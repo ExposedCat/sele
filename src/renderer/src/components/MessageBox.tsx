@@ -5,6 +5,8 @@ import type {
   ProviderModelId,
   ProviderReasoningEffort
 } from '../../../shared/provider'
+import { Button } from './Button'
+import { Dropdown, type DropdownOption } from './Dropdown'
 import './MessageBox.css'
 
 type MessageBoxProps = {
@@ -50,6 +52,18 @@ const reasoningEffortLabels = {
   high: 'High',
   xhigh: 'X High'
 } satisfies Record<ProviderReasoningEffort, string>
+
+const getDropdownOptions = <TValue extends string>(
+  labels: Record<TValue, string>
+): DropdownOption<TValue>[] =>
+  Object.entries(labels).map(([value, label]) => ({
+    value: value as TValue,
+    label: label as string
+  }))
+
+const accessModeOptions = getDropdownOptions(accessModeLabels)
+const modelOptions = getDropdownOptions(modelLabels)
+const reasoningEffortOptions = getDropdownOptions(reasoningEffortLabels)
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
   accessMode,
@@ -196,71 +210,59 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           }}
         />
         <div className="message-box__controls">
-          <select
-            id="access-mode"
-            className="message-box__select message-box__access"
-            disabled={selectorsDisabled}
-            value={accessMode}
-            title={accessModeLabels[accessMode]}
-            onChange={(event) => onAccessModeChange(event.target.value as ProviderAccessMode)}
-          >
-            {Object.entries(accessModeLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <span className="message-box__select message-box__access">
+            <Dropdown
+              id="access-mode"
+              disabled={selectorsDisabled}
+              fill
+              options={accessModeOptions}
+              placement="top"
+              value={accessMode}
+              title={accessModeLabels[accessMode]}
+              onChange={onAccessModeChange}
+            />
+          </span>
           <div className="message-box__send-controls">
-            <select
-              id="model-mode"
-              className="message-box__select message-box__model"
-              disabled={selectorsDisabled}
-              value={model}
-              title={modelLabels[model]}
-              onChange={(event) => onModelChange(event.target.value as ProviderModelId)}
-            >
-              {Object.entries(modelLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select
-              id="reasoning-effort"
-              className="message-box__select message-box__reasoning"
-              disabled={selectorsDisabled}
-              value={reasoningEffort}
-              title={`${reasoningEffortLabels[reasoningEffort]} reasoning`}
-              onChange={(event) =>
-                onReasoningEffortChange(event.target.value as ProviderReasoningEffort)
-              }
-            >
-              {Object.entries(reasoningEffortLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
+            <span className="message-box__select message-box__model">
+              <Dropdown
+                id="model-mode"
+                disabled={selectorsDisabled}
+                fill
+                options={modelOptions}
+                placement="top"
+                value={model}
+                title={modelLabels[model]}
+                onChange={onModelChange}
+              />
+            </span>
+            <span className="message-box__select message-box__reasoning">
+              <Dropdown
+                id="reasoning-effort"
+                disabled={selectorsDisabled}
+                fill
+                options={reasoningEffortOptions}
+                placement="top"
+                value={reasoningEffort}
+                title={`${reasoningEffortLabels[reasoningEffort]} reasoning`}
+                onChange={onReasoningEffortChange}
+              />
+            </span>
             {editing && (
-              <button
-                className="message-box__cancel"
-                type="button"
+              <Button
                 disabled={pending}
-                onClick={handleCancelEdit}
-              >
-                Cancel
-              </button>
+                callback={handleCancelEdit}
+                label="Cancel"
+                theme="secondary"
+              />
             )}
-            <button
-              className="message-box__action"
-              type={active ? 'button' : 'submit'}
+            <Button
               aria-label={buttonLabel}
               title={buttonLabel}
               disabled={active ? pending || !onStop : disabled || pending || !message.trim()}
-              onClick={active ? handleStop : undefined}
-            >
-              {active ? <Square aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
-            </button>
+              callback={active ? handleStop : submitMessage}
+              icon={active ? <Square aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
+              theme="primary"
+            />
           </div>
         </div>
       </div>

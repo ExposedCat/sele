@@ -3,10 +3,10 @@
   width: 100%;
   overflow: hidden;
   border: 1px solid var(--glass-line);
-  border-radius: 16px;
+  border-radius: 12px;
   color: inherit;
   background: var(--glass);
-  box-shadow: var(--glass-shadow);
+  box-shadow: none;
   transition:
     background 180ms ease,
     border-color 180ms ease,
@@ -20,19 +20,26 @@
   display: block;
   width: 100%;
   min-width: 0;
-  padding: 18px 88px 17px 18px;
+  padding: 14px 88px 14px 14px;
   border: 0;
   color: inherit;
+  cursor: pointer;
   background: transparent;
   font: inherit;
   text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chat-list-item__main:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
 }
 
 .chat-list-item:hover {
   border-color: var(--glass-line);
   background: var(--glass-strong);
   box-shadow: var(--glass-shadow-hover);
-  transform: translateY(-2px);
+  transform: none;
 }
 
 .chat-list-item:active {
@@ -51,7 +58,6 @@
   flex: 1;
   overflow: hidden;
   color: var(--ink);
-  font-size: 19px;
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.35;
@@ -151,52 +157,25 @@
   transform: translateY(-2px);
 }
 
-.chat-list-item:hover .chat-list-item__actions {
+.chat-list-item:hover .chat-list-item__actions,
+.chat-list-item:has(:focus-visible) .chat-list-item__actions {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
 }
 
-.chat-list-item__action {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 0;
-  border-radius: 9px;
-  color: var(--muted);
-  background: transparent;
-  transition:
-    color 160ms ease,
-    background 160ms ease;
-}
-
-.chat-list-item__action:hover,
-.chat-list-item__action:focus-visible {
-  color: var(--ink);
-  background: var(--glass-subtle);
-}
-
-.chat-list-item__action--active {
-  color: var(--ink);
-}
-
-.chat-list-item__action svg {
-  width: 18px;
-  height: 18px;
-}
-
 @media (max-width: 600px) {
+  .chat-list-item {
+    border-radius: 16px;
+    box-shadow: var(--glass-shadow);
+  }
+
   .chat-list-item__main {
-    padding: 16px;
-    padding-right: 88px;
+    padding: 16px 88px 16px 16px;
   }
 
   .chat-list-item__header {
     align-items: center;
   }
 
-  .chat-list-item__title {
-    font-size: 18px;
-  }
 }

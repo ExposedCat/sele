@@ -1,5 +1,6 @@
 import { Check, Folder, LoaderCircle, Pin, PinOff } from 'lucide-react'
 import type { ProviderChat } from '../../../shared/provider'
+import { Button } from './Button'
 import './ChatListItem.css'
 
 type ChatListItemProps = {
@@ -85,25 +86,23 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
       </button>
       <span className="chat-list-item__actions">
         {!chat.done && (
-          <button
-            className="chat-list-item__action"
-            type="button"
+          <Button
+            theme="transparent"
+            size="small"
             aria-label="Mark chat done"
             title="Mark done"
-            onClick={onMarkDone}
-          >
-            <Check aria-hidden="true" />
-          </button>
+            callback={onMarkDone}
+            icon={<Check aria-hidden="true" />}
+          />
         )}
-        <button
-          className={`chat-list-item__action chat-list-item__action--pin${chat.pinned ? ' chat-list-item__action--active' : ''}`}
-          type="button"
+        <Button
+          theme={chat.pinned ? 'secondary' : 'transparent'}
+          size="small"
           aria-label={chat.pinned ? 'Unpin chat' : 'Pin chat'}
           title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
-          onClick={onTogglePinned}
-        >
-          {chat.pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-        </button>
+          callback={onTogglePinned}
+          icon={chat.pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+        />
       </span>
     </article>
   )
