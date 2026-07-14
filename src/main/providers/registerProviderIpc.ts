@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import type {
+  ProviderApprovalDecision,
   ProviderChatListOptions,
   ProviderId,
   ProviderTurnOptions
@@ -36,6 +37,11 @@ const requireOptionalCwd = (value: unknown): string | null => {
 
 const requireBoolean = (value: unknown): boolean => {
   if (typeof value !== 'boolean') throw new Error('Invalid boolean value')
+  return value
+}
+
+const requireApprovalDecision = (value: unknown): ProviderApprovalDecision => {
+  if (value !== 'allow' && value !== 'deny') throw new Error('Invalid approval decision')
   return value
 }
 
@@ -158,6 +164,16 @@ export const registerProviderIpc = (): void => {
 
   ipcMain.handle(providerIpcChannels.stopChat, (_, providerId: unknown, chatId: unknown) =>
     providerApi.stopChat(requireProviderId(providerId), requireChatId(chatId))
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.resolveApproval,
+    (_, providerId: unknown, chatId: unknown, decision: unknown) =>
+      providerApi.resolveApproval(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireApprovalDecision(decision)
+      )
   )
 
   ipcMain.handle(providerIpcChannels.markChatDone, (_, providerId: unknown, chatId: unknown) =>

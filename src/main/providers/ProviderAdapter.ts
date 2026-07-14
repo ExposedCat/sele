@@ -4,6 +4,7 @@ import type {
   ProviderChatDetail,
   ProviderId,
   ProviderLoginResult,
+  ProviderApprovalDecision,
   ProviderTurnOptions
 } from '../../shared/provider'
 
@@ -23,6 +24,10 @@ export type ProviderAdapter = {
     messageId: string,
     message: string,
     options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
+  resolveApproval: (
+    chatId: string,
+    decision: ProviderApprovalDecision
   ) => Promise<ProviderChatDetail>
   stopChat: (chatId: string) => Promise<ProviderChatDetail>
   onChatUpdated: (listener: (detail: ProviderChatDetail) => void) => () => void

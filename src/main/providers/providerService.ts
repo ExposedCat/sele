@@ -114,6 +114,10 @@ export const providerApi: ProviderApi = {
     adapters[providerId]
       .editMessage(chatId, messageId, message, options)
       .then((detail) => applyMetadataToDetail(detail)),
+  resolveApproval: (providerId, chatId, decision) =>
+    adapters[providerId]
+      .resolveApproval(chatId, decision)
+      .then((detail) => applyMetadataToDetail(detail)),
   stopChat: (providerId, chatId) =>
     adapters[providerId].stopChat(chatId).then((detail) => applyMetadataToDetail(detail)),
   markChatDone: (_providerId, chatId) => setChatDone(chatId, true),

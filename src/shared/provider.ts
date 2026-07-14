@@ -25,6 +25,17 @@ export type ProviderLoginResult =
 
 export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
 
+export type ProviderApprovalDecision = 'allow' | 'deny'
+
+export type ProviderPendingApproval = {
+  id: string
+  type: 'command' | 'fileChange'
+  command: string | null
+  cwd: string | null
+  reason: string | null
+  startedAt: number
+}
+
 export type ProviderChatMetadata = {
   id: string
   pinned: boolean
@@ -130,6 +141,7 @@ export type ProviderChatDetail = {
   pinned: boolean
   done: boolean
   capabilities: ProviderCapabilities
+  pendingApproval: ProviderPendingApproval | null
   items: ProviderChatItem[]
 }
 
@@ -170,6 +182,11 @@ export type ProviderApi = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  resolveApproval: (
+    providerId: ProviderId,
+    chatId: string,
+    decision: ProviderApprovalDecision
+  ) => Promise<ProviderChatDetail>
   stopChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
   markChatDone: (providerId: ProviderId, chatId: string) => Promise<ProviderChatMetadata>
   markCwdChatsDone: (providerId: ProviderId, cwd: string | null) => Promise<ProviderChatMetadata[]>
@@ -188,6 +205,7 @@ export const providerIpcChannels = {
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
   editMessage: 'provider:edit-message',
+  resolveApproval: 'provider:resolve-approval',
   stopChat: 'provider:stop-chat',
   markChatDone: 'provider:mark-chat-done',
   markCwdChatsDone: 'provider:mark-cwd-chats-done',

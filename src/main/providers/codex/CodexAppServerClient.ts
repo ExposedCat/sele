@@ -17,6 +17,12 @@ export type RpcNotification = {
   params?: unknown
 }
 
+export type RpcRequest = {
+  id: number
+  method: string
+  params?: unknown
+}
+
 type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
@@ -30,6 +36,7 @@ export class CodexAppServerClient {
   private startPromise: Promise<void> | null = null
   private pendingRequests = new Map<number, PendingRequest>()
   private notificationListeners = new Set<(notification: RpcNotification) => void>()
+  private serverRequestListeners = new Set<(request: RpcRequest) => boolean | void>()
   private nextRequestId = 1
   private stderr = ''
 
@@ -41,6 +48,19 @@ export class CodexAppServerClient {
   onNotification = (listener: (notification: RpcNotification) => void): (() => void) => {
     this.notificationListeners.add(listener)
     return () => this.notificationListeners.delete(listener)
+  }
+
+  onServerRequest = (listener: (request: RpcRequest) => boolean | void): (() => void) => {
+    this.serverRequestListeners.add(listener)
+    return () => this.serverRequestListeners.delete(listener)
+  }
+
+  resolveServerRequest = (id: number, result: unknown): void => {
+    this.write({ id, result })
+  }
+
+  rejectServerRequest = (id: number, message: string, code = -32603): void => {
+    this.write({ id, error: { code, message } })
   }
 
   dispose = (): void => {
@@ -140,7 +160,13 @@ export class CodexAppServerClient {
 
     const method = message.method
     if (typeof method === 'string') {
-      if (typeof message.id !== 'number') {
+      if (typeof message.id === 'number') {
+        this.handleServerRequest({
+          id: message.id,
+          method,
+          params: 'params' in message ? message.params : undefined
+        })
+      } else {
         const notification = {
           method,
           params: 'params' in message ? message.params : undefined
@@ -167,6 +193,23 @@ export class CodexAppServerClient {
     }
 
     pending.resolve(response.result)
+  }
+
+  private handleServerRequest = (request: RpcRequest): void => {
+    for (const listener of this.serverRequestListeners) {
+      try {
+        if (listener(request)) return
+      } catch (error) {
+        this.rejectServerRequest(
+          request.id,
+          error instanceof Error ? error.message : String(error),
+          -32603
+        )
+        return
+      }
+    }
+
+    this.rejectServerRequest(request.id, `Unsupported server request: ${request.method}`, -32601)
   }
 
   private handleProcessEnd = (error: Error): void => {
