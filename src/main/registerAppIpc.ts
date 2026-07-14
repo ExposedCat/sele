@@ -65,14 +65,6 @@ const getGitChangesOptions = (value: unknown): AppGitChangesOptions => {
   }
 }
 
-const isValidGitPath = (value: string): boolean =>
-  value.length > 0 &&
-  !isAbsolute(value) &&
-  value !== '..' &&
-  !value.startsWith('../') &&
-  !value.includes('/../') &&
-  !value.includes('\\..\\')
-
 const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Invalid Git commit options')
@@ -91,10 +83,6 @@ const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
       options.files.filter((file): file is string => typeof file === 'string').map((file) => file)
     )
   ]
-
-  if (files.length === 0 || files.some((file) => !isValidGitPath(file))) {
-    throw new Error('Invalid commit files')
-  }
 
   return {
     action,
