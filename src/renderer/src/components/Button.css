@@ -4,10 +4,10 @@
   min-width: 0;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--glass-line);
+  border: 1px solid var(--control-border);
   color: var(--lead);
   cursor: pointer;
-  background: var(--glass);
+  background: var(--control-bg);
   font: inherit;
   text-align: center;
   -webkit-tap-highlight-color: transparent;
@@ -70,37 +70,35 @@
 }
 
 :where(.ui-button--primary) {
-  border-color: rgb(255 255 255 / 20%);
-  color: var(--dark-ink);
-  background: var(--dark);
+  color: var(--lead);
+  background: var(--control-bg);
   font-weight: 760;
 }
 
 :where(.ui-button--primary:not(:disabled):hover) {
-  background: var(--dark-hover);
+  background: var(--control-hover-bg);
 }
 
 :where(.ui-button--secondary) {
   color: var(--lead);
-  background: var(--glass);
+  background: var(--control-bg);
   font-weight: 720;
 }
 
 :where(.ui-button--secondary:not(:disabled):hover) {
   color: var(--ink);
-  background: var(--glass-strong);
+  background: var(--control-hover-bg);
 }
 
 :where(.ui-button--transparent) {
-  border-color: transparent;
-  color: var(--quiet);
-  background: transparent;
+  color: var(--lead);
+  background: var(--control-bg);
   font-weight: 700;
 }
 
 :where(.ui-button--transparent:not(:disabled):hover) {
   color: var(--ink);
-  background: var(--glass-subtle);
+  background: var(--control-hover-bg);
 }
 
 .ui-button:disabled {
@@ -108,7 +106,9 @@
 }
 
 :where(.ui-button:disabled) {
-  opacity: 0.5;
+  color: var(--control-disabled-color);
+  background: var(--control-bg);
+  opacity: 1;
 }
 
 :where(.ui-button svg) {

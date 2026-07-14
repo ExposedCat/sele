@@ -4,21 +4,13 @@
   display: block;
   width: 100%;
   margin: 0;
-  padding: 10px;
-  border: 1px solid var(--glass-line);
-  border-radius: 18px;
-  background: var(--glass-strong);
-  box-shadow: var(--glass-shadow);
-  transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease;
-  -webkit-backdrop-filter: blur(20px) saturate(1.35);
-  backdrop-filter: blur(20px) saturate(1.35);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .message-box:focus-within {
-  border-color: var(--glass-line);
-  box-shadow: var(--glass-shadow);
+  box-shadow: none;
 }
 
 .message-box__select {
@@ -52,7 +44,7 @@
   min-width: 0;
   min-height: 44px;
   max-height: 180px;
-  padding: 8px 4px 0;
+  padding: 6px 4px 0;
   resize: none;
   border: 0;
   outline: 0;
@@ -104,7 +96,7 @@
 
 @media (max-width: 600px) {
   .message-box {
-    padding: 10px;
+    padding: 0;
   }
 
   .message-box__controls {

@@ -63,6 +63,7 @@ export const Dropdown = <TValue extends string>({
   const menuRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null)
+  const [inFloatingPane, setInFloatingPane] = useState(false)
   const selectedIndex = options.findIndex((option) => option.value === value)
   const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : null
   const [activeIndex, setActiveIndex] = useState(selectedIndex)
@@ -76,6 +77,10 @@ export const Dropdown = <TValue extends string>({
       }, []),
     [options]
   )
+
+  useEffect(() => {
+    setInFloatingPane(Boolean(rootRef.current?.closest('.chat-panel')))
+  }, [])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -245,7 +250,8 @@ export const Dropdown = <TValue extends string>({
     `ui-dropdown--value-${valueDisplay}`,
     fill ? 'ui-dropdown--fill' : null,
     menuOpen ? 'ui-dropdown--open' : null,
-    disabled ? 'ui-dropdown--disabled' : null
+    disabled ? 'ui-dropdown--disabled' : null,
+    inFloatingPane ? 'ui-dropdown--floating-pane' : null
   ]
     .filter(Boolean)
     .join(' ')
