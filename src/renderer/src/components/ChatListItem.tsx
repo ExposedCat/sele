@@ -39,7 +39,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
   onMarkDone,
   onTogglePinned
 }) => {
-  const updatedAt = new Date(chat.updatedAt)
+  const createdAt = new Date(chat.createdAt)
   const projectName = getChatProjectName(chat.cwd)
   const workingStatus = chat.status && workingStatuses.has(chat.status) ? chat.status : null
   const trailingStatus = chat.status && !workingStatus ? chat.status : null
@@ -80,7 +80,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
             <Folder className="chat-list-item__folder" aria-hidden="true" />
             <span className="chat-list-item__project">{projectName}</span>
             <span className="chat-list-item__separator">·</span>
-            <time dateTime={updatedAt.toISOString()}>{updatedAt.toLocaleDateString()}</time>
+            <time dateTime={createdAt.toISOString()}>{createdAt.toLocaleDateString()}</time>
           </span>
         </span>
       </button>

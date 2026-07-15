@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
 import type {
+  AppColorScheme,
   AppGitCommitAction,
   AppGitCommitOptions,
   AppGitChangeKind,
@@ -15,6 +16,16 @@ const getDefaultPath = (value: unknown): string | undefined => {
   if (value == null) return undefined
   if (typeof value !== 'string' || !isAbsolute(value)) throw new Error('Invalid folder path')
   return value
+}
+
+const getColorScheme = (): AppColorScheme => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+
+const logColorSchemeIpcRead = (scheme: AppColorScheme): void => {
+  console.info('[color-scheme]', 'nativeTheme ipc read', {
+    scheme,
+    shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+    themeSource: nativeTheme.themeSource
+  })
 }
 
 type BranchBase = {
@@ -362,6 +373,12 @@ const pushGitChanges = async (cwd: string): Promise<{ pushed: boolean }> => {
 }
 
 export const registerAppIpc = (): void => {
+  ipcMain.handle(appIpcChannels.getColorScheme, () => {
+    const scheme = getColorScheme()
+    logColorSchemeIpcRead(scheme)
+    return scheme
+  })
+
   ipcMain.handle(appIpcChannels.getDefaultCwd, () => process.cwd())
 
   ipcMain.handle(appIpcChannels.getGitChanges, async (_event, value: unknown) => {

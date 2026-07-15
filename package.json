@@ -34,7 +34,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
-    "electron": "^43.1.0",
+    "electron": "^38.5.0",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
     "eslint": "^9.39.1",
@@ -51,6 +51,10 @@
     "better-sqlite3@12.11.1": true,
     "electron-winstaller@5.4.0": true,
     "esbuild@0.25.12": true,
-    "esbuild@0.28.1": true
+    "esbuild@0.28.1": true,
+    "electron@38.5.0": true
+  },
+  "volta": {
+    "node": "22.23.1"
   }
 }

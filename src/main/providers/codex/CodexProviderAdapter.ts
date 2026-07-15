@@ -347,9 +347,6 @@ const normalizeGeneratedTitle = (value: string, maxLength = 36): string | null =
   return title ? truncateTitle(title, maxLength) : null
 }
 
-const createFallbackThreadTitle = (prompt: string): string | null =>
-  normalizeGeneratedTitle(prompt, 60)
-
 const createThreadTitlePrompt = (prompt: string): string =>
   [
     'You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task that will be created from that prompt.',
@@ -379,11 +376,24 @@ const getAgentMessageText = (turn: CodexTurn): string | null => {
   return message?.text?.trim() || null
 }
 
+const getAgentMessageTextFromItem = (item: unknown): string | null => {
+  const message = getRecordValue(item)
+  if (message?.type !== 'agentMessage') return null
+
+  return getStringValue(message.text)
+}
+
+const getJsonText = (text: string): string => {
+  const trimmed = text.trim()
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
+  return fenced?.[1]?.trim() ?? trimmed
+}
+
 const parseThreadTitleGenerationResult = (text: string): ThreadNameGenerationResult | null => {
   let parsed: unknown
 
   try {
-    parsed = JSON.parse(text)
+    parsed = JSON.parse(getJsonText(text))
   } catch {
     return null
   }
@@ -392,6 +402,9 @@ const parseThreadTitleGenerationResult = (text: string): ThreadNameGenerationRes
   const title = rawTitle ? normalizeGeneratedTitle(rawTitle) : null
   return title ? { title } : null
 }
+
+const getGeneratedThreadTitle = (text: string): string | null =>
+  parseThreadTitleGenerationResult(text)?.title ?? normalizeGeneratedTitle(text)
 
 const getAccessMode = (options?: ProviderTurnOptions): ProviderTurnOptions['accessMode'] =>
   options?.accessMode ?? 'sandbox'
@@ -505,7 +518,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const response = await this.client.request<ThreadListResponse>('thread/list', {
       cursor: options.cursor ?? null,
       limit: options.limit ?? 50,
-      sortKey: 'updated_at',
+      sortKey: 'created_at',
       sortDirection: 'desc',
       archived: false
     })
@@ -890,12 +903,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const currentThread = this.threads.get(threadId)
     if (currentThread && getThreadName(currentThread)) return
 
-    const fallbackTitle = createFallbackThreadTitle(prompt)
     const generatedTitle = await this.generateThreadTitle(prompt, cwd).catch(() => null)
-    const title = generatedTitle ?? fallbackTitle
-    if (!title) return
+    if (!generatedTitle) return
 
-    await this.setThreadNameIfUntitled(threadId, title)
+    await this.setThreadNameIfUntitled(threadId, generatedTitle)
   }
 
   private generateThreadTitle = async (
@@ -917,7 +928,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
       ephemeral: true
     })
     const titleThreadId = startedThread.thread.id
-    const completedTurn = this.waitForTitleGenerationTurn(titleThreadId)
+    const generatedText = this.waitForTitleGenerationText(titleThreadId)
 
     try {
       await this.client.request<TurnStartResponse>('turn/start', {
@@ -931,22 +942,22 @@ export class CodexProviderAdapter implements ProviderAdapter {
         outputSchema: titleGenerationOutputSchema
       })
 
-      const turn = await completedTurn
-      const text = getAgentMessageText(turn)
+      const text = await generatedText
       if (!text) return null
 
-      return parseThreadTitleGenerationResult(text)?.title ?? null
+      return getGeneratedThreadTitle(text)
     } catch (error) {
-      completedTurn.catch(() => {})
+      generatedText.catch(() => {})
       throw error
     } finally {
       await this.client.request('thread/unsubscribe', { threadId: titleThreadId }).catch(() => {})
     }
   }
 
-  private waitForTitleGenerationTurn = (threadId: string): Promise<CodexTurn> =>
+  private waitForTitleGenerationText = (threadId: string): Promise<string | null> =>
     new Promise((resolve, reject) => {
       let turnId: string | null = null
+      let agentMessageText = ''
 
       const cleanup = (): void => {
         clearTimeout(timeout)
@@ -970,6 +981,25 @@ export class CodexProviderAdapter implements ProviderAdapter {
           return
         }
 
+        if (
+          notification.method === 'item/agentMessage/delta' ||
+          notification.method === 'item/completed'
+        ) {
+          const notificationTurnId = getTurnId(params ?? {})
+          if (turnId && notificationTurnId && notificationTurnId !== turnId) return
+          if (!turnId && notificationTurnId) turnId = notificationTurnId
+
+          if (notification.method === 'item/agentMessage/delta') {
+            const delta = getDelta(params ?? {})
+            if (delta) agentMessageText = `${agentMessageText}${delta}`
+            return
+          }
+
+          const messageText = getAgentMessageTextFromItem(params?.item)
+          if (messageText) agentMessageText = messageText
+          return
+        }
+
         if (notification.method !== 'turn/completed') return
 
         const completedTurn = getRecordValue(params?.turn) as CodexTurn | null
@@ -983,7 +1013,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
           return
         }
 
-        resolve(completedTurn)
+        resolve(agentMessageText.trim() || getAgentMessageText(completedTurn))
       })
     })
 

@@ -64,6 +64,10 @@ type ChatPaneWidths = {
   sidebar: number
   changes: number
 }
+type ChatPanePercents = {
+  sidebar: number
+  changes: number
+}
 type ChatResizeEdge = 'left' | 'right'
 
 const chatPageSize = 20
@@ -74,6 +78,8 @@ const changesSidebarMinWidth = 220
 const chatBlockMinWidth = 320
 const chatResizeHandleWidth = 9
 const chatResizeHandleCount = 2
+const chatPaneDefaultReferenceWidth = 1200
+const chatPanePreferenceStorageKey = 'sele:chat-pane-preference:v1'
 const pinnedGroupKey = 'pinned'
 const unknownCwdGroupKey = 'cwd:unknown'
 const doneGroupKey = 'done'
@@ -112,6 +118,123 @@ const getDropdownOptions = <TValue extends string>(
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), Math.max(min, max))
 
+const roundPanePercent = (value: number): number => Math.round(value * 1000) / 1000
+
+const getChatPanePercentsFromWidths = (
+  widths: ChatPaneWidths,
+  totalWidth: number
+): ChatPanePercents => {
+  const referenceWidth = totalWidth > 0 ? totalWidth : chatPaneDefaultReferenceWidth
+
+  return {
+    sidebar: roundPanePercent((widths.sidebar / referenceWidth) * 100),
+    changes: roundPanePercent((widths.changes / referenceWidth) * 100)
+  }
+}
+
+const getDefaultChatPanePercents = (totalWidth: number): ChatPanePercents =>
+  getChatPanePercentsFromWidths(
+    {
+      sidebar: chatSidebarDefaultWidth,
+      changes: changesSidebarDefaultWidth
+    },
+    totalWidth
+  )
+
+const getChatPaneWidthsFromPercents = (
+  percents: ChatPanePercents,
+  totalWidth: number
+): ChatPaneWidths => {
+  const referenceWidth = totalWidth > 0 ? totalWidth : chatPaneDefaultReferenceWidth
+
+  return {
+    sidebar: (percents.sidebar / 100) * referenceWidth,
+    changes: (percents.changes / 100) * referenceWidth
+  }
+}
+
+const clampChatPaneWidthsToAvailable = (
+  widths: ChatPaneWidths,
+  totalWidth: number
+): ChatPaneWidths => {
+  if (!totalWidth) return widths
+
+  const handleWidth = chatResizeHandleWidth * chatResizeHandleCount
+  const availableForSidebars = Math.max(0, totalWidth - handleWidth - chatBlockMinWidth)
+  const minimumSidebarTotal = chatSidebarMinWidth + changesSidebarMinWidth
+
+  if (availableForSidebars <= minimumSidebarTotal) {
+    return {
+      sidebar: chatSidebarMinWidth,
+      changes: changesSidebarMinWidth
+    }
+  }
+
+  let sidebar = Math.max(widths.sidebar, chatSidebarMinWidth)
+  let changes = Math.max(widths.changes, changesSidebarMinWidth)
+  const overflow = sidebar + changes - availableForSidebars
+
+  if (overflow > 0) {
+    const sidebarShrinkCapacity = sidebar - chatSidebarMinWidth
+    const changesShrinkCapacity = changes - changesSidebarMinWidth
+    const shrinkCapacity = sidebarShrinkCapacity + changesShrinkCapacity
+
+    if (shrinkCapacity > 0) {
+      sidebar -= overflow * (sidebarShrinkCapacity / shrinkCapacity)
+      changes -= overflow * (changesShrinkCapacity / shrinkCapacity)
+    }
+  }
+
+  return {
+    sidebar: Math.round(sidebar),
+    changes: Math.round(changes)
+  }
+}
+
+const clampChatPanePercentsToAvailable = (
+  percents: ChatPanePercents,
+  totalWidth: number
+): ChatPanePercents => {
+  if (!totalWidth) return percents
+
+  return getChatPanePercentsFromWidths(
+    clampChatPaneWidthsToAvailable(getChatPaneWidthsFromPercents(percents, totalWidth), totalWidth),
+    totalWidth
+  )
+}
+
+const formatChatPanePercent = (percent: number): string => `${roundPanePercent(percent)}%`
+
+const isChatPanePercentValue = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 && value < 100
+
+const readStoredChatPanePercents = (): ChatPanePercents | null => {
+  try {
+    const storedValue = window.localStorage.getItem(chatPanePreferenceStorageKey)
+    if (!storedValue) return null
+
+    const parsedValue = JSON.parse(storedValue) as Partial<ChatPanePercents> | null
+    if (!parsedValue || typeof parsedValue !== 'object') return null
+    if (!isChatPanePercentValue(parsedValue.sidebar)) return null
+    if (!isChatPanePercentValue(parsedValue.changes)) return null
+
+    return {
+      sidebar: roundPanePercent(parsedValue.sidebar),
+      changes: roundPanePercent(parsedValue.changes)
+    }
+  } catch {
+    return null
+  }
+}
+
+const writeStoredChatPanePercents = (percents: ChatPanePercents): void => {
+  try {
+    window.localStorage.setItem(chatPanePreferenceStorageKey, JSON.stringify(percents))
+  } catch {
+    // Layout preferences are non-critical; ignore unavailable storage.
+  }
+}
+
 const providerOptions = getDropdownOptions(providerLabels)
 const changeSourceOptions = getDropdownOptions(changeSourceLabels)
 
@@ -122,6 +245,14 @@ const approvalTypeLabels = {
 
 const getChatKey = (chat: Pick<ProviderChat, 'providerId' | 'id'>): string =>
   `${chat.providerId}:${chat.id}`
+
+const compareChatsByCreatedAtDesc = (firstChat: ProviderChat, secondChat: ProviderChat): number => {
+  if (secondChat.createdAt !== firstChat.createdAt) {
+    return secondChat.createdAt - firstChat.createdAt
+  }
+
+  return secondChat.updatedAt - firstChat.updatedAt
+}
 
 const mergeChats = (...chatGroups: ProviderChat[][]): ProviderChat[] => {
   const chatsById = new Map<string, ProviderChat>()
@@ -137,13 +268,7 @@ const mergeChats = (...chatGroups: ProviderChat[][]): ProviderChat[] => {
     }
   }
 
-  return Array.from(chatsById.values()).sort((firstChat, secondChat) => {
-    if (secondChat.updatedAt !== firstChat.updatedAt) {
-      return secondChat.updatedAt - firstChat.updatedAt
-    }
-
-    return secondChat.createdAt - firstChat.createdAt
-  })
+  return Array.from(chatsById.values()).sort(compareChatsByCreatedAtDesc)
 }
 
 const getLastPathPart = (path: string): string => {
@@ -177,13 +302,7 @@ const getCollapsedGroupState = (
 ): boolean => collapsedGroups[groupKey] ?? getDefaultCollapsedGroupState(groupKey)
 
 const sortChatsForGroup = (chats: ProviderChat[]): ProviderChat[] =>
-  [...chats].sort((firstChat, secondChat) => {
-    if (secondChat.updatedAt !== firstChat.updatedAt) {
-      return secondChat.updatedAt - firstChat.updatedAt
-    }
-
-    return secondChat.createdAt - firstChat.createdAt
-  })
+  [...chats].sort(compareChatsByCreatedAtDesc)
 
 const groupChatsForSidebar = (chats: ProviderChat[]): ChatListGroupData[] => {
   const groupsByCwd = new Map<string, ChatListGroupData>()
@@ -449,10 +568,10 @@ export const App: React.FC = () => {
   const [commitError, setCommitError] = useState<string | null>(null)
   const [pushState, setPushState] = useState<SendState>('idle')
   const [pushError, setPushError] = useState<string | null>(null)
-  const [paneWidths, setPaneWidths] = useState<ChatPaneWidths>({
-    sidebar: chatSidebarDefaultWidth,
-    changes: changesSidebarDefaultWidth
-  })
+  const [panePercents, setPanePercents] = useState<ChatPanePercents | null>(
+    readStoredChatPanePercents
+  )
+  const [panelsWidth, setPanelsWidth] = useState(0)
   const panelsRef = useRef<HTMLDivElement>(null)
   const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -462,54 +581,39 @@ export const App: React.FC = () => {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
 
-  const clampPaneWidthsToAvailable = useCallback((widths: ChatPaneWidths): ChatPaneWidths => {
-    const totalWidth = panelsRef.current?.getBoundingClientRect().width ?? 0
-    if (!totalWidth) return widths
-
-    const handleWidth = chatResizeHandleWidth * chatResizeHandleCount
-    const availableForSidebars = Math.max(0, totalWidth - handleWidth - chatBlockMinWidth)
-    const minimumSidebarTotal = chatSidebarMinWidth + changesSidebarMinWidth
-
-    if (availableForSidebars <= minimumSidebarTotal) {
-      return {
-        sidebar: chatSidebarMinWidth,
-        changes: changesSidebarMinWidth
-      }
-    }
-
-    let sidebar = Math.max(widths.sidebar, chatSidebarMinWidth)
-    let changes = Math.max(widths.changes, changesSidebarMinWidth)
-    const overflow = sidebar + changes - availableForSidebars
-
-    if (overflow > 0) {
-      const sidebarShrinkCapacity = sidebar - chatSidebarMinWidth
-      const changesShrinkCapacity = changes - changesSidebarMinWidth
-      const shrinkCapacity = sidebarShrinkCapacity + changesShrinkCapacity
-
-      if (shrinkCapacity > 0) {
-        sidebar -= overflow * (sidebarShrinkCapacity / shrinkCapacity)
-        changes -= overflow * (changesShrinkCapacity / shrinkCapacity)
-      }
-    }
-
-    return {
-      sidebar: Math.round(sidebar),
-      changes: Math.round(changes)
-    }
-  }, [])
+  const defaultPanePercents = useMemo(() => getDefaultChatPanePercents(panelsWidth), [panelsWidth])
+  const preferredPanePercents = panePercents ?? defaultPanePercents
+  const displayedPanePercents = useMemo(
+    () => clampChatPanePercentsToAvailable(preferredPanePercents, panelsWidth),
+    [panelsWidth, preferredPanePercents]
+  )
 
   useEffect(() => {
-    const handleResize = (): void => {
-      setPaneWidths((currentWidths) => clampPaneWidthsToAvailable(currentWidths))
+    if (!panePercents) return
+
+    writeStoredChatPanePercents(panePercents)
+  }, [panePercents])
+
+  useEffect(() => {
+    const panels = panelsRef.current
+    if (!panels) return
+
+    const updatePanelsWidth = (width: number): void => {
+      const roundedWidth = Math.round(width)
+      setPanelsWidth((currentWidth) =>
+        currentWidth === roundedWidth ? currentWidth : roundedWidth
+      )
     }
 
-    handleResize()
-    window.addEventListener('resize', handleResize)
+    updatePanelsWidth(panels.getBoundingClientRect().width)
 
-    return () => {
-      window.removeEventListener('resize', handleResize)
-    }
-  }, [clampPaneWidthsToAvailable])
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) updatePanelsWidth(entry.contentRect.width)
+    })
+    observer.observe(panels)
+
+    return () => observer.disconnect()
+  }, [])
 
   const handleStartChatResize = useCallback(
     (edge: ChatResizeEdge, event: React.PointerEvent<HTMLDivElement>): void => {
@@ -522,8 +626,10 @@ export const App: React.FC = () => {
       event.currentTarget.blur()
 
       const startX = event.clientX
-      const startWidths = paneWidths
       const totalWidth = panels.getBoundingClientRect().width
+      if (!totalWidth) return
+
+      const startWidths = getChatPaneWidthsFromPercents(displayedPanePercents, totalWidth)
       const handleWidth = chatResizeHandleWidth * chatResizeHandleCount
       const previousCursor = document.body.style.cursor
       const previousUserSelect = document.body.style.userSelect
@@ -534,27 +640,31 @@ export const App: React.FC = () => {
       const handlePointerMove = (moveEvent: PointerEvent): void => {
         const deltaX = moveEvent.clientX - startX
 
-        setPaneWidths(() => {
+        setPanePercents(() => {
           if (edge === 'left') {
             const maxSidebarWidth =
               totalWidth - startWidths.changes - handleWidth - chatBlockMinWidth
 
-            return {
+            const nextWidths = {
               sidebar: Math.round(
                 clamp(startWidths.sidebar + deltaX, chatSidebarMinWidth, maxSidebarWidth)
               ),
               changes: startWidths.changes
             }
+
+            return getChatPanePercentsFromWidths(nextWidths, totalWidth)
           }
 
           const maxChangesWidth = totalWidth - startWidths.sidebar - handleWidth - chatBlockMinWidth
 
-          return {
+          const nextWidths = {
             sidebar: startWidths.sidebar,
             changes: Math.round(
               clamp(startWidths.changes - deltaX, changesSidebarMinWidth, maxChangesWidth)
             )
           }
+
+          return getChatPanePercentsFromWidths(nextWidths, totalWidth)
         })
       }
 
@@ -568,7 +678,7 @@ export const App: React.FC = () => {
       window.addEventListener('pointermove', handlePointerMove)
       window.addEventListener('pointerup', handlePointerUp)
     },
-    [paneWidths]
+    [displayedPanePercents]
   )
 
   useEffect(() => {
@@ -1188,9 +1298,14 @@ export const App: React.FC = () => {
       : changesCwd
         ? getFolderName(changesCwd)
         : 'No folder'
+  const usePercentagePaneTracks = Boolean(panePercents) || panelsWidth > 0
   const panelsStyle = {
-    '--chat-sidebar-width': `${paneWidths.sidebar}px`,
-    '--chat-changes-width': `${paneWidths.changes}px`
+    '--chat-sidebar-width': usePercentagePaneTracks
+      ? formatChatPanePercent(displayedPanePercents.sidebar)
+      : `${chatSidebarDefaultWidth}px`,
+    '--chat-changes-width': usePercentagePaneTracks
+      ? formatChatPanePercent(displayedPanePercents.changes)
+      : `${changesSidebarDefaultWidth}px`
   } as CSSProperties
 
   const renderChangedFile = (file: ChangedFile): React.ReactElement => (
