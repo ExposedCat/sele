@@ -59,15 +59,15 @@
 
 :where(.ui-button--normal) {
   min-height: var(--control-height);
-  gap: 8px;
-  padding: 0 13px;
+  gap: 9px;
+  padding: 0 16px;
   border-radius: var(--control-radius);
 }
 
 :where(.ui-button--small) {
   min-height: var(--control-height-small);
-  gap: 6px;
-  padding: 0 10px;
+  gap: 7px;
+  padding: 0 12px;
   border-radius: var(--control-radius-small);
 }
 
@@ -143,8 +143,26 @@
   border-left-color: rgb(255 255 255 / 22%);
 }
 
-:where(.ui-button-group--open .ui-button--split-toggle svg) {
+:where(.ui-button-group--open .ui-button--split-toggle .ui-button__icon) {
   transform: rotate(180deg);
+}
+
+:where(.ui-button__icon),
+.ui-button-menu__icon {
+  display: grid;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  flex: none;
+  place-items: center;
+  pointer-events: none;
+  opacity: 0.8;
+  transition: transform 160ms ease;
+}
+
+:where(.ui-button__icon svg),
+.ui-button-menu__icon svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
 }
 
 :where(.ui-button__label) {
@@ -254,23 +272,6 @@
   opacity: 0.64;
 }
 
-:where(.ui-button svg) {
-  flex: none;
-  pointer-events: none;
-  opacity: 0.8;
-  transition: transform 160ms ease;
-}
-
-:where(.ui-button--normal svg) {
-  width: 18px;
-  height: 18px;
-}
-
-:where(.ui-button--small svg) {
-  width: 17px;
-  height: 17px;
-}
-
 .ui-button-menu-root {
   position: fixed;
   z-index: 1000;
@@ -279,10 +280,10 @@
 
 .ui-button-menu {
   min-width: 100%;
-  max-width: min(280px, calc(100vw - 24px));
-  max-height: min(280px, 42vh);
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: min(420px, 56vh);
   overflow: auto;
-  padding: 5px;
+  padding: 7px;
   border: 1px solid var(--menu-border);
   border-radius: 12px;
   color: var(--lead);
@@ -295,10 +296,10 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 34px;
+  min-height: 38px;
   align-items: center;
-  gap: 9px;
-  padding: 0 9px;
+  gap: 10px;
+  padding: 0 11px;
   border: 0;
   border-radius: 7px;
   color: var(--lead);
@@ -323,19 +324,6 @@
 .ui-button-menu__item:disabled {
   color: var(--control-disabled-color);
   cursor: default;
-}
-
-.ui-button-menu__icon {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  flex: none;
-  place-items: center;
-}
-
-.ui-button-menu__icon svg {
-  width: 17px;
-  height: 17px;
 }
 
 .ui-button-menu__label {

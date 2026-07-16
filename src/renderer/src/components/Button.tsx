@@ -82,6 +82,13 @@ const getMenuRootClassName = (
     `ui-button-menu-root--${menuAlign}`
   ].join(' ')
 
+const renderIcon = (icon: ReactNode, className: string): ReactNode =>
+  icon ? (
+    <span className={className} aria-hidden="true">
+      {icon}
+    </span>
+  ) : null
+
 export const Button: FC<ButtonProps> = ({
   callback,
   disabled = false,
@@ -249,7 +256,7 @@ export const Button: FC<ButtonProps> = ({
                 type="button"
                 onClick={() => handleActionClick(action)}
               >
-                {action.icon && <span className="ui-button-menu__icon">{action.icon}</span>}
+                {renderIcon(action.icon, 'ui-button-menu__icon')}
                 <span className="ui-button-menu__label">{action.label}</span>
               </button>
             ))}
@@ -272,7 +279,7 @@ export const Button: FC<ButtonProps> = ({
           type="button"
           onClick={handleClick}
         >
-          {icon}
+          {renderIcon(icon, 'ui-button__icon')}
           {label && <span className="ui-button__label">{label}</span>}
         </button>
         <button
@@ -295,7 +302,7 @@ export const Button: FC<ButtonProps> = ({
           onClick={handleToggleClick}
           onKeyDown={handleToggleKeyDown}
         >
-          <ChevronDown aria-hidden="true" />
+          {renderIcon(<ChevronDown aria-hidden="true" />, 'ui-button__icon')}
         </button>
         {menu && createPortal(menu, document.body)}
       </span>
@@ -311,7 +318,7 @@ export const Button: FC<ButtonProps> = ({
       type="button"
       onClick={handleClick}
     >
-      {icon}
+      {renderIcon(icon, 'ui-button__icon')}
       {label && <span className="ui-button__label">{label}</span>}
     </button>
   )

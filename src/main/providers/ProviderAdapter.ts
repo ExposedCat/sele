@@ -5,12 +5,14 @@ import type {
   ProviderId,
   ProviderLoginResult,
   ProviderApprovalDecision,
+  ProviderModel,
   ProviderTurnOptions
 } from '../../shared/provider'
 
 export type ProviderAdapter = {
   id: ProviderId
   login: () => Promise<ProviderLoginResult>
+  getModels: () => Promise<ProviderModel[]>
   getChats: (options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (chatId: string) => Promise<ProviderChatDetail>
   startChat: (message: string, options?: ProviderTurnOptions) => Promise<ProviderChatDetail>

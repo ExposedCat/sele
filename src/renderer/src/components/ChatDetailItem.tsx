@@ -1,6 +1,25 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import type { ForwardRefExoticComponent, HTMLAttributes, RefAttributes } from 'react'
 import {
+  ActivityIcon as AnimatedActivityIcon,
+  BoxIcon as AnimatedBoxIcon,
+  BrainIcon as AnimatedBrainIcon,
+  DeleteIcon as AnimatedDeleteIcon,
+  FilePenLineIcon as AnimatedFilePenLineIcon,
+  FileStackIcon as AnimatedFileStackIcon,
+  FileTextIcon as AnimatedFileTextIcon,
+  GitBranchIcon as AnimatedGitBranchIcon,
+  HourglassIcon as AnimatedHourglassIcon,
+  LoaderPinwheelIcon as AnimatedLoaderPinwheelIcon,
+  PenToolIcon as AnimatedPenToolIcon,
+  SearchIcon as AnimatedSearchIcon,
+  TerminalIcon as AnimatedTerminalIcon,
+  WrenchIcon as AnimatedWrenchIcon
+} from 'lucide-animated'
+import {
+  Check,
   ChevronRight,
+  Copy,
   FilePlus2,
   FileCode2,
   FileText,
@@ -37,6 +56,18 @@ type WorkingBlock =
   | { type: 'message'; item: ProviderWorkingMessageItem }
   | { type: 'tools'; items: ProviderToolItem[] }
 
+type AnimatedIconHandle = {
+  startAnimation: () => void
+  stopAnimation: () => void
+}
+
+type AnimatedIconComponent = ForwardRefExoticComponent<
+  HTMLAttributes<HTMLDivElement> & {
+    size?: number
+    animateOnHover?: boolean
+  } & RefAttributes<AnimatedIconHandle>
+>
+
 const activityLabels: Record<ProviderToolActivity, string> = {
   read: 'read files',
   search: 'searched',
@@ -51,8 +82,43 @@ const activityLabels: Record<ProviderToolActivity, string> = {
   other: 'used tools'
 }
 
-const placeholderLabels = ['Thinking', 'Analyzing', 'Processing'] as const
+const activeActivityLabels: Record<ProviderToolActivity, string> = {
+  read: 'Reading files',
+  search: 'Searching',
+  git: 'Using Git',
+  edit: 'Changing files',
+  create: 'Creating files',
+  delete: 'Deleting files',
+  npm: 'Running npm scripts',
+  npx: 'Running npx tools',
+  script: 'Running scripts',
+  command: 'Running commands',
+  other: 'Using tools'
+}
+
+const animatedActivityIcons: Record<ProviderToolActivity, AnimatedIconComponent> = {
+  read: AnimatedFileTextIcon,
+  search: AnimatedSearchIcon,
+  git: AnimatedGitBranchIcon,
+  edit: AnimatedFilePenLineIcon,
+  create: AnimatedFileStackIcon,
+  delete: AnimatedDeleteIcon,
+  npm: AnimatedBoxIcon,
+  npx: AnimatedBoxIcon,
+  script: AnimatedPenToolIcon,
+  command: AnimatedTerminalIcon,
+  other: AnimatedWrenchIcon
+}
+
+const placeholderOptions = [
+  { label: 'Thinking', Icon: AnimatedBrainIcon },
+  { label: 'Analyzing', Icon: AnimatedActivityIcon },
+  { label: 'Processing', Icon: AnimatedLoaderPinwheelIcon },
+  { label: 'Working', Icon: AnimatedHourglassIcon }
+] satisfies Array<{ label: string; Icon: AnimatedIconComponent }>
+const longRunningActivities = new Set<ProviderToolActivity>(['npm', 'npx', 'script', 'command'])
 const silencePlaceholderDelayMs = 600
+const animatedIconReplayMs = 1_050
 const markdownOptions = {
   disableParsingRawHTML: true,
   forceBlock: true,
@@ -67,15 +133,57 @@ const markdownOptions = {
   }
 } as const
 
-const getPlaceholderLabel = (id: string): (typeof placeholderLabels)[number] => {
+const getStableIndex = (id: string, length: number): number => {
   let hash = 0
 
   for (let index = 0; index < id.length; index += 1) {
     hash = (hash * 31 + id.charCodeAt(index)) | 0
   }
 
-  return placeholderLabels[Math.abs(hash) % placeholderLabels.length]
+  return Math.abs(hash) % length
 }
+
+const getPlaceholderOption = (id: string): (typeof placeholderOptions)[number] =>
+  placeholderOptions[getStableIndex(id, placeholderOptions.length)]
+
+const activeLabelReplacements: Array<[RegExp, string]> = [
+  [/^Read\b/, 'Reading'],
+  [/^Searched\b/, 'Searching'],
+  [/^Checked\b/, 'Checking'],
+  [/^Viewed\b/, 'Viewing'],
+  [/^Ran\b/, 'Running'],
+  [/^Used\b/, 'Using'],
+  [/^Changed\b/, 'Changing'],
+  [/^Created\b/, 'Creating'],
+  [/^Deleted\b/, 'Deleting'],
+  [/^Applied\b/, 'Applying'],
+  [/^Updated\b/, 'Updating']
+]
+
+const finishedLabelPrefixes =
+  /^(Read|Searched|Checked|Viewed|Ran|Used|Changed|Created|Deleted|Applied|Updated)\b/
+
+const getActiveToolLabel = (label: string, activity: ProviderToolActivity): string => {
+  for (const [pattern, replacement] of activeLabelReplacements) {
+    if (pattern.test(label)) return label.replace(pattern, replacement)
+  }
+
+  return activeActivityLabels[activity]
+}
+
+const getFinishedToolLabel = (label: string, activity: ProviderToolActivity): string => {
+  if (finishedLabelPrefixes.test(label)) return label
+  if (label && label !== 'Tool use') return activity === 'other' ? `Used ${label}` : label
+
+  const fallback = activityLabels[activity] || activityLabels.other
+  return fallback.charAt(0).toLocaleUpperCase() + fallback.slice(1)
+}
+
+const getToolDisplayLabel = (
+  label: string,
+  activity: ProviderToolActivity,
+  active: boolean
+): string => (active ? getActiveToolLabel(label, activity) : getFinishedToolLabel(label, activity))
 
 const DiffContent: React.FC<{ tools: ProviderWorkingTool[] }> = ({ tools }) => (
   <div className="chat-detail__activity-content">
@@ -139,10 +247,59 @@ const ToolTypeIcon: React.FC<{ activity: ProviderToolActivity }> = ({ activity }
   return <Wrench aria-hidden="true" />
 }
 
-const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[] }> = ({ label, tools }) => {
+const LoopingAnimatedIcon: React.FC<{
+  Icon: AnimatedIconComponent
+  active: boolean
+}> = ({ Icon, active }) => {
+  const iconRef = useRef<AnimatedIconHandle | null>(null)
+
+  useEffect(() => {
+    const icon = iconRef.current
+
+    if (!active) {
+      icon?.stopAnimation()
+      return undefined
+    }
+
+    icon?.startAnimation()
+    const interval = window.setInterval(() => icon?.startAnimation(), animatedIconReplayMs)
+
+    return () => {
+      window.clearInterval(interval)
+      icon?.stopAnimation()
+    }
+  }, [active])
+
+  return (
+    <Icon
+      ref={iconRef}
+      className="chat-detail__animated-icon"
+      size={18}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  )
+}
+
+const ToolStatusIcon: React.FC<{ activity: ProviderToolActivity; active: boolean }> = ({
+  activity,
+  active
+}) => {
+  if (active) {
+    return <LoopingAnimatedIcon Icon={animatedActivityIcons[activity]} active={active} />
+  }
+
+  return <ToolTypeIcon activity={activity} />
+}
+
+const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[]; active: boolean }> = ({
+  label,
+  tools,
+  active
+}) => {
   const activity = tools[0]?.activity ?? 'other'
 
-  const detailLabel = label || tools[0]?.toolId || 'Tool use'
+  const detailLabel = getToolDisplayLabel(label || tools[0]?.toolId || 'Tool use', activity, active)
   const content =
     activity === 'edit' || activity === 'create' || activity === 'delete' ? (
       <DiffContent tools={tools} />
@@ -158,10 +315,12 @@ const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[] }> = ({ l
     )
 
   return (
-    <details className="chat-detail__tool-group">
+    <details
+      className={`chat-detail__tool-group${active ? ' chat-detail__tool-group--active' : ''}`}
+    >
       <summary>
         <span className="chat-detail__tool-icon">
-          <ToolTypeIcon activity={activity} />
+          <ToolStatusIcon activity={activity} active={active} />
         </span>
         <span className="chat-detail__tool-label">{detailLabel}</span>
         <ChevronRight className="chat-detail__summary-chevron" aria-hidden="true" />
@@ -171,23 +330,31 @@ const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[] }> = ({ l
   )
 }
 
-const ToolItem: React.FC<{ item: ProviderToolItem }> = ({ item }) => {
-  const tools = item.type === 'toolGroup' ? item.tools : [item]
+const getToolsFromToolItem = (item: ProviderToolItem): ProviderWorkingTool[] =>
+  item.type === 'toolGroup' ? item.tools : [item]
+
+const ToolItem: React.FC<{ item: ProviderToolItem; activeToolIds: Set<string> }> = ({
+  item,
+  activeToolIds
+}) => {
+  const tools = getToolsFromToolItem(item)
   const activity = tools[0]?.activity ?? 'other'
-  const label = item.label || tools[0]?.toolId || 'Tool use'
+  const active = tools.some((tool) => activeToolIds.has(tool.id))
+  const rawLabel = item.label || tools[0]?.toolId || 'Tool use'
+  const label = getToolDisplayLabel(rawLabel, activity, active)
 
   if (activity === 'read') {
     return (
-      <div className="chat-detail__tool-read">
+      <div className={`chat-detail__tool-read${active ? ' chat-detail__tool-read--active' : ''}`}>
         <span className="chat-detail__tool-icon">
-          <ToolTypeIcon activity="read" />
+          <ToolStatusIcon activity="read" active={active} />
         </span>
         <span className="chat-detail__tool-label">{label}</span>
       </div>
     )
   }
 
-  return <Activity label={label} tools={tools} />
+  return <Activity label={rawLabel} tools={tools} active={active} />
 }
 
 const MarkdownMessage: React.FC<{ className: string; content: string }> = ({
@@ -198,6 +365,92 @@ const MarkdownMessage: React.FC<{ className: string; content: string }> = ({
     <Markdown options={markdownOptions}>{content}</Markdown>
   </div>
 )
+
+const copyTextToClipboard = async (content: string): Promise<void> => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content)
+    return
+  }
+
+  const textArea = document.createElement('textarea')
+  textArea.value = content
+  textArea.style.position = 'fixed'
+  textArea.style.inset = '0 auto auto 0'
+  textArea.style.opacity = '0'
+  document.body.append(textArea)
+  textArea.focus()
+  textArea.select()
+
+  try {
+    if (!document.execCommand('copy')) throw new Error('Unable to copy message')
+  } finally {
+    textArea.remove()
+  }
+}
+
+const formatMessageTimestamp = (
+  timestamp: number | null | undefined
+): { dateTime: string; label: string } | null => {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return null
+
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return null
+
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  const sameYear = date.getFullYear() === now.getFullYear()
+  const timeLabel = date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+  const dayMonthLabel = date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short'
+  })
+  const dayMonthYearLabel = date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  })
+  const dateLabel = sameDay ? '' : sameYear ? dayMonthLabel : dayMonthYearLabel
+
+  return {
+    dateTime: date.toISOString(),
+    label: dateLabel ? `${dateLabel}, ${timeLabel}` : timeLabel
+  }
+}
+
+const MessageDate: React.FC<{
+  timestamp: ReturnType<typeof formatMessageTimestamp>
+  markerSide: 'left' | 'right'
+}> = ({ timestamp, markerSide }) => {
+  if (!timestamp) {
+    return <span className="chat-detail__message-date chat-detail__message-date--empty" />
+  }
+
+  return (
+    <time
+      className="chat-detail__message-date"
+      dateTime={timestamp.dateTime}
+      title={timestamp.label}
+    >
+      {markerSide === 'left' && (
+        <span className="chat-detail__message-date-marker" aria-hidden="true">
+          ·
+        </span>
+      )}
+      <span>{timestamp.label}</span>
+      {markerSide === 'right' && (
+        <span className="chat-detail__message-date-marker" aria-hidden="true">
+          ·
+        </span>
+      )}
+    </time>
+  )
+}
 
 const getSequenceLabel = (tools: ProviderWorkingTool[]): string => {
   const labels = [...new Set(tools.map((tool) => activityLabels[tool.activity]))]
@@ -220,22 +473,30 @@ const getDominantActivity = (tools: ProviderWorkingTool[]): ProviderToolActivity
   )
 }
 
-const ToolSequence: React.FC<{ items: ProviderToolItem[] }> = ({ items }) => {
-  const tools = items.flatMap((item) => (item.type === 'toolGroup' ? item.tools : [item]))
-  const dominantActivity = getDominantActivity(tools)
+const ToolSequence: React.FC<{ items: ProviderToolItem[]; activeToolIds: Set<string> }> = ({
+  items,
+  activeToolIds
+}) => {
+  const tools = items.flatMap(getToolsFromToolItem)
+  const activeTools = tools.filter((tool) => activeToolIds.has(tool.id))
+  const active = activeTools.length > 0
+  const dominantActivity = getDominantActivity(active ? activeTools : tools)
+  const label = active ? activeActivityLabels[dominantActivity] : getSequenceLabel(tools)
 
   return (
-    <details className="chat-detail__tool-sequence">
+    <details
+      className={`chat-detail__tool-sequence${active ? ' chat-detail__tool-sequence--active' : ''}`}
+    >
       <summary>
         <span className="chat-detail__tool-icon">
-          <ToolTypeIcon activity={dominantActivity} />
+          <ToolStatusIcon activity={dominantActivity} active={active} />
         </span>
-        <span className="chat-detail__tool-label">{getSequenceLabel(tools)}</span>
+        <span className="chat-detail__tool-label">{label}</span>
         <ChevronRight className="chat-detail__summary-chevron" aria-hidden="true" />
       </summary>
       <div className="chat-detail__tool-sequence-content">
         {items.map((item) => (
-          <ToolItem item={item} key={item.id} />
+          <ToolItem item={item} activeToolIds={activeToolIds} key={item.id} />
         ))}
       </div>
     </details>
@@ -243,12 +504,14 @@ const ToolSequence: React.FC<{ items: ProviderToolItem[] }> = ({ items }) => {
 }
 
 const WorkingPlaceholder: React.FC<{ id: string }> = ({ id }) => {
+  const placeholder = getPlaceholderOption(id)
+
   return (
-    <div className="chat-detail__tool-read chat-detail__tool-placeholder">
+    <div className="chat-detail__tool-read chat-detail__tool-read--active chat-detail__tool-placeholder">
       <span className="chat-detail__tool-icon">
-        <span className="chat-detail__tool-dot" aria-hidden="true" />
+        <LoopingAnimatedIcon Icon={placeholder.Icon} active />
       </span>
-      <span className="chat-detail__tool-label">{getPlaceholderLabel(id)}</span>
+      <span className="chat-detail__tool-label">{placeholder.label}</span>
     </div>
   )
 }
@@ -262,9 +525,12 @@ const getToolSignature = (tool: ProviderWorkingTool): string =>
   [
     tool.id,
     tool.label,
+    tool.status,
     tool.command?.length ?? 0,
     tool.stdout?.length ?? 0,
-    tool.diffs.map((diff) => `${diff.path}:${diff.diff.length}`).join(',')
+    tool.diffs.map((diff) => `${diff.path}:${diff.diff.length}`).join(','),
+    tool.backgroundSessionId,
+    tool.finishedBackgroundSessionId
   ].join(':')
 
 const getWorkingItemSignature = (item: ProviderWorkingItem): string => {
@@ -274,6 +540,41 @@ const getWorkingItemSignature = (item: ProviderWorkingItem): string => {
   }
 
   return `tool:${getToolSignature(item)}`
+}
+
+const getActiveToolIds = (item: ProviderWorkingStep): Set<string> => {
+  const activeToolIds = new Set<string>()
+  if (item.status !== 'working') return activeToolIds
+
+  const closedBackgroundSessionIds = new Set<string>()
+
+  for (let itemIndex = item.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const workingItem = item.items[itemIndex]
+    if (workingItem.type === 'message') continue
+
+    const tools = getToolsFromToolItem(workingItem)
+    for (let toolIndex = tools.length - 1; toolIndex >= 0; toolIndex -= 1) {
+      const tool = tools[toolIndex]
+      if (tool.finishedBackgroundSessionId) {
+        closedBackgroundSessionIds.add(tool.finishedBackgroundSessionId)
+      }
+      if (tool.backgroundSessionId && !closedBackgroundSessionIds.has(tool.backgroundSessionId)) {
+        activeToolIds.add(tool.id)
+      }
+      if (tool.status === 'running' && longRunningActivities.has(tool.activity)) {
+        activeToolIds.add(tool.id)
+      }
+    }
+  }
+
+  const lastItem = item.items.at(-1)
+  if (lastItem && lastItem.type !== 'message') {
+    for (const tool of getToolsFromToolItem(lastItem)) {
+      activeToolIds.add(tool.id)
+    }
+  }
+
+  return activeToolIds
 }
 
 const useSilencePlaceholder = (signature: string, active: boolean, immediate: boolean): boolean => {
@@ -318,14 +619,16 @@ const groupWorkingItems = (items: ProviderWorkingItem[]): WorkingBlock[] => {
 
 const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   const blocks = groupWorkingItems(item.items)
+  const lastWorkingItem = item.items.at(-1)
   const signature = useMemo(
     () => `${item.status}:${item.items.map(getWorkingItemSignature).join('|')}`,
     [item.items, item.status]
   )
+  const activeToolIds = useMemo(() => getActiveToolIds(item), [item])
   const showPlaceholder = useSilencePlaceholder(
     signature,
-    item.status === 'working',
-    blocks.length === 0
+    item.status === 'working' && (!lastWorkingItem || lastWorkingItem.type === 'message'),
+    !lastWorkingItem
   )
   const label =
     item.status === 'stopped' ? 'Stopped' : item.status === 'worked' ? 'Worked' : 'Working'
@@ -379,9 +682,15 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
           block.type === 'tools' ? (
             block.items.length > 1 &&
             (blockIndex < blocks.length - 1 || item.status !== 'working' || showPlaceholder) ? (
-              <ToolSequence items={block.items} key={block.items[0]?.id} />
+              <ToolSequence
+                items={block.items}
+                activeToolIds={activeToolIds}
+                key={block.items[0]?.id}
+              />
             ) : (
-              block.items.map((toolItem) => <ToolItem item={toolItem} key={toolItem.id} />)
+              block.items.map((toolItem) => (
+                <ToolItem item={toolItem} activeToolIds={activeToolIds} key={toolItem.id} />
+              ))
             )
           ) : (
             <MarkdownMessage
@@ -402,35 +711,62 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   item,
   onEditMessage
 }) => {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!copied) return undefined
+
+    const timeout = window.setTimeout(() => setCopied(false), 1_200)
+    return () => window.clearTimeout(timeout)
+  }, [copied])
+
   if (item.type === 'message') {
     const canEdit = item.role === 'user' && canEditOwnMessages && Boolean(onEditMessage)
-
-    if (canEdit) {
-      return (
-        <div className="chat-detail__message-row chat-detail__message-row--user">
-          <span className="chat-detail__message-edit-slot">
-            <Button
-              theme="secondary"
-              size="small"
-              aria-label="Edit message"
-              title="Edit message"
-              callback={() => onEditMessage?.(item)}
-              icon={<Pencil aria-hidden="true" />}
-            />
-          </span>
-          <MarkdownMessage
-            className={`chat-detail__message chat-detail__message--${item.role}`}
-            content={item.content}
-          />
-        </div>
-      )
+    const timestamp = formatMessageTimestamp(item.createdAt)
+    const handleCopyMessage = async (): Promise<void> => {
+      await copyTextToClipboard(item.content)
+      setCopied(true)
     }
+    const messageActions = (
+      <span className="chat-detail__message-actions">
+        {canEdit ? (
+          <Button
+            theme="secondary"
+            size="small"
+            aria-label="Edit message"
+            title="Edit message"
+            callback={() => onEditMessage?.(item)}
+            icon={<Pencil aria-hidden="true" />}
+          />
+        ) : item.role === 'user' ? (
+          <span className="chat-detail__message-action-placeholder" aria-hidden="true" />
+        ) : null}
+        <Button
+          theme="secondary"
+          size="small"
+          aria-label={copied ? 'Copied message' : 'Copy message'}
+          title={copied ? 'Copied' : 'Copy message'}
+          callback={handleCopyMessage}
+          icon={copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        />
+      </span>
+    )
+    const messageDate = (
+      <MessageDate markerSide={item.role === 'user' ? 'right' : 'left'} timestamp={timestamp} />
+    )
 
     return (
-      <MarkdownMessage
-        className={`chat-detail__message chat-detail__message--${item.role}`}
-        content={item.content}
-      />
+      <div className={`chat-detail__message-block chat-detail__message-block--${item.role}`}>
+        <MarkdownMessage
+          className={`chat-detail__message chat-detail__message--${item.role}`}
+          content={item.content}
+        />
+        <div className="chat-detail__message-footer">
+          {item.role === 'user' && messageDate}
+          {messageActions}
+          {item.role === 'assistant' && messageDate}
+        </div>
+      </div>
     )
   }
 

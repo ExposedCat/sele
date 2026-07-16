@@ -1,7 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
-import { ArrowUp, Square } from 'lucide-react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
+import {
+  ArrowUp,
+  BadgeCheck,
+  Bot,
+  Flame,
+  Gauge,
+  Shield,
+  SlidersHorizontal,
+  Sparkles,
+  Square,
+  UnlockKeyhole,
+  Zap
+} from 'lucide-react'
 import type {
   ProviderAccessMode,
+  ProviderModel,
   ProviderModelId,
   ProviderReasoningEffort
 } from '../../../shared/provider'
@@ -17,6 +30,7 @@ type MessageBoxProps = {
   editSession?: { id: string; content: string } | null
   error?: string | null
   model: ProviderModelId
+  models: ProviderModel[]
   pending?: boolean
   reasoningEffort: ProviderReasoningEffort
   onAccessModeChange: (accessMode: ProviderAccessMode) => void
@@ -36,34 +50,85 @@ const accessModeLabels = {
   full: 'Full access'
 } satisfies Record<ProviderAccessMode, string>
 
-const modelLabels = {
-  'gpt-5.6-sol': 'GPT-5.6 Sol',
-  'gpt-5.6-terra': 'GPT-5.6 Terra',
-  'gpt-5.6-luna': 'GPT-5.6 Luna',
-  'gpt-5.5': 'GPT-5.5',
-  'gpt-5.4': 'GPT-5.4',
-  'gpt-5.4-mini': 'GPT-5.4 Mini',
-  'gpt-5.3-codex-spark': 'GPT-5.3 Spark'
-} satisfies Record<ProviderModelId, string>
-
 const reasoningEffortLabels = {
+  none: 'None',
+  minimal: 'Minimal',
   low: 'Low',
   medium: 'Medium',
   high: 'High',
-  xhigh: 'X High'
-} satisfies Record<ProviderReasoningEffort, string>
+  xhigh: 'X High',
+  max: 'Max',
+  ultra: 'Ultra'
+} satisfies Record<string, string>
+
+const defaultAccessMode = 'sandbox' satisfies ProviderAccessMode
+
+const accessModeIcons = {
+  sandbox: <Shield aria-hidden="true" />,
+  auto: <BadgeCheck aria-hidden="true" />,
+  full: <UnlockKeyhole aria-hidden="true" />
+} satisfies Record<ProviderAccessMode, ReactNode>
+
+const reasoningEffortIcons = {
+  none: <Gauge aria-hidden="true" />,
+  minimal: <Gauge aria-hidden="true" />,
+  low: <Gauge aria-hidden="true" />,
+  medium: <SlidersHorizontal aria-hidden="true" />,
+  high: <Zap aria-hidden="true" />,
+  xhigh: <Flame aria-hidden="true" />,
+  max: <Sparkles aria-hidden="true" />,
+  ultra: <Sparkles aria-hidden="true" />
+} satisfies Record<string, ReactNode>
+
+const getReasoningEffortLabel = (reasoningEffort: ProviderReasoningEffort): string => {
+  const fallbackLabel =
+    reasoningEffort
+      .split(/[-_\s]+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
+      .join(' ') || reasoningEffort
+
+  return reasoningEffortLabels[reasoningEffort] ?? fallbackLabel
+}
+
+const getReasoningEffortOptionLabel = (
+  reasoningEffort: ProviderReasoningEffort,
+  label: string
+): string => {
+  if (reasoningEffortLabels[reasoningEffort]) return reasoningEffortLabels[reasoningEffort]
+  if (label && label !== reasoningEffort) return label
+
+  return getReasoningEffortLabel(reasoningEffort)
+}
+
+const getReasoningEffortIcon = (reasoningEffort: ProviderReasoningEffort): ReactNode =>
+  reasoningEffortIcons[reasoningEffort] ?? <SlidersHorizontal aria-hidden="true" />
+
+const formatModelLabel = (label: string): string => label.replace(/-/g, ' ')
 
 const getDropdownOptions = <TValue extends string>(
-  labels: Record<TValue, string>
+  labels: Record<TValue, string>,
+  options: {
+    defaultValue?: TValue
+    icons?: Partial<Record<TValue, ReactNode>>
+  } = {}
 ): DropdownOption<TValue>[] =>
-  Object.entries(labels).map(([value, label]) => ({
-    value: value as TValue,
-    label: label as string
-  }))
+  Object.entries(labels).map(([value, label]) => {
+    const optionValue = value as TValue
+    const optionLabel = label as string
 
-const accessModeOptions = getDropdownOptions(accessModeLabels)
-const modelOptions = getDropdownOptions(modelLabels)
-const reasoningEffortOptions = getDropdownOptions(reasoningEffortLabels)
+    return {
+      value: optionValue,
+      label: optionLabel,
+      menuLabel: options.defaultValue === optionValue ? `${optionLabel} (default)` : optionLabel,
+      icon: options.icons?.[optionValue]
+    }
+  })
+
+const accessModeOptions = getDropdownOptions(accessModeLabels, {
+  defaultValue: defaultAccessMode,
+  icons: accessModeIcons
+})
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
   accessMode,
@@ -73,6 +138,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   editSession = null,
   error = null,
   model,
+  models,
   pending = false,
   reasoningEffort,
   onAccessModeChange,
@@ -88,6 +154,54 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   const messageBeforeEditRef = useRef<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editing = Boolean(editSession)
+  const selectedModel = models.find((candidateModel) => candidateModel.id === model)
+  const modelOptions = models.map((candidateModel): DropdownOption<ProviderModelId> => ({
+    value: candidateModel.id,
+    label: formatModelLabel(candidateModel.label),
+    menuLabel: candidateModel.isDefault
+      ? `${formatModelLabel(candidateModel.label)} (default)`
+      : formatModelLabel(candidateModel.label),
+    description: candidateModel.description || undefined,
+    icon: <Bot aria-hidden="true" />
+  }))
+  const displayedModelOptions = modelOptions.some((option) => option.value === model)
+    ? modelOptions
+    : [
+        ...modelOptions,
+        {
+          value: model,
+          label: formatModelLabel(model),
+          icon: <Bot aria-hidden="true" />
+        }
+      ]
+  const supportedReasoningEfforts = selectedModel?.supportedReasoningEfforts ?? []
+  const reasoningEffortOptions = supportedReasoningEfforts.map((option) => {
+    const label = getReasoningEffortOptionLabel(option.id, option.label)
+
+    return {
+      value: option.id,
+      label,
+      menuLabel: option.isDefault ? `${label} (default)` : label,
+      description: option.description || undefined,
+      icon: getReasoningEffortIcon(option.id)
+    } satisfies DropdownOption<ProviderReasoningEffort>
+  })
+  const displayedReasoningEffortOptions = reasoningEffortOptions.some(
+    (option) => option.value === reasoningEffort
+  )
+    ? reasoningEffortOptions
+    : [
+        ...reasoningEffortOptions,
+        {
+          value: reasoningEffort,
+          label: getReasoningEffortLabel(reasoningEffort),
+          icon: getReasoningEffortIcon(reasoningEffort)
+        }
+      ]
+  const selectedModelTitle = selectedModel?.description
+    ? `${formatModelLabel(selectedModel.label)}: ${selectedModel.description}`
+    : formatModelLabel(selectedModel?.label ?? model)
+  const selectedReasoningEffortLabel = getReasoningEffortLabel(reasoningEffort)
 
   useEffect(() => {
     messageRef.current = message
@@ -210,28 +324,28 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           }}
         />
         <div className="message-box__controls">
-          <span className="message-box__select message-box__access">
-            <Dropdown
-              id="access-mode"
-              disabled={selectorsDisabled}
-              fill
-              options={accessModeOptions}
-              placement="top"
-              value={accessMode}
-              title={accessModeLabels[accessMode]}
-              onChange={onAccessModeChange}
-            />
-          </span>
-          <div className="message-box__send-controls">
+          <div className="message-box__selectors">
+            <span className="message-box__select message-box__access">
+              <Dropdown
+                id="access-mode"
+                disabled={selectorsDisabled}
+                icon={accessModeIcons[accessMode]}
+                options={accessModeOptions}
+                placement="top"
+                value={accessMode}
+                title={accessModeLabels[accessMode]}
+                onChange={onAccessModeChange}
+              />
+            </span>
             <span className="message-box__select message-box__model">
               <Dropdown
                 id="model-mode"
                 disabled={selectorsDisabled}
-                fill
-                options={modelOptions}
+                icon={<Bot aria-hidden="true" />}
+                options={displayedModelOptions}
                 placement="top"
                 value={model}
-                title={modelLabels[model]}
+                title={selectedModelTitle}
                 onChange={onModelChange}
               />
             </span>
@@ -239,14 +353,16 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
               <Dropdown
                 id="reasoning-effort"
                 disabled={selectorsDisabled}
-                fill
-                options={reasoningEffortOptions}
+                icon={getReasoningEffortIcon(reasoningEffort)}
+                options={displayedReasoningEffortOptions}
                 placement="top"
                 value={reasoningEffort}
-                title={`${reasoningEffortLabels[reasoningEffort]} reasoning`}
+                title={`${selectedReasoningEffortLabel} reasoning`}
                 onChange={onReasoningEffortChange}
               />
             </span>
+          </div>
+          <div className="message-box__send-controls">
             {editing && (
               <Button
                 disabled={pending}

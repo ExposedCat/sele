@@ -15,20 +15,8 @@
 
 .message-box__select {
   display: inline-flex;
-  min-width: 0;
   flex: none;
-}
-
-.message-box__access {
-  min-width: 124px;
-}
-
-.message-box__model {
-  width: 158px;
-}
-
-.message-box__reasoning {
-  width: 102px;
+  max-width: 100%;
 }
 
 .message-box__input {
@@ -60,9 +48,19 @@
   gap: 10px;
 }
 
+.message-box__selectors {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .message-box__send-controls {
   display: flex;
   min-width: 0;
+  flex: none;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
@@ -104,21 +102,13 @@
     flex-wrap: wrap;
   }
 
+  .message-box__selectors {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+
   .message-box__send-controls {
     flex: 1;
     flex-wrap: wrap;
-  }
-
-  .message-box__access {
-    min-width: 142px;
-    max-width: 100%;
-  }
-
-  .message-box__model {
-    width: 152px;
-  }
-
-  .message-box__reasoning {
-    width: 112px;
   }
 }

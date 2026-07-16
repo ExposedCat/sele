@@ -28,6 +28,10 @@ type RolloutPayload = {
 
 type RolloutRecord = {
   payload?: RolloutPayload
+  timestamp?: unknown
+  time?: unknown
+  created_at?: unknown
+  createdAt?: unknown
   [key: string]: unknown
 }
 
@@ -85,6 +89,55 @@ const groupEntriesByTurn = (entries: RolloutEntry[]): Map<string, RolloutEntry[]
   }
 
   return entriesByTurn
+}
+
+const getTimestampSeconds = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 1_000_000_000_000 ? Math.floor(value / 1_000) : value
+  }
+
+  if (typeof value !== 'string' || !value.trim()) return null
+
+  const numericValue = Number(value)
+  if (Number.isFinite(numericValue)) {
+    return numericValue > 1_000_000_000_000 ? Math.floor(numericValue / 1_000) : numericValue
+  }
+
+  const parsedTime = Date.parse(value)
+  return Number.isFinite(parsedTime) ? Math.floor(parsedTime / 1_000) : null
+}
+
+const getEntryTimestampSeconds = (entry: RolloutEntry): number | null => {
+  const { record, payload } = entry
+
+  return (
+    getTimestampSeconds(record.timestamp) ??
+    getTimestampSeconds(record.time) ??
+    getTimestampSeconds(record.created_at) ??
+    getTimestampSeconds(record.createdAt) ??
+    getTimestampSeconds(payload.timestamp) ??
+    getTimestampSeconds(payload.time) ??
+    getTimestampSeconds(payload.created_at) ??
+    getTimestampSeconds(payload.createdAt)
+  )
+}
+
+const getFirstEntryTimestampSeconds = (entries: RolloutEntry[]): number | null => {
+  for (const entry of entries) {
+    const timestamp = getEntryTimestampSeconds(entry)
+    if (timestamp != null) return timestamp
+  }
+
+  return null
+}
+
+const getLastEntryTimestampSeconds = (entries: RolloutEntry[]): number | null => {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const timestamp = getEntryTimestampSeconds(entries[index])
+    if (timestamp != null) return timestamp
+  }
+
+  return null
 }
 
 const getToolCallInput = (payload: RolloutPayload): string | null => {
@@ -328,7 +381,12 @@ const createTurn = (turnId: string, entries: RolloutEntry[]): CodexTurn => {
     }
   })
 
-  return { id: turnId, items }
+  return {
+    id: turnId,
+    startedAt: getFirstEntryTimestampSeconds(entries),
+    completedAt: getLastEntryTimestampSeconds(entries),
+    items
+  }
 }
 
 export const loadRolloutHistory = async (rolloutPath: string | null): Promise<CodexTurn[]> => {

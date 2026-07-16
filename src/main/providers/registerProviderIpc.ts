@@ -114,6 +114,10 @@ export const registerProviderIpc = (): void => {
     providerApi.login(requireProviderId(providerId))
   )
 
+  ipcMain.handle(providerIpcChannels.getModels, (_, providerId: unknown) =>
+    providerApi.getModels(requireProviderId(providerId))
+  )
+
   ipcMain.handle(providerIpcChannels.getChats, (_, providerId: unknown, options: unknown) =>
     providerApi.getChats(requireProviderId(providerId), requireChatListOptions(options))
   )

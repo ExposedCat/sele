@@ -4,7 +4,8 @@ import type {
   ProviderMessage,
   ProviderToolActivity,
   ProviderWorkingItem,
-  ProviderWorkingStep
+  ProviderWorkingStep,
+  ProviderWorkingToolStatus
 } from '../../../shared/provider'
 import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
 
@@ -37,11 +38,14 @@ export type CodexThreadItem = {
   customToolOutput?: unknown
   rawToolData?: unknown[]
   summary?: string[]
+  status?: ProviderWorkingToolStatus
 }
 
 export type CodexTurn = {
   id: string
   status?: string | null
+  startedAt?: number | null
+  completedAt?: number | null
   items: CodexThreadItem[]
 }
 
@@ -51,10 +55,13 @@ type WorkingItemRenderResult =
       type: 'tool'
       activity: ProviderToolActivity
       toolId: string
+      status: ProviderWorkingToolStatus
       label: string
       command: string | null
       stdout: string | null
       diffs: ProviderFileDiff[]
+      backgroundSessionId: string | null
+      finishedBackgroundSessionId: string | null
       rawOutput: unknown
       raw: unknown[]
     }
@@ -753,6 +760,69 @@ const getToolStdout = (value: unknown): string | null => {
   return null
 }
 
+const getSearchableToolOutput = (value: unknown): string => {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
+const getToolSearchText = (item: CodexThreadItem): string =>
+  [
+    item.command,
+    item.aggregatedOutput,
+    item.customToolInput,
+    getSearchableToolOutput(item.customToolOutput),
+    getSearchableToolOutput(item.result),
+    getSearchableToolOutput(item.error)
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join('\n')
+
+const getSessionIdFromText = (text: string): string | null => {
+  const runningMatch = text.match(/Process running with session ID\s+([A-Za-z0-9_-]+)/i)
+  if (runningMatch?.[1]) return runningMatch[1]
+
+  const jsonMatch = text.match(/["']?session_id["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)["']?/i)
+  if (jsonMatch?.[1]) return jsonMatch[1]
+
+  const camelMatch = text.match(/["']?sessionId["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)["']?/i)
+  return camelMatch?.[1] ?? null
+}
+
+const getStartedBackgroundSessionId = (item: CodexThreadItem): string | null => {
+  const outputText = [
+    item.aggregatedOutput,
+    getSearchableToolOutput(item.customToolOutput),
+    getSearchableToolOutput(item.result)
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join('\n')
+
+  if (
+    !/Process running with session ID|running in background|background process|session_id/i.test(
+      outputText
+    )
+  ) {
+    return null
+  }
+
+  return getSessionIdFromText(outputText)
+}
+
+const getFinishedBackgroundSessionId = (item: CodexThreadItem): string | null => {
+  const searchText = getToolSearchText(item)
+  if (!/Process exited|process has exited|session finished|session completed/i.test(searchText)) {
+    return null
+  }
+
+  return getSessionIdFromText(searchText)
+}
+
 const getFileDiffs = (item: CodexThreadItem): ProviderFileDiff[] =>
   (item.changes ?? []).map((change) => ({
     path: change.path,
@@ -772,11 +842,14 @@ const renderTool = (
 ): WorkingItemRenderResult => ({
   type: 'tool',
   toolId,
+  status: item.status ?? 'finished',
   activity,
   label,
   command,
   stdout,
   diffs,
+  backgroundSessionId: getStartedBackgroundSessionId(item),
+  finishedBackgroundSessionId: getFinishedBackgroundSessionId(item),
   rawOutput,
   raw: item.rawToolData ?? [item]
 })
@@ -1113,10 +1186,18 @@ const getWorkingStepStatus = (
   return 'worked'
 }
 
-export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
+const toMilliseconds = (seconds: number | null | undefined): number | null =>
+  typeof seconds === 'number' && Number.isFinite(seconds) ? seconds * 1_000 : null
+
+export const getChatItems = (
+  turns: CodexTurn[],
+  fallbackStartedAt: number | null = null
+): ProviderChatItem[] => {
   const chatItems: ProviderChatItem[] = []
 
   for (const turn of turns) {
+    const startedAt = turn.startedAt ?? fallbackStartedAt
+    const completedAt = turn.completedAt ?? startedAt
     const workingStatus = getWorkingStatus(turn)
     const finalMessageIndex = getFinalMessageIndex(turn.items, turn.status ?? null)
     let finalMessage: ProviderMessage | null = null
@@ -1130,7 +1211,8 @@ export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
             type: 'message',
             id: `${turn.id}:${item.id}`,
             role: 'user',
-            content
+            content,
+            createdAt: toMilliseconds(startedAt)
           })
         }
         continue
@@ -1141,7 +1223,8 @@ export const getChatItems = (turns: CodexTurn[]): ProviderChatItem[] => {
           type: 'message',
           id: `${turn.id}:${item.id}`,
           role: 'assistant',
-          content: item.text.trim()
+          content: item.text.trim(),
+          createdAt: toMilliseconds(completedAt)
         }
         continue
       }

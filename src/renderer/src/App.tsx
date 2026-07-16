@@ -3,11 +3,11 @@ import {
   ArrowLeft,
   Check,
   FilePlus2,
+  FolderPlus,
   GitBranch,
   GitCommitHorizontal,
   History,
   Pencil,
-  RefreshCw,
   Search,
   Sparkles,
   SquarePen,
@@ -15,6 +15,7 @@ import {
   Upload,
   X
 } from 'lucide-react'
+import { RefreshCwIcon as AnimatedRefreshCwIcon, type RefreshCwIconHandle } from 'lucide-animated'
 import type { AppGitChangeKind, AppGitChangesResult, AppGitCommitAction } from '../../shared/app'
 import type {
   ProviderChat,
@@ -27,9 +28,11 @@ import type {
   ProviderAccessMode,
   ProviderApprovalDecision,
   ProviderId,
+  ProviderModel,
   ProviderModelId,
   ProviderReasoningEffort
 } from '../../shared/provider'
+import { fallbackProviderModels } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
 import { Button } from './components/Button'
@@ -74,6 +77,10 @@ type GitChangesScope = {
   cwd: string
   source: GitChangeSource
 }
+type ProjectOptionData = {
+  cwd: string
+  updatedAt: number
+}
 
 const chatPageSize = 20
 const chatSidebarDefaultWidth = 280
@@ -88,6 +95,11 @@ const chatPanePreferenceStorageKey = 'sele:chat-pane-preference:v1'
 const pinnedGroupKey = 'pinned'
 const unknownCwdGroupKey = 'cwd:unknown'
 const doneGroupKey = 'done'
+const newSessionProjectPlaceholderValue = '__sele_new_session_project_placeholder__'
+const fallbackDefaultModel = fallbackProviderModels.find((model) => model.isDefault)
+const fallbackInitialModel = fallbackDefaultModel ?? fallbackProviderModels[0]!
+const fallbackInitialReasoningEffort = fallbackInitialModel?.defaultReasoningEffort ?? 'medium'
+const refreshIconReplayMs = 1_050
 
 const providerLabels = {
   codex: 'Codex'
@@ -111,6 +123,37 @@ const commitActionLabels = {
   amend: 'Amend',
   commitAndPush: 'Commit & push'
 } satisfies Record<AppGitCommitAction, string>
+
+const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
+  const iconRef = useRef<RefreshCwIconHandle | null>(null)
+
+  useEffect(() => {
+    const icon = iconRef.current
+
+    if (!active) {
+      icon?.stopAnimation()
+      return undefined
+    }
+
+    icon?.startAnimation()
+    const interval = window.setInterval(() => icon?.startAnimation(), refreshIconReplayMs)
+
+    return () => {
+      window.clearInterval(interval)
+      icon?.stopAnimation()
+    }
+  }, [active])
+
+  return (
+    <AnimatedRefreshCwIcon
+      ref={iconRef}
+      className="changes-sidebar__refresh-icon"
+      size={20}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  )
+}
 
 const getDropdownOptions = <TValue extends string>(
   labels: Record<TValue, string>
@@ -248,6 +291,23 @@ const approvalTypeLabels = {
   fileChange: 'File change approval'
 } as const
 
+const getDefaultModel = (models: ProviderModel[]): ProviderModel =>
+  models.find((nextModel) => nextModel.isDefault) ?? models[0] ?? fallbackInitialModel
+
+const getDefaultReasoningEffort = (model: ProviderModel | undefined): ProviderReasoningEffort =>
+  model?.defaultReasoningEffort ||
+  model?.supportedReasoningEfforts.find((option) => option.isDefault)?.id ||
+  model?.supportedReasoningEfforts[0]?.id ||
+  fallbackInitialReasoningEffort
+
+const modelSupportsReasoningEffort = (
+  model: ProviderModel | undefined,
+  reasoningEffort: ProviderReasoningEffort
+): boolean =>
+  !model ||
+  model.supportedReasoningEfforts.length === 0 ||
+  model.supportedReasoningEfforts.some((option) => option.id === reasoningEffort)
+
 const getChatKey = (chat: Pick<ProviderChat, 'providerId' | 'id'>): string =>
   `${chat.providerId}:${chat.id}`
 
@@ -290,6 +350,12 @@ const getParentPath = (path: string): string => {
 
 const getFolderName = (path: string | null): string =>
   path ? getLastPathPart(path) : 'Choose folder'
+
+const getFolderDescription = (path: string): string => {
+  const parentPath = getParentPath(path)
+
+  return parentPath && parentPath !== '.' ? parentPath : path
+}
 
 const getChatCwdLabel = (cwd: string | null): string =>
   cwd?.trim() ? getLastPathPart(cwd.trim()) : 'Unknown cwd'
@@ -407,7 +473,8 @@ const getChatFromDetail = (
 })
 
 const getOptimisticItems = (items: ProviderChatItem[], message: string): ProviderChatItem[] => {
-  const id = `optimistic:${Date.now()}`
+  const createdAt = Date.now()
+  const id = `optimistic:${createdAt}`
 
   return [
     ...items,
@@ -415,7 +482,8 @@ const getOptimisticItems = (items: ProviderChatItem[], message: string): Provide
       type: 'message',
       id: `${id}:user`,
       role: 'user',
-      content: message
+      content: message,
+      createdAt
     },
     {
       type: 'working',
@@ -560,8 +628,11 @@ export const App: React.FC = () => {
   const [sendState, setSendState] = useState<SendState>('idle')
   const [editingMessage, setEditingMessage] = useState<EditingMessage | null>(null)
   const [accessMode, setAccessMode] = useState<ProviderAccessMode>('sandbox')
-  const [model, setModel] = useState<ProviderModelId>('gpt-5.5')
-  const [reasoningEffort, setReasoningEffort] = useState<ProviderReasoningEffort>('xhigh')
+  const [models, setModels] = useState<ProviderModel[]>(fallbackProviderModels)
+  const [model, setModel] = useState<ProviderModelId>(fallbackInitialModel.id)
+  const [reasoningEffort, setReasoningEffort] = useState<ProviderReasoningEffort>(
+    fallbackInitialReasoningEffort
+  )
   const [approvalResolution, setApprovalResolution] = useState<ApprovalResolutionState>({
     approvalId: null,
     decision: null,
@@ -570,6 +641,7 @@ export const App: React.FC = () => {
   const [newChatOpen, setNewChatOpen] = useState(true)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null)
   const [newSessionProvider, setNewSessionProvider] = useState<ProviderId>('codex')
+  const [projectHistory, setProjectHistory] = useState<ProjectOptionData[]>([])
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedCwdGroups, setCollapsedCwdGroups] = useState<Record<string, boolean>>({})
@@ -599,6 +671,8 @@ export const App: React.FC = () => {
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
+  const modelManuallySelectedRef = useRef(false)
+  const reasoningManuallySelectedRef = useRef(false)
 
   const defaultPanePercents = useMemo(() => getDefaultChatPanePercents(panelsWidth), [panelsWidth])
   const preferredPanePercents = panePercents ?? defaultPanePercents
@@ -726,6 +800,98 @@ export const App: React.FC = () => {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    let active = true
+
+    const loadProjectHistory = async (): Promise<void> => {
+      const projectsByCwd = new Map<string, ProjectOptionData>()
+      let cursor: string | null = null
+
+      try {
+        do {
+          const page = await providerApi.getChats('codex', {
+            cursor,
+            limit: 100
+          })
+
+          if (!active) return
+
+          page.chats.forEach((chat) => {
+            const cwd = getChatProjectCwd(chat)
+            if (!cwd) return
+
+            const existingProject = projectsByCwd.get(cwd)
+            if (!existingProject || chat.updatedAt > existingProject.updatedAt) {
+              projectsByCwd.set(cwd, { cwd, updatedAt: chat.updatedAt })
+            }
+          })
+
+          cursor = page.nextCursor
+        } while (cursor)
+
+        if (active) setProjectHistory(Array.from(projectsByCwd.values()))
+      } catch {
+        // The visible chat list still provides project options if this background load fails.
+      }
+    }
+
+    void loadProjectHistory()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+
+    providerApi
+      .getModels('codex')
+      .then((nextModels) => {
+        if (!active || nextModels.length === 0) return
+
+        setModels(nextModels)
+      })
+      .catch(() => {
+        if (active) setModels(fallbackProviderModels)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (models.length === 0) return
+
+    const defaultModel = getDefaultModel(models)
+
+    setModel((currentModel) => {
+      const currentModelExists = models.some((nextModel) => nextModel.id === currentModel)
+
+      if (!currentModelExists) return defaultModel.id
+      if (!modelManuallySelectedRef.current && currentModel === fallbackInitialModel.id) {
+        return defaultModel.id
+      }
+
+      return currentModel
+    })
+  }, [models])
+
+  useEffect(() => {
+    const selectedModel = models.find((nextModel) => nextModel.id === model)
+    if (!selectedModel) return
+
+    setReasoningEffort((currentReasoningEffort) => {
+      if (!reasoningManuallySelectedRef.current) return getDefaultReasoningEffort(selectedModel)
+      if (modelSupportsReasoningEffort(selectedModel, currentReasoningEffort)) {
+        return currentReasoningEffort
+      }
+
+      return getDefaultReasoningEffort(selectedModel)
+    })
+  }, [model, models])
 
   const applyChatDetail = useCallback(
     (
@@ -956,6 +1122,52 @@ export const App: React.FC = () => {
   const activeChatGroups = chatGroups.filter((group) => group.kind === 'cwd')
   const doneChatGroup = chatGroups.find((group) => group.kind === 'done') ?? null
   const hasMoreChats = Boolean(nextCursor)
+  const projectOptions = useMemo<DropdownOption<string>[]>(() => {
+    const projectsByCwd = new Map<string, { cwd: string; updatedAt: number }>()
+
+    const addProject = (cwd: string | null, updatedAt: number): void => {
+      const normalizedCwd = cwd?.trim()
+      if (!normalizedCwd) return
+
+      const existingProject = projectsByCwd.get(normalizedCwd)
+      if (!existingProject || updatedAt > existingProject.updatedAt) {
+        projectsByCwd.set(normalizedCwd, { cwd: normalizedCwd, updatedAt })
+      }
+    }
+
+    projectHistory.forEach((project) => addProject(project.cwd, project.updatedAt))
+    chats.forEach((chat) => addProject(getChatProjectCwd(chat), chat.updatedAt))
+    addProject(newSessionCwd, Number.MAX_SAFE_INTEGER)
+
+    const options = Array.from(projectsByCwd.values())
+      .sort((firstProject, secondProject) => {
+        if (secondProject.updatedAt !== firstProject.updatedAt) {
+          return secondProject.updatedAt - firstProject.updatedAt
+        }
+
+        return getFolderName(firstProject.cwd).localeCompare(getFolderName(secondProject.cwd))
+      })
+      .map((project) => ({
+        value: project.cwd,
+        label: getFolderName(project.cwd),
+        menuLabel: getFolderName(project.cwd),
+        description: getFolderDescription(project.cwd)
+      }))
+
+    if (!newSessionCwd) {
+      return [
+        {
+          value: newSessionProjectPlaceholderValue,
+          label: 'Choose folder',
+          disabled: true
+        },
+        ...options
+      ]
+    }
+
+    return options
+  }, [chats, newSessionCwd, projectHistory])
+  const newSessionProjectValue = newSessionCwd ?? newSessionProjectPlaceholderValue
 
   const loadMoreChats = useCallback(async (): Promise<void> => {
     if (chatPageLoadState === 'loading' || !nextCursor) return
@@ -1050,6 +1262,30 @@ export const App: React.FC = () => {
     } catch {
       // Keep the current folder if the native dialog cannot be opened.
     }
+  }
+
+  const handleModelChange = (nextModelId: ProviderModelId): void => {
+    modelManuallySelectedRef.current = true
+    setModel(nextModelId)
+
+    const nextModel = models.find((candidateModel) => candidateModel.id === nextModelId)
+    if (!nextModel) return
+
+    setReasoningEffort((currentReasoningEffort) => {
+      if (
+        reasoningManuallySelectedRef.current &&
+        modelSupportsReasoningEffort(nextModel, currentReasoningEffort)
+      ) {
+        return currentReasoningEffort
+      }
+
+      return getDefaultReasoningEffort(nextModel)
+    })
+  }
+
+  const handleReasoningEffortChange = (nextReasoningEffort: ProviderReasoningEffort): void => {
+    reasoningManuallySelectedRef.current = true
+    setReasoningEffort(nextReasoningEffort)
   }
 
   const handleMarkChatDone = async (chat: ProviderChat): Promise<void> => {
@@ -1554,6 +1790,47 @@ export const App: React.FC = () => {
             {selectedChat && (
               <>
                 <header className="chat-detail__header">
+                  <div className="chat-detail__header-inner">
+                    <span className="chat-detail__back-slot">
+                      <Button
+                        theme="transparent"
+                        aria-label="Back"
+                        title="Back"
+                        callback={handleBack}
+                        icon={<ArrowLeft aria-hidden="true" />}
+                      />
+                    </span>
+                    <h1>{selectedChat.title}</h1>
+                  </div>
+                </header>
+                <div className="chat-detail__messages" ref={contentRef}>
+                  <div className="chat-detail__messages-inner">
+                    {chatLoadState === 'loading' && (
+                      <p className="chat__status">Loading messages…</p>
+                    )}
+                    {chatLoadState === 'error' && (
+                      <p className="chat__status">Unable to load messages.</p>
+                    )}
+                    {!editingMessage &&
+                      chatLoadState === 'ready' &&
+                      visibleChatItems.length === 0 && (
+                        <p className="chat__status">No messages found.</p>
+                      )}
+                    {visibleChatItems.map((item) => (
+                      <ChatDetailItem
+                        canEditOwnMessages={canEditOwnMessages}
+                        item={item}
+                        key={item.id}
+                        onEditMessage={handleEditMessage}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+            {!selectedChat && newChatOpen && (
+              <header className="chat-detail__header chat-detail__new-header">
+                <div className="chat-detail__header-inner">
                   <span className="chat-detail__back-slot">
                     <Button
                       theme="transparent"
@@ -1563,126 +1840,108 @@ export const App: React.FC = () => {
                       icon={<ArrowLeft aria-hidden="true" />}
                     />
                   </span>
-                  <h1>{selectedChat.title}</h1>
-                </header>
-                <div className="chat-detail__messages" ref={contentRef}>
-                  {chatLoadState === 'loading' && <p className="chat__status">Loading messages…</p>}
-                  {chatLoadState === 'error' && (
-                    <p className="chat__status">Unable to load messages.</p>
-                  )}
-                  {!editingMessage &&
-                    chatLoadState === 'ready' &&
-                    visibleChatItems.length === 0 && (
-                      <p className="chat__status">No messages found.</p>
-                    )}
-                  {visibleChatItems.map((item) => (
-                    <ChatDetailItem
-                      canEditOwnMessages={canEditOwnMessages}
-                      item={item}
-                      key={item.id}
-                      onEditMessage={handleEditMessage}
-                    />
-                  ))}
+                  <h1>New chat</h1>
                 </div>
-              </>
-            )}
-            {!selectedChat && newChatOpen && (
-              <header className="chat-detail__header chat-detail__new-header">
-                <span className="chat-detail__back-slot">
-                  <Button
-                    theme="transparent"
-                    aria-label="Back"
-                    title="Back"
-                    callback={handleBack}
-                    icon={<ArrowLeft aria-hidden="true" />}
-                  />
-                </span>
-                <h1>New chat</h1>
               </header>
             )}
             <div className="chat-panel__composer">
-              {!selectedChat && newChatOpen && (
-                <div className="chat-panel__new-session">
-                  <span>New session in</span>
-                  <Button
-                    title={newSessionCwd ?? 'Choose folder'}
-                    disabled={sendState === 'sending'}
-                    callback={() => void handleSelectNewSessionFolder()}
-                    label={getFolderName(newSessionCwd)}
-                    theme="transparent"
-                    size="small"
-                  />
-                  <span>with</span>
-                  <Dropdown
-                    aria-label="Provider"
-                    appearance="inline"
-                    disabled={sendState === 'sending'}
-                    options={providerOptions}
-                    placement="top"
-                    size="small"
-                    value={newSessionProvider}
-                    onChange={setNewSessionProvider}
-                  />
-                </div>
-              )}
-              {selectedChat && pendingApproval && (
-                <section className="chat-approval" aria-label="Approval request">
-                  <div className="chat-approval__main">
-                    <span className="chat-approval__label">
-                      {approvalTypeLabels[pendingApproval.type]}
-                    </span>
-                    <span
-                      className="chat-approval__summary"
-                      title={getApprovalSummary(pendingApproval)}
-                    >
-                      {getApprovalSummary(pendingApproval)}
-                    </span>
-                    {pendingApproval.cwd && pendingApproval.command && (
-                      <span className="chat-approval__cwd" title={pendingApproval.cwd}>
-                        {pendingApproval.cwd}
-                      </span>
-                    )}
-                    {approvalError && (
-                      <span className="chat-approval__error" role="status">
-                        {approvalError}
-                      </span>
-                    )}
-                  </div>
-                  <div className="chat-approval__actions">
-                    <Button
-                      disabled={Boolean(approvalDecisionInFlight)}
-                      callback={() => void handleResolveApproval('deny')}
-                      icon={<X aria-hidden="true" />}
-                      label={<span>Deny</span>}
-                      theme="secondary"
+              <div className="chat-panel__composer-inner">
+                {!selectedChat && newChatOpen && (
+                  <div className="chat-panel__new-session">
+                    <span>New session in</span>
+                    <Dropdown
+                      aria-label="Project"
+                      appearance="inline"
+                      title={newSessionCwd ?? 'Choose folder'}
+                      disabled={sendState === 'sending'}
+                      menuActions={[
+                        {
+                          id: 'add-project',
+                          label: 'Add project..',
+                          title: 'Add project..',
+                          icon: <FolderPlus aria-hidden="true" />,
+                          callback: () => void handleSelectNewSessionFolder()
+                        }
+                      ]}
+                      options={projectOptions}
+                      placement="top"
+                      size="small"
+                      value={newSessionProjectValue}
+                      onChange={(cwd) => setNewSessionCwd(cwd)}
                     />
-                    <Button
-                      disabled={Boolean(approvalDecisionInFlight)}
-                      callback={() => void handleResolveApproval('allow')}
-                      icon={<Check aria-hidden="true" />}
-                      label={<span>Allow</span>}
-                      theme="primary"
+                    <span>with</span>
+                    <Dropdown
+                      aria-label="Provider"
+                      appearance="inline"
+                      disabled={sendState === 'sending'}
+                      options={providerOptions}
+                      placement="top"
+                      size="small"
+                      value={newSessionProvider}
+                      onChange={setNewSessionProvider}
                     />
                   </div>
-                </section>
-              )}
-              <MessageBox
-                active={editingMessage ? false : chatHasActiveTurn}
-                accessMode={accessMode}
-                autoFocus={!selectedChat && newChatOpen}
-                disabled={messageBoxDisabled}
-                editSession={editingMessage}
-                error={sendState === 'error' ? 'Unable to complete request.' : null}
-                model={model}
-                pending={sendState === 'sending'}
-                reasoningEffort={reasoningEffort}
-                onAccessModeChange={setAccessMode}
-                onCancelEdit={handleCancelEditMessage}
-                onModelChange={setModel}
-                onReasoningEffortChange={setReasoningEffort}
-                onStop={handleStopChat}
-                onSend={handleSendMessage}
-              />
+                )}
+                {selectedChat && pendingApproval && (
+                  <section className="chat-approval" aria-label="Approval request">
+                    <div className="chat-approval__main">
+                      <span className="chat-approval__label">
+                        {approvalTypeLabels[pendingApproval.type]}
+                      </span>
+                      <span
+                        className="chat-approval__summary"
+                        title={getApprovalSummary(pendingApproval)}
+                      >
+                        {getApprovalSummary(pendingApproval)}
+                      </span>
+                      {pendingApproval.cwd && pendingApproval.command && (
+                        <span className="chat-approval__cwd" title={pendingApproval.cwd}>
+                          {pendingApproval.cwd}
+                        </span>
+                      )}
+                      {approvalError && (
+                        <span className="chat-approval__error" role="status">
+                          {approvalError}
+                        </span>
+                      )}
+                    </div>
+                    <div className="chat-approval__actions">
+                      <Button
+                        disabled={Boolean(approvalDecisionInFlight)}
+                        callback={() => void handleResolveApproval('deny')}
+                        icon={<X aria-hidden="true" />}
+                        label={<span>Deny</span>}
+                        theme="secondary"
+                      />
+                      <Button
+                        disabled={Boolean(approvalDecisionInFlight)}
+                        callback={() => void handleResolveApproval('allow')}
+                        icon={<Check aria-hidden="true" />}
+                        label={<span>Allow</span>}
+                        theme="primary"
+                      />
+                    </div>
+                  </section>
+                )}
+                <MessageBox
+                  active={editingMessage ? false : chatHasActiveTurn}
+                  accessMode={accessMode}
+                  autoFocus={!selectedChat && newChatOpen}
+                  disabled={messageBoxDisabled}
+                  editSession={editingMessage}
+                  error={sendState === 'error' ? 'Unable to complete request.' : null}
+                  model={model}
+                  models={models}
+                  pending={sendState === 'sending'}
+                  reasoningEffort={reasoningEffort}
+                  onAccessModeChange={setAccessMode}
+                  onCancelEdit={handleCancelEditMessage}
+                  onModelChange={handleModelChange}
+                  onReasoningEffortChange={handleReasoningEffortChange}
+                  onStop={handleStopChat}
+                  onSend={handleSendMessage}
+                />
+              </div>
             </div>
           </section>
         </div>
@@ -1727,7 +1986,7 @@ export const App: React.FC = () => {
                     title="Refresh changes"
                     disabled={!changesCwd || changesLoadState === 'loading'}
                     callback={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
-                    icon={<RefreshCw aria-hidden="true" />}
+                    icon={<GitRefreshIcon active={changesLoadState === 'loading'} />}
                   />
                 )}
               </div>

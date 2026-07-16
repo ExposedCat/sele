@@ -11,8 +11,125 @@ export const providerModelIds = [
 export const providerReasoningEfforts = ['low', 'medium', 'high', 'xhigh'] as const
 
 export type ProviderId = (typeof providerIds)[number]
-export type ProviderModelId = (typeof providerModelIds)[number]
-export type ProviderReasoningEffort = (typeof providerReasoningEfforts)[number]
+export type ProviderModelId = string
+export type ProviderReasoningEffort = string
+
+export type ProviderReasoningEffortOption = {
+  id: ProviderReasoningEffort
+  label: string
+  description: string
+  isDefault: boolean
+}
+
+export type ProviderModel = {
+  id: ProviderModelId
+  label: string
+  description: string
+  isDefault: boolean
+  supportedReasoningEfforts: ProviderReasoningEffortOption[]
+  defaultReasoningEffort: ProviderReasoningEffort
+}
+
+const providerReasoningEffortDescriptions = {
+  low: 'Fast responses with lighter reasoning',
+  medium: 'Balances speed and reasoning depth for everyday tasks',
+  high: 'Greater reasoning depth for complex problems',
+  xhigh: 'Extra high reasoning depth for complex problems'
+} satisfies Record<(typeof providerReasoningEfforts)[number], string>
+
+export const fallbackProviderModels: ProviderModel[] = [
+  {
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    description: 'Latest frontier agentic coding model.',
+    isDefault: false,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'low'
+    })),
+    defaultReasoningEffort: 'low'
+  },
+  {
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    description: 'Balanced agentic coding model for everyday work.',
+    isDefault: false,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'medium'
+    })),
+    defaultReasoningEffort: 'medium'
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    description: 'Fast and affordable agentic coding model.',
+    isDefault: false,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'medium'
+    })),
+    defaultReasoningEffort: 'medium'
+  },
+  {
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    description: 'Frontier model for complex coding, research, and real-world work.',
+    isDefault: true,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'medium'
+    })),
+    defaultReasoningEffort: 'medium'
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    description: 'Strong model for everyday coding.',
+    isDefault: false,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'medium'
+    })),
+    defaultReasoningEffort: 'medium'
+  },
+  {
+    id: 'gpt-5.4-mini',
+    label: 'GPT-5.4 Mini',
+    description: 'Small, fast, and cost-efficient model for simpler coding tasks.',
+    isDefault: false,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'medium'
+    })),
+    defaultReasoningEffort: 'medium'
+  },
+  {
+    id: 'gpt-5.3-codex-spark',
+    label: 'GPT-5.3 Spark',
+    description: 'Ultra-fast coding model.',
+    isDefault: false,
+    supportedReasoningEfforts: providerReasoningEfforts.map((reasoningEffort) => ({
+      id: reasoningEffort,
+      label: reasoningEffort,
+      description: providerReasoningEffortDescriptions[reasoningEffort],
+      isDefault: reasoningEffort === 'high'
+    })),
+    defaultReasoningEffort: 'high'
+  }
+]
 
 export type ProviderAccount = {
   label: string
@@ -83,6 +200,7 @@ export type ProviderMessage = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  createdAt?: number | null
 }
 
 export type ProviderWorkingMessage = {
@@ -110,15 +228,20 @@ export type ProviderToolActivity =
   | 'command'
   | 'other'
 
+export type ProviderWorkingToolStatus = 'running' | 'finished'
+
 export type ProviderWorkingTool = {
   type: 'tool'
   id: string
   toolId: string
+  status: ProviderWorkingToolStatus
   activity: ProviderToolActivity
   label: string
   command: string | null
   stdout: string | null
   diffs: ProviderFileDiff[]
+  backgroundSessionId: string | null
+  finishedBackgroundSessionId: string | null
   rawOutput: unknown
   raw: unknown[]
 }
@@ -174,6 +297,7 @@ export type ProviderTurnOptions = {
 
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
+  getModels: (providerId: ProviderId) => Promise<ProviderModel[]>
   getChats: (providerId: ProviderId, options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
   startChat: (
@@ -212,6 +336,7 @@ export type ProviderApi = {
 
 export const providerIpcChannels = {
   login: 'provider:login',
+  getModels: 'provider:get-models',
   getChats: 'provider:get-chats',
   getChat: 'provider:get-chat',
   startChat: 'provider:start-chat',
@@ -229,7 +354,7 @@ export const isProviderId = (value: unknown): value is ProviderId =>
   providerIds.includes(value as ProviderId)
 
 export const isProviderModelId = (value: unknown): value is ProviderModelId =>
-  providerModelIds.includes(value as ProviderModelId)
+  typeof value === 'string' && value.trim().length > 0 && value.length <= 128
 
 export const isProviderReasoningEffort = (value: unknown): value is ProviderReasoningEffort =>
-  providerReasoningEfforts.includes(value as ProviderReasoningEffort)
+  typeof value === 'string' && value.trim().length > 0 && value.length <= 64

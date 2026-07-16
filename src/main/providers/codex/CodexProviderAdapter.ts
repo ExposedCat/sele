@@ -1,4 +1,6 @@
 import type {
+  ProviderModel,
+  ProviderReasoningEffortOption,
   ProviderChatListOptions,
   ProviderChatPage,
   ProviderChatDetail,
@@ -9,6 +11,7 @@ import type {
   ProviderPendingApproval,
   ProviderTurnOptions
 } from '../../../shared/provider'
+import { fallbackProviderModels } from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
 import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
@@ -51,6 +54,27 @@ type CodexThread = {
 
 type ThreadListResponse = {
   data: CodexThread[]
+  nextCursor: string | null
+}
+
+type CodexReasoningEffortOption = {
+  reasoningEffort: string
+  description?: string | null
+}
+
+type CodexModel = {
+  id: string
+  model?: string
+  displayName?: string
+  description?: string
+  hidden?: boolean
+  supportedReasoningEfforts?: CodexReasoningEffortOption[]
+  defaultReasoningEffort?: string
+  isDefault?: boolean
+}
+
+type ModelListResponse = {
+  data: CodexModel[]
   nextCursor: string | null
 }
 
@@ -406,6 +430,52 @@ const parseThreadTitleGenerationResult = (text: string): ThreadNameGenerationRes
 const getGeneratedThreadTitle = (text: string): string | null =>
   parseThreadTitleGenerationResult(text)?.title ?? normalizeGeneratedTitle(text)
 
+const normalizeModelLabel = (model: CodexModel): string => {
+  return model.displayName?.trim() || model.model?.trim() || model.id.trim()
+}
+
+const normalizeReasoningEffortLabel = (reasoningEffort: string): string =>
+  reasoningEffort
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
+    .join(' ') || reasoningEffort
+
+const mapCodexReasoningEffort = (
+  option: CodexReasoningEffortOption,
+  defaultReasoningEffort: string
+): ProviderReasoningEffortOption | null => {
+  const reasoningEffort = option.reasoningEffort.trim()
+  if (!reasoningEffort) return null
+
+  return {
+    id: reasoningEffort,
+    label: normalizeReasoningEffortLabel(reasoningEffort),
+    description: option.description?.trim() ?? '',
+    isDefault: reasoningEffort === defaultReasoningEffort
+  }
+}
+
+const mapCodexModel = (model: CodexModel): ProviderModel | null => {
+  const id = model.id.trim()
+  if (!id || model.hidden) return null
+
+  const defaultReasoningEffort = model.defaultReasoningEffort?.trim() || 'medium'
+  const supportedReasoningEfforts =
+    model.supportedReasoningEfforts
+      ?.map((option) => mapCodexReasoningEffort(option, defaultReasoningEffort))
+      .filter((option): option is ProviderReasoningEffortOption => Boolean(option)) ?? []
+
+  return {
+    id,
+    label: normalizeModelLabel(model),
+    description: model.description?.trim() ?? '',
+    isDefault: Boolean(model.isDefault),
+    supportedReasoningEfforts,
+    defaultReasoningEffort
+  }
+}
+
 const getAccessMode = (options?: ProviderTurnOptions): ProviderTurnOptions['accessMode'] =>
   options?.accessMode ?? 'sandbox'
 
@@ -512,6 +582,32 @@ export class CodexProviderAdapter implements ProviderAdapter {
       loginId: login.loginId,
       authUrl: login.authUrl
     }
+  }
+
+  getModels = async (): Promise<ProviderModel[]> => {
+    const models: ProviderModel[] = []
+    let cursor: string | null = null
+
+    try {
+      do {
+        const response = await this.client.request<ModelListResponse>('model/list', {
+          cursor,
+          limit: 100,
+          includeHidden: false
+        })
+
+        response.data
+          .map(mapCodexModel)
+          .filter((model): model is ProviderModel => Boolean(model))
+          .forEach((model) => models.push(model))
+
+        cursor = response.nextCursor
+      } while (cursor)
+    } catch {
+      return fallbackProviderModels
+    }
+
+    return models.length > 0 ? models : fallbackProviderModels
   }
 
   getChats = async (options: ProviderChatListOptions = {}): Promise<ProviderChatPage> => {
@@ -831,7 +927,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     done: false,
     capabilities: codexCapabilities,
     pendingApproval: this.getProviderPendingApproval(thread.id),
-    items: getChatItems(thread.turns)
+    items: getChatItems(thread.turns, thread.createdAt)
   })
 
   private cacheThread = (thread: CodexThread): void => {
@@ -1233,6 +1329,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private createPendingTurn = (turnId: string, text: string): CodexTurn => ({
     id: turnId,
     status: 'inProgress',
+    startedAt: nowSeconds(),
+    completedAt: null,
     items: [
       {
         type: 'userMessage',
@@ -1315,6 +1413,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     customToolOutput: next.customToolOutput ?? previous.customToolOutput,
     changes: next.changes && next.changes.length > 0 ? next.changes : previous.changes,
     summary: next.summary && next.summary.length > 0 ? next.summary : previous.summary,
+    status: next.status ?? previous.status,
     rawToolData: next.rawToolData ?? previous.rawToolData
   })
 
@@ -1365,6 +1464,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private normalizeLiveTurn = (turn: CodexTurn): CodexTurn => ({
     ...turn,
     items: turn.items.flatMap((item) => this.normalizeLiveItem(item))
+  })
+
+  private applyLiveItemStatus = (
+    item: CodexThreadItem,
+    status: NonNullable<CodexThreadItem['status']>
+  ): CodexThreadItem => ({
+    ...item,
+    status
   })
 
   private mergeTurn = (previous: CodexTurn, next: CodexTurn): CodexTurn => {
@@ -1512,13 +1619,20 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const threadId = getThreadId(params)
     if (!threadId || !params.turn || typeof params.turn !== 'object') return
     const liveTurn = params.turn as CodexTurn
-    const turn = this.normalizeLiveTurn({
+    const normalizedTurn = this.normalizeLiveTurn({
       ...liveTurn,
       status:
         notification.method === 'turn/completed'
           ? (liveTurn.status ?? 'completed')
           : liveTurn.status
     })
+    const turn =
+      notification.method === 'turn/completed'
+        ? {
+            ...normalizedTurn,
+            items: normalizedTurn.items.map((item) => this.applyLiveItemStatus(item, 'finished'))
+          }
+        : normalizedTurn
 
     if (this.isRolledBackTurn(threadId, turn.id)) {
       if (notification.method !== 'turn/started' || !this.pendingTurnIds.has(threadId)) return
@@ -1548,12 +1662,20 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.scheduleChatUpdated(threadId)
   }
 
-  private handleItemNotification = (params: ItemNotificationParams): void => {
+  private handleItemNotification = (
+    notification: RpcNotification,
+    params: ItemNotificationParams
+  ): void => {
     const threadId = getThreadId(params)
     const turnId = getTurnId(params)
     if (!threadId || !turnId || !params.item || typeof params.item !== 'object') return
 
-    this.upsertItems(threadId, turnId, this.normalizeLiveItem(params.item as CodexThreadItem))
+    const status = notification.method === 'item/started' ? 'running' : 'finished'
+    const items = this.normalizeLiveItem(params.item as CodexThreadItem).map((item) =>
+      this.applyLiveItemStatus(item, status)
+    )
+
+    this.upsertItems(threadId, turnId, items)
     this.scheduleChatUpdated(threadId)
   }
 
@@ -1617,11 +1739,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
     if (!threadId || !turnId || !itemId || delta == null) return
 
     this.updateItem(threadId, turnId, itemId, (item) => {
-      if (!item) return { type: 'commandExecution', id: itemId, aggregatedOutput: delta }
+      if (!item) {
+        return { type: 'commandExecution', id: itemId, status: 'running', aggregatedOutput: delta }
+      }
 
       if (item.type === 'commandExecution') {
         return {
           ...item,
+          status: item.status ?? 'running',
           aggregatedOutput: `${item.aggregatedOutput ?? ''}${delta}`
         }
       }
@@ -1629,6 +1754,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
       if (item.type === 'customToolCall') {
         return {
           ...item,
+          status: item.status ?? 'running',
           customToolOutput: `${
             typeof item.customToolOutput === 'string' ? item.customToolOutput : ''
           }${delta}`
@@ -1819,7 +1945,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }
 
     if (notification.method === 'item/started' || notification.method === 'item/completed') {
-      this.handleItemNotification(params as ItemNotificationParams)
+      this.handleItemNotification(notification, params as ItemNotificationParams)
       return
     }
 
