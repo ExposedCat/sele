@@ -1,6 +1,8 @@
 :where(.ui-button) {
   appearance: none;
+  position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   min-width: 0;
   align-items: center;
   justify-content: center;
@@ -10,7 +12,10 @@
   background: var(--control-surface);
   box-shadow: var(--control-shadow);
   font: inherit;
+  font-weight: 500;
+  outline: none;
   text-align: center;
+  white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
   transition:
     color 160ms ease,
@@ -21,9 +26,35 @@
     transform 160ms ease;
 }
 
+:where(.ui-button::before) {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: calc(var(--control-radius) - 1px);
+}
+
+:where(.ui-button--small::before) {
+  border-radius: calc(var(--control-radius-small) - 1px);
+}
+
 :where(.ui-button:focus-visible) {
-  outline: 3px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (pointer: coarse) {
+  :where(.ui-button::after) {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    min-width: 44px;
+    min-height: 44px;
+    transform: translate(-50%, -50%);
+  }
 }
 
 :where(.ui-button--normal) {
@@ -71,6 +102,10 @@
 }
 
 :where(.ui-button-group:hover) {
+  transform: translateY(-1px);
+}
+
+:where(.ui-button-group--open) {
   transform: translateY(-1px);
 }
 
@@ -126,30 +161,35 @@
 }
 
 :where(.ui-button--primary) {
-  border-color: color-mix(in srgb, var(--accent) 78%, black);
+  border-color: var(--primary-border);
   color: var(--accent-ink);
   background: var(--primary-surface);
   box-shadow: var(--primary-shadow);
-  font-weight: 760;
+  font-weight: 500;
 }
 
-:where(.ui-button--primary:not(:disabled):hover) {
-  border-color: color-mix(in srgb, var(--accent-hover) 84%, black);
+:where(.ui-button--primary:not(:disabled):hover, .ui-button--primary[data-pressed]:not(:disabled)) {
+  border-color: var(--primary-border);
   background: var(--primary-surface-hover);
   box-shadow: var(--primary-shadow-hover);
   transform: translateY(-1px);
 }
 
 :where(.ui-button--secondary) {
-  color: var(--lead);
-  background: var(--control-surface);
-  font-weight: 720;
+  color: var(--ink);
+  background: var(--secondary-surface);
+  box-shadow: var(--secondary-shadow);
+  font-weight: 500;
 }
 
-:where(.ui-button--secondary:not(:disabled):hover) {
+:where(.ui-button--secondary:not(:disabled):not(:active):not([data-pressed])::before) {
+  box-shadow: var(--secondary-before-shadow);
+}
+
+:where(.ui-button--secondary:not(:disabled):hover, .ui-button--secondary[data-pressed]:not(:disabled)) {
   color: var(--ink);
-  background: var(--control-surface-hover);
-  box-shadow: var(--control-shadow-hover);
+  background: var(--secondary-surface-hover);
+  box-shadow: var(--secondary-shadow-hover);
   transform: translateY(-1px);
 }
 
@@ -174,12 +214,21 @@
   transform: translateY(0);
 }
 
-:where(.ui-button--primary:not(:disabled):active) {
-  background: var(--accent-hover);
+:where(.ui-button--primary:not(:disabled):active, .ui-button--primary[data-pressed]:not(:disabled)) {
+  background: var(--primary-surface-hover);
+  box-shadow: var(--primary-shadow-active);
+  transform: none;
+}
+
+:where(.ui-button--secondary:not(:disabled):active, .ui-button--secondary[data-pressed]:not(:disabled)) {
+  background: var(--secondary-surface-active);
+  box-shadow: none;
+  transform: none;
 }
 
 .ui-button:disabled {
-  cursor: default;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 :where(.ui-button:disabled) {
@@ -190,8 +239,25 @@
   opacity: 1;
 }
 
+:where(.ui-button--primary:disabled) {
+  border-color: var(--primary-border);
+  color: var(--accent-ink);
+  background: var(--primary-surface);
+  box-shadow: none;
+  opacity: 0.64;
+}
+
+:where(.ui-button--secondary:disabled) {
+  color: var(--ink);
+  background: var(--secondary-surface);
+  box-shadow: none;
+  opacity: 0.64;
+}
+
 :where(.ui-button svg) {
   flex: none;
+  pointer-events: none;
+  opacity: 0.8;
   transition: transform 160ms ease;
 }
 
