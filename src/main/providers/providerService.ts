@@ -14,6 +14,7 @@ import {
   setChatsDone
 } from '../database/chat'
 import { CodexProviderAdapter } from './codex/CodexProviderAdapter'
+import { getCwdMetadata } from './cwdMetadata'
 import type { ProviderAdapter } from './ProviderAdapter'
 
 const adapters: Record<ProviderId, ProviderAdapter> = {
@@ -38,13 +39,30 @@ const applyMetadataToChat = (
 
 const applyMetadataToChats = async (chats: ProviderChat[]): Promise<ProviderChat[]> => {
   const metadataById = await getChatMetadataByIds(chats.map((chat) => chat.id))
-  return chats.map((chat) => applyMetadataToChat(chat, metadataById.get(chat.id)))
+  return Promise.all(
+    chats.map(async (chat) => {
+      const cwdMetadata = await getCwdMetadata(chat.cwd)
+
+      return {
+        ...applyMetadataToChat(chat, metadataById.get(chat.id)),
+        cwdKind: cwdMetadata.kind,
+        projectCwd: cwdMetadata.projectCwd,
+        branchName: cwdMetadata.branchName
+      }
+    })
+  )
 }
 
 const applyMetadataToDetail = async (detail: ProviderChatDetail): Promise<ProviderChatDetail> => {
-  const metadata = await getChatMetadata(detail.id)
+  const [metadata, cwdMetadata] = await Promise.all([
+    getChatMetadata(detail.id),
+    getCwdMetadata(detail.cwd)
+  ])
   return {
     ...detail,
+    cwdKind: cwdMetadata.kind,
+    projectCwd: cwdMetadata.projectCwd,
+    branchName: cwdMetadata.branchName,
     pinned: metadata.pinned,
     done: metadata.done
   }

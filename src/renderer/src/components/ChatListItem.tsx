@@ -1,10 +1,11 @@
-import { Check, Folder, LoaderCircle, Pin, PinOff } from 'lucide-react'
+import { Check, Folder, GitBranch, LoaderCircle, Pin, PinOff } from 'lucide-react'
 import type { ProviderChat } from '../../../shared/provider'
 import { Button } from './Button'
 import './ChatListItem.css'
 
 type ChatListItemProps = {
   chat: ProviderChat
+  selected: boolean
   onClick: () => void
   onMarkDone: () => void
   onTogglePinned: () => void
@@ -35,18 +36,32 @@ const getChatProjectName = (cwd: string | null): string => {
 
 export const ChatListItem: React.FC<ChatListItemProps> = ({
   chat,
+  selected,
   onClick,
   onMarkDone,
   onTogglePinned
 }) => {
   const createdAt = new Date(chat.createdAt)
-  const projectName = getChatProjectName(chat.cwd)
+  const contextName = chat.branchName ?? getChatProjectName(chat.cwd)
+  const isGitWorktree = chat.cwdKind === 'gitWorktree'
+  const ProjectIcon = isGitWorktree ? GitBranch : Folder
+  const contextTitle =
+    isGitWorktree && chat.cwd
+      ? `${chat.branchName ?? 'Git worktree'}: ${chat.cwd}`
+      : (chat.cwd ?? contextName)
   const workingStatus = chat.status && workingStatuses.has(chat.status) ? chat.status : null
   const trailingStatus = chat.status && !workingStatus ? chat.status : null
 
   return (
-    <article className={`chat-list-item${chat.pinned ? ' chat-list-item--pinned' : ''}`}>
-      <button className="chat-list-item__main" type="button" onClick={onClick}>
+    <article
+      className={`chat-list-item${chat.pinned ? ' chat-list-item--pinned' : ''}${selected ? ' chat-list-item--selected' : ''}`}
+    >
+      <button
+        className="chat-list-item__main"
+        type="button"
+        aria-current={selected ? 'true' : undefined}
+        onClick={onClick}
+      >
         <span className="chat-list-item__header">
           {workingStatus && (
             <span
@@ -76,9 +91,9 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
           )}
         </span>
         <span className="chat-list-item__body">
-          <span className="chat-list-item__context" title={chat.cwd ?? projectName}>
-            <Folder className="chat-list-item__folder" aria-hidden="true" />
-            <span className="chat-list-item__project">{projectName}</span>
+          <span className="chat-list-item__context" title={contextTitle}>
+            <ProjectIcon className="chat-list-item__folder" aria-hidden="true" />
+            <span className="chat-list-item__project">{contextName}</span>
             <span className="chat-list-item__separator">·</span>
             <time dateTime={createdAt.toISOString()}>{createdAt.toLocaleDateString()}</time>
           </span>

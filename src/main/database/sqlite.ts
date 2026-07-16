@@ -2,7 +2,8 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
-import { Kysely, SqliteDialect, type ColumnType } from 'kysely'
+import { Kysely, SqliteDialect, sql, type ColumnType } from 'kysely'
+import type { ProviderChatCwdKind } from '../../shared/provider'
 
 type SqliteBooleanColumn = ColumnType<number, number | boolean | undefined, number | boolean>
 
@@ -12,6 +13,12 @@ export type LocalDatabase = {
     pinned: SqliteBooleanColumn
     done: SqliteBooleanColumn
   }
+  cwd_metadata: {
+    cwd: string
+    kind: ProviderChatCwdKind
+    project_cwd: string | null
+    branch_name: string | null
+  }
 }
 
 let database: Kysely<LocalDatabase> | null = null
@@ -19,6 +26,18 @@ let schemaReady = false
 
 const getDatabasePath = (): string =>
   process.env.SELE_DATABASE_PATH ?? join(app.getPath('userData'), 'sele.sqlite')
+
+const ensureColumn = async (
+  db: Kysely<LocalDatabase>,
+  table: string,
+  columnName: string,
+  addColumn: () => Promise<void>
+): Promise<void> => {
+  const columns = await sql<{ name: string }>`pragma table_info(${sql.raw(table)})`.execute(db)
+  if (columns.rows.some((column) => column.name === columnName)) return
+
+  await addColumn()
+}
 
 const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
   if (schemaReady) return
@@ -30,6 +49,22 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
     .addColumn('pinned', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('done', 'integer', (column) => column.notNull().defaultTo(0))
     .execute()
+
+  await db.schema
+    .createTable('cwd_metadata')
+    .ifNotExists()
+    .addColumn('cwd', 'text', (column) => column.primaryKey())
+    .addColumn('kind', 'text', (column) => column.notNull())
+    .addColumn('project_cwd', 'text')
+    .addColumn('branch_name', 'text')
+    .execute()
+
+  await ensureColumn(db, 'cwd_metadata', 'project_cwd', () =>
+    db.schema.alterTable('cwd_metadata').addColumn('project_cwd', 'text').execute()
+  )
+  await ensureColumn(db, 'cwd_metadata', 'branch_name', () =>
+    db.schema.alterTable('cwd_metadata').addColumn('branch_name', 'text').execute()
+  )
 
   schemaReady = true
 }

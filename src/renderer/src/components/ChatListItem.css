@@ -35,7 +35,8 @@
 }
 
 .chat-list-item:hover,
-.chat-list-item:has(:focus-visible) {
+.chat-list-item:has(:focus-visible),
+.chat-list-item--selected {
   border-color: transparent;
   background: var(--glass-subtle);
   transform: none;
@@ -62,6 +63,10 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-list-item:not(.chat-list-item--selected) .chat-list-item__title {
+  font-weight: 500;
 }
 
 .chat-list-item__meta {

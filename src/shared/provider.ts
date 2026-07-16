@@ -24,6 +24,12 @@ export type ProviderLoginResult =
   | { status: 'notRequired' }
 
 export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
+export type ProviderChatCwdKind = 'directory' | 'gitWorktree'
+export type ProviderChatCwdMetadata = {
+  kind: ProviderChatCwdKind
+  projectCwd: string | null
+  branchName: string | null
+}
 
 export type ProviderApprovalDecision = 'allow' | 'deny'
 
@@ -48,6 +54,9 @@ export type ProviderChat = {
   title: string
   preview: string
   cwd: string | null
+  cwdKind: ProviderChatCwdKind
+  projectCwd: string | null
+  branchName: string | null
   createdAt: number
   updatedAt: number
   status: ProviderChatStatus | null
@@ -137,6 +146,9 @@ export type ProviderChatDetail = {
   id: string
   title: string
   cwd: string | null
+  cwdKind: ProviderChatCwdKind
+  projectCwd: string | null
+  branchName: string | null
   status: ProviderChatStatus | null
   pinned: boolean
   done: boolean

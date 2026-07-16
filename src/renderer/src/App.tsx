@@ -52,6 +52,7 @@ type ApprovalResolutionState = {
   error: string | null
 }
 type ChangeSource = 'branch' | 'lastTurn' | 'uncommitted'
+type GitChangeSource = Exclude<ChangeSource, 'lastTurn'>
 type CommitMode = 'agent' | 'manual'
 type ChangedFile = {
   path: string
@@ -69,6 +70,10 @@ type ChatPanePercents = {
   changes: number
 }
 type ChatResizeEdge = 'left' | 'right'
+type GitChangesScope = {
+  cwd: string
+  source: GitChangeSource
+}
 
 const chatPageSize = 20
 const chatSidebarDefaultWidth = 280
@@ -294,6 +299,9 @@ const getChatCwdGroupKey = (cwd: string | null): string => {
   return normalizedCwd ? `cwd:${normalizedCwd}` : unknownCwdGroupKey
 }
 
+const getChatProjectCwd = (chat: Pick<ProviderChat, 'cwd' | 'projectCwd'>): string | null =>
+  chat.projectCwd?.trim() || chat.cwd?.trim() || null
+
 const getDefaultCollapsedGroupState = (groupKey: string): boolean => groupKey === doneGroupKey
 
 const getCollapsedGroupState = (
@@ -320,7 +328,8 @@ const groupChatsForSidebar = (chats: ProviderChat[]): ChatListGroupData[] => {
       continue
     }
 
-    const key = getChatCwdGroupKey(chat.cwd)
+    const projectCwd = getChatProjectCwd(chat)
+    const key = getChatCwdGroupKey(projectCwd)
     const existingGroup = groupsByCwd.get(key)
 
     if (existingGroup) {
@@ -328,11 +337,10 @@ const groupChatsForSidebar = (chats: ProviderChat[]): ChatListGroupData[] => {
       continue
     }
 
-    const cwd = chat.cwd?.trim() || null
     groupsByCwd.set(key, {
       key,
-      cwd,
-      label: getChatCwdLabel(cwd),
+      cwd: projectCwd,
+      label: getChatCwdLabel(projectCwd),
       chats: [chat],
       kind: 'cwd'
     })
@@ -388,6 +396,9 @@ const getChatFromDetail = (
   title: detail.title,
   preview: getChatPreview(detail) ?? existingChat?.preview ?? '',
   cwd: detail.cwd ?? existingChat?.cwd ?? null,
+  cwdKind: detail.cwdKind ?? existingChat?.cwdKind ?? 'directory',
+  projectCwd: detail.projectCwd ?? existingChat?.projectCwd ?? detail.cwd ?? null,
+  branchName: detail.branchName ?? existingChat?.branchName ?? null,
   createdAt: existingChat?.createdAt ?? updatedAt,
   updatedAt,
   status: detail.status,
@@ -501,6 +512,12 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
   return message || fallback
 }
 
+const isGitChangesScope = (
+  scope: GitChangesScope | null,
+  cwd: string | null,
+  source: GitChangeSource | null
+): boolean => Boolean(scope && cwd && source && scope.cwd === cwd && scope.source === source)
+
 const getChangesEmptyMessage = (
   source: ChangeSource,
   cwd: string | null,
@@ -560,7 +577,9 @@ export const App: React.FC = () => {
   const [chatPageLoadState, setChatPageLoadState] = useState<IncrementalLoadState>('ready')
   const [changeSource, setChangeSource] = useState<ChangeSource>('branch')
   const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
+  const [gitChangesScope, setGitChangesScope] = useState<GitChangesScope | null>(null)
   const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
+  const [gitChangeLoadScope, setGitChangeLoadScope] = useState<GitChangesScope | null>(null)
   const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
   const [commitMode, setCommitMode] = useState<CommitMode>('agent')
   const [manualCommitMessage, setManualCommitMessage] = useState('')
@@ -882,11 +901,18 @@ export const App: React.FC = () => {
     if (!changesCwd) return
 
     let active = true
-    const gitChangeSource = changeSource === 'lastTurn' ? 'uncommitted' : changeSource
+    const gitChangeSource: GitChangeSource =
+      changeSource === 'lastTurn' ? 'uncommitted' : changeSource
+    const gitChangeScope: GitChangesScope = {
+      cwd: changesCwd,
+      source: gitChangeSource
+    }
 
     if (changeSource !== 'lastTurn') {
       queueMicrotask(() => {
-        if (active) setGitChangeLoadState('loading')
+        if (!active) return
+        setGitChangeLoadScope(gitChangeScope)
+        setGitChangeLoadState('loading')
       })
     }
 
@@ -898,11 +924,13 @@ export const App: React.FC = () => {
       .then((result) => {
         if (!active) return
         setGitChanges(result)
+        setGitChangesScope(gitChangeScope)
+        setGitChangeLoadScope(gitChangeScope)
         if (changeSource !== 'lastTurn') setGitChangeLoadState('ready')
       })
       .catch(() => {
         if (!active) return
-        setGitChanges(null)
+        setGitChangeLoadScope(gitChangeScope)
         if (changeSource !== 'lastTurn') setGitChangeLoadState('error')
       })
 
@@ -1064,15 +1092,18 @@ export const App: React.FC = () => {
 
     try {
       const providerIds = Array.from(new Set(group.chats.map((chat) => chat.providerId)))
+      const groupCwds = Array.from(new Set(group.chats.map((chat) => chat.cwd ?? null)))
       const metadataGroups = await Promise.all(
-        providerIds.map((providerId) => providerApi.markCwdChatsDone(providerId, group.cwd))
+        providerIds.flatMap((providerId) =>
+          groupCwds.map((cwd) => providerApi.markCwdChatsDone(providerId, cwd))
+        )
       )
       applyChatMetadata(metadataGroups.flat())
 
       if (
         selectedChat &&
         !selectedChat.done &&
-        getChatCwdGroupKey(selectedChat.cwd) === getChatCwdGroupKey(group.cwd)
+        getChatCwdGroupKey(getChatProjectCwd(selectedChat)) === getChatCwdGroupKey(group.cwd)
       ) {
         showNewChatView()
       }
@@ -1237,6 +1268,7 @@ export const App: React.FC = () => {
         group={group}
         key={group.key}
         open={groupOpen}
+        selectedChatKey={selectedChat ? getChatKey(selectedChat) : null}
         onMarkChatDone={handleMarkChatDone}
         onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
         onSelectChat={handleSelectChat}
@@ -1264,17 +1296,43 @@ export const App: React.FC = () => {
   const visibleChatItems = chatDetail ? getVisibleChatItems(chatDetail.items, editingMessage) : []
   const chatPanelOpen = Boolean(selectedChat) || newChatOpen
   const lastTurnChangedFiles = useMemo(() => getLastTurnChangedFiles(chatDetail), [chatDetail])
+  const currentGitChangeSource: GitChangeSource | null =
+    changeSource === 'lastTurn' ? null : changeSource
+  const gitChangesMatchCurrentSource = isGitChangesScope(
+    gitChangesScope,
+    changesCwd,
+    currentGitChangeSource
+  )
+  const displayedGitChanges = gitChangesMatchCurrentSource ? gitChanges : null
   const gitChangedFiles = useMemo(
-    () => (changesCwd ? getGitChangedFiles(gitChanges) : []),
-    [changesCwd, gitChanges]
+    () => (changesCwd ? getGitChangedFiles(displayedGitChanges) : []),
+    [changesCwd, displayedGitChanges]
   )
   const changedFiles = changeSource === 'lastTurn' ? lastTurnChangedFiles : gitChangedFiles
-  const changesLoadState = changeSource === 'lastTurn' || !changesCwd ? 'ready' : gitChangeLoadState
-  const unpushedCount = gitChanges?.unpushedCount ?? 0
+  const gitChangeLoadMatchesCurrentSource = isGitChangesScope(
+    gitChangeLoadScope,
+    changesCwd,
+    currentGitChangeSource
+  )
+  const changesLoadState =
+    changeSource === 'lastTurn' || !changesCwd
+      ? 'ready'
+      : gitChangeLoadMatchesCurrentSource
+        ? gitChangeLoadState
+        : 'loading'
+  const visibleChangesLoadState =
+    changesLoadState === 'loading' && displayedGitChanges ? 'ready' : changesLoadState
+  const unpushedCount =
+    changesCwd && gitChangesScope?.cwd === changesCwd ? (gitChanges?.unpushedCount ?? 0) : 0
   const hasUnpushedChanges = unpushedCount > 0
+  const canCommitChangeSource = changeSource !== 'branch'
+  const commitUnavailableTitle = canCommitChangeSource
+    ? undefined
+    : 'Switch to Uncommitted or Last turn to commit files.'
   const manualCommitMessageValue = manualCommitMessage.trim()
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
   const commitBaseDisabled =
+    !canCommitChangeSource ||
     changedFiles.length === 0 ||
     commitFiles.length === 0 ||
     changesLoadState !== 'ready' ||
@@ -1289,12 +1347,12 @@ export const App: React.FC = () => {
         (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false))
   const commitDisabled = getCommitActionDisabled('commit')
   const pushDisabled = !changesCwd || pushState === 'sending' || commitState === 'sending'
-  const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, gitChanges)
+  const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, displayedGitChanges)
   const changesContextLabel =
-    changeSource === 'branch' && gitChanges?.branchName
-      ? gitChanges.baseRef
-        ? `${gitChanges.branchName} from ${gitChanges.baseRef}`
-        : gitChanges.branchName
+    changeSource === 'branch' && displayedGitChanges?.branchName
+      ? displayedGitChanges.baseRef
+        ? `${displayedGitChanges.branchName} from ${displayedGitChanges.baseRef}`
+        : displayedGitChanges.branchName
       : changesCwd
         ? getFolderName(changesCwd)
         : 'No folder'
@@ -1675,16 +1733,16 @@ export const App: React.FC = () => {
               </div>
             </header>
             <div className="changes-sidebar__body">
-              {changesLoadState === 'loading' && (
+              {visibleChangesLoadState === 'loading' && (
                 <p className="changes-sidebar__status">Loading changes...</p>
               )}
-              {changesLoadState === 'error' && (
+              {visibleChangesLoadState === 'error' && (
                 <p className="changes-sidebar__status">Unable to load changes.</p>
               )}
-              {changesLoadState === 'ready' && changedFiles.length === 0 && (
+              {visibleChangesLoadState === 'ready' && changedFiles.length === 0 && (
                 <p className="changes-sidebar__status">{changesEmptyMessage}</p>
               )}
-              {changesLoadState === 'ready' && changedFiles.length > 0 && (
+              {visibleChangesLoadState === 'ready' && changedFiles.length > 0 && (
                 <ul className="changes-sidebar__files">
                   {changedFiles.map((file) => renderChangedFile(file))}
                 </ul>
@@ -1698,6 +1756,8 @@ export const App: React.FC = () => {
                     type="text"
                     value={manualCommitMessage}
                     placeholder="Commit message"
+                    disabled={!canCommitChangeSource}
+                    title={commitUnavailableTitle}
                     onChange={(event) => {
                       setCommitState('idle')
                       setCommitError(null)
@@ -1714,18 +1774,21 @@ export const App: React.FC = () => {
               <div className="changes-sidebar__commit-row">
                 <Button
                   disabled={commitDisabled}
+                  title={commitUnavailableTitle}
                   callback={() => void handleCommitChangedFiles('commit')}
                   dropdownActions={[
                     {
                       id: 'amend',
                       label: commitActionLabels.amend,
                       disabled: getCommitActionDisabled('amend'),
+                      title: commitUnavailableTitle,
                       callback: () => void handleCommitChangedFiles('amend')
                     },
                     {
                       id: 'commitAndPush',
                       label: commitActionLabels.commitAndPush,
                       disabled: getCommitActionDisabled('commitAndPush'),
+                      title: commitUnavailableTitle,
                       callback: () => void handleCommitChangedFiles('commitAndPush')
                     }
                   ]}
@@ -1741,7 +1804,11 @@ export const App: React.FC = () => {
                   aria-label={
                     commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'
                   }
-                  title={commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'}
+                  title={
+                    commitUnavailableTitle ??
+                    (commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message')
+                  }
+                  disabled={!canCommitChangeSource}
                   callback={handleCommitModeToggle}
                   icon={
                     commitMode === 'manual' ? (
