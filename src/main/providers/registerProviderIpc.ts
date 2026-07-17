@@ -7,6 +7,7 @@ import type {
   ProviderTurnOptions
 } from '../../shared/provider'
 import {
+  isProviderAccessMode,
   isProviderId,
   isProviderModelId,
   isProviderReasoningEffort,
@@ -85,9 +86,7 @@ const requireTurnOptions = (value: unknown): ProviderTurnOptions | undefined => 
     reasoningEffort?: unknown
   }
   const accessMode = options.accessMode
-  if (accessMode !== 'sandbox' && accessMode !== 'auto' && accessMode !== 'full') {
-    throw new Error('Invalid access mode')
-  }
+  if (!isProviderAccessMode(accessMode)) throw new Error('Invalid access mode')
 
   const cwd = options.cwd
   if (cwd != null && (typeof cwd !== 'string' || !isAbsolute(cwd))) {
@@ -112,6 +111,10 @@ export const registerProviderIpc = (): void => {
 
   ipcMain.handle(providerIpcChannels.login, (_, providerId: unknown) =>
     providerApi.login(requireProviderId(providerId))
+  )
+
+  ipcMain.handle(providerIpcChannels.getAccessModes, (_, providerId: unknown) =>
+    providerApi.getAccessModes(requireProviderId(providerId))
   )
 
   ipcMain.handle(providerIpcChannels.getModels, (_, providerId: unknown) =>

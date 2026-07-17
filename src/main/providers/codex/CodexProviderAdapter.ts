@@ -9,9 +9,10 @@ import type {
   ProviderLoginResult,
   ProviderApprovalDecision,
   ProviderPendingApproval,
+  ProviderAccessModeOption,
   ProviderTurnOptions
 } from '../../../shared/provider'
-import { fallbackProviderModels } from '../../../shared/provider'
+import { fallbackProviderAccessModes, fallbackProviderModels } from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
 import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
@@ -499,8 +500,7 @@ const getThreadAccessOptions = (options?: ProviderTurnOptions): CodexThreadAcces
 
   if (accessMode === 'auto') {
     return {
-      approvalPolicy: 'on-failure',
-      approvalsReviewer: 'auto_review',
+      approvalPolicy: 'never',
       sandbox: 'workspace-write'
     }
   }
@@ -523,8 +523,7 @@ const getTurnAccessOptions = (options?: ProviderTurnOptions): CodexTurnAccessOpt
 
   if (accessMode === 'auto') {
     return {
-      approvalPolicy: 'on-failure',
-      approvalsReviewer: 'auto_review',
+      approvalPolicy: 'never',
       sandboxPolicy: { type: 'workspaceWrite', networkAccess: false }
     }
   }
@@ -583,6 +582,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
       authUrl: login.authUrl
     }
   }
+
+  getAccessModes = async (): Promise<ProviderAccessModeOption[]> => fallbackProviderAccessModes
 
   getModels = async (): Promise<ProviderModel[]> => {
     const models: ProviderModel[] = []

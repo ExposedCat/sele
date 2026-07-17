@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type {
   ProviderAccessMode,
+  ProviderAccessModeOption,
   ProviderModel,
   ProviderModelId,
   ProviderReasoningEffort
@@ -24,6 +25,7 @@ import './MessageBox.css'
 
 type MessageBoxProps = {
   accessMode: ProviderAccessMode
+  accessModes: ProviderAccessModeOption[]
   active?: boolean
   autoFocus?: boolean
   disabled?: boolean
@@ -44,12 +46,6 @@ type MessageBoxProps = {
 const minTextareaHeight = 44
 const maxTextareaHeight = 180
 
-const accessModeLabels = {
-  sandbox: 'Sandbox',
-  auto: 'Auto approve',
-  full: 'Full access'
-} satisfies Record<ProviderAccessMode, string>
-
 const reasoningEffortLabels = {
   none: 'None',
   minimal: 'Minimal',
@@ -60,8 +56,6 @@ const reasoningEffortLabels = {
   max: 'Max',
   ultra: 'Ultra'
 } satisfies Record<string, string>
-
-const defaultAccessMode = 'sandbox' satisfies ProviderAccessMode
 
 const accessModeIcons = {
   sandbox: <Shield aria-hidden="true" />,
@@ -106,32 +100,16 @@ const getReasoningEffortIcon = (reasoningEffort: ProviderReasoningEffort): React
 
 const formatModelLabel = (label: string): string => label.replace(/-/g, ' ')
 
-const getDropdownOptions = <TValue extends string>(
-  labels: Record<TValue, string>,
-  options: {
-    defaultValue?: TValue
-    icons?: Partial<Record<TValue, ReactNode>>
-  } = {}
-): DropdownOption<TValue>[] =>
-  Object.entries(labels).map(([value, label]) => {
-    const optionValue = value as TValue
-    const optionLabel = label as string
-
-    return {
-      value: optionValue,
-      label: optionLabel,
-      menuLabel: options.defaultValue === optionValue ? `${optionLabel} (default)` : optionLabel,
-      icon: options.icons?.[optionValue]
-    }
-  })
-
-const accessModeOptions = getDropdownOptions(accessModeLabels, {
-  defaultValue: defaultAccessMode,
-  icons: accessModeIcons
-})
+const formatAccessModeLabel = (mode: ProviderAccessMode): string =>
+  mode
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
+    .join(' ') || mode
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
   accessMode,
+  accessModes,
   active = false,
   autoFocus = false,
   disabled = false,
@@ -154,6 +132,24 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   const messageBeforeEditRef = useRef<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editing = Boolean(editSession)
+  const selectedAccessMode = accessModes.find((candidateMode) => candidateMode.id === accessMode)
+  const accessModeOptions = accessModes.map((mode): DropdownOption<ProviderAccessMode> => ({
+    value: mode.id,
+    label: mode.label,
+    menuLabel: mode.isDefault ? `${mode.label} (default)` : mode.label,
+    description: mode.description || undefined,
+    icon: accessModeIcons[mode.id]
+  }))
+  const displayedAccessModeOptions = accessModeOptions.some((option) => option.value === accessMode)
+    ? accessModeOptions
+    : [
+        ...accessModeOptions,
+        {
+          value: accessMode,
+          label: formatAccessModeLabel(accessMode),
+          icon: accessModeIcons[accessMode]
+        }
+      ]
   const selectedModel = models.find((candidateModel) => candidateModel.id === model)
   const modelOptions = models.map((candidateModel): DropdownOption<ProviderModelId> => ({
     value: candidateModel.id,
@@ -201,6 +197,9 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   const selectedModelTitle = selectedModel?.description
     ? `${formatModelLabel(selectedModel.label)}: ${selectedModel.description}`
     : formatModelLabel(selectedModel?.label ?? model)
+  const selectedAccessModeTitle = selectedAccessMode?.description
+    ? `${selectedAccessMode.label}: ${selectedAccessMode.description}`
+    : (selectedAccessMode?.label ?? formatAccessModeLabel(accessMode))
   const selectedReasoningEffortLabel = getReasoningEffortLabel(reasoningEffort)
 
   useEffect(() => {
@@ -330,10 +329,10 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 id="access-mode"
                 disabled={selectorsDisabled}
                 icon={accessModeIcons[accessMode]}
-                options={accessModeOptions}
+                options={displayedAccessModeOptions}
                 placement="top"
                 value={accessMode}
-                title={accessModeLabels[accessMode]}
+                title={selectedAccessModeTitle}
                 onChange={onAccessModeChange}
               />
             </span>

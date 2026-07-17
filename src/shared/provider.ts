@@ -13,6 +13,14 @@ export const providerReasoningEfforts = ['low', 'medium', 'high', 'xhigh'] as co
 export type ProviderId = (typeof providerIds)[number]
 export type ProviderModelId = string
 export type ProviderReasoningEffort = string
+export type ProviderAccessMode = 'sandbox' | 'auto' | 'full'
+
+export type ProviderAccessModeOption = {
+  id: ProviderAccessMode
+  label: string
+  description: string
+  isDefault: boolean
+}
 
 export type ProviderReasoningEffortOption = {
   id: ProviderReasoningEffort
@@ -128,6 +136,27 @@ export const fallbackProviderModels: ProviderModel[] = [
       isDefault: reasoningEffort === 'high'
     })),
     defaultReasoningEffort: 'high'
+  }
+]
+
+export const fallbackProviderAccessModes: ProviderAccessModeOption[] = [
+  {
+    id: 'sandbox',
+    label: 'Sandbox',
+    description: 'Ask before approval-gated actions while keeping commands workspace sandboxed.',
+    isDefault: true
+  },
+  {
+    id: 'auto',
+    label: 'Auto approve',
+    description: 'Run without approval prompts while keeping commands workspace sandboxed.',
+    isDefault: false
+  },
+  {
+    id: 'full',
+    label: 'Full access',
+    description: 'Run without approval prompts or sandbox restrictions.',
+    isDefault: false
   }
 ]
 
@@ -286,8 +315,6 @@ export type ProviderChatUpdatedEvent = {
   detail: ProviderChatDetail
 }
 
-export type ProviderAccessMode = 'sandbox' | 'auto' | 'full'
-
 export type ProviderTurnOptions = {
   accessMode: ProviderAccessMode
   cwd?: string
@@ -297,6 +324,7 @@ export type ProviderTurnOptions = {
 
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
+  getAccessModes: (providerId: ProviderId) => Promise<ProviderAccessModeOption[]>
   getModels: (providerId: ProviderId) => Promise<ProviderModel[]>
   getChats: (providerId: ProviderId, options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
@@ -336,6 +364,7 @@ export type ProviderApi = {
 
 export const providerIpcChannels = {
   login: 'provider:login',
+  getAccessModes: 'provider:get-access-modes',
   getModels: 'provider:get-models',
   getChats: 'provider:get-chats',
   getChat: 'provider:get-chat',
@@ -352,6 +381,9 @@ export const providerIpcChannels = {
 
 export const isProviderId = (value: unknown): value is ProviderId =>
   providerIds.includes(value as ProviderId)
+
+export const isProviderAccessMode = (value: unknown): value is ProviderAccessMode =>
+  value === 'sandbox' || value === 'auto' || value === 'full'
 
 export const isProviderModelId = (value: unknown): value is ProviderModelId =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 128

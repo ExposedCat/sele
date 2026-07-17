@@ -26,13 +26,14 @@ import type {
   ProviderChatMetadata,
   ProviderMessage,
   ProviderAccessMode,
+  ProviderAccessModeOption,
   ProviderApprovalDecision,
   ProviderId,
   ProviderModel,
   ProviderModelId,
   ProviderReasoningEffort
 } from '../../shared/provider'
-import { fallbackProviderModels } from '../../shared/provider'
+import { fallbackProviderAccessModes, fallbackProviderModels } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
 import { Button } from './components/Button'
@@ -99,6 +100,10 @@ const newSessionProjectPlaceholderValue = '__sele_new_session_project_placeholde
 const fallbackDefaultModel = fallbackProviderModels.find((model) => model.isDefault)
 const fallbackInitialModel = fallbackDefaultModel ?? fallbackProviderModels[0]!
 const fallbackInitialReasoningEffort = fallbackInitialModel?.defaultReasoningEffort ?? 'medium'
+const fallbackDefaultAccessMode =
+  fallbackProviderAccessModes.find((mode) => mode.isDefault)?.id ??
+  fallbackProviderAccessModes[0]?.id ??
+  'sandbox'
 const refreshIconReplayMs = 1_050
 
 const providerLabels = {
@@ -299,6 +304,9 @@ const getDefaultReasoningEffort = (model: ProviderModel | undefined): ProviderRe
   model?.supportedReasoningEfforts.find((option) => option.isDefault)?.id ||
   model?.supportedReasoningEfforts[0]?.id ||
   fallbackInitialReasoningEffort
+
+const getDefaultAccessMode = (accessModes: ProviderAccessModeOption[]): ProviderAccessMode =>
+  accessModes.find((mode) => mode.isDefault)?.id ?? accessModes[0]?.id ?? fallbackDefaultAccessMode
 
 const modelSupportsReasoningEffort = (
   model: ProviderModel | undefined,
@@ -627,7 +635,10 @@ export const App: React.FC = () => {
   const [chatLoadRequest, setChatLoadRequest] = useState(0)
   const [sendState, setSendState] = useState<SendState>('idle')
   const [editingMessage, setEditingMessage] = useState<EditingMessage | null>(null)
-  const [accessMode, setAccessMode] = useState<ProviderAccessMode>('sandbox')
+  const [accessModes, setAccessModes] = useState<ProviderAccessModeOption[]>(
+    fallbackProviderAccessModes
+  )
+  const [accessMode, setAccessMode] = useState<ProviderAccessMode>(fallbackDefaultAccessMode)
   const [models, setModels] = useState<ProviderModel[]>(fallbackProviderModels)
   const [model, setModel] = useState<ProviderModelId>(fallbackInitialModel.id)
   const [reasoningEffort, setReasoningEffort] = useState<ProviderReasoningEffort>(
@@ -673,6 +684,7 @@ export const App: React.FC = () => {
   const sendInFlightRef = useRef(false)
   const modelManuallySelectedRef = useRef(false)
   const reasoningManuallySelectedRef = useRef(false)
+  const accessModeManuallySelectedRef = useRef(false)
 
   const defaultPanePercents = useMemo(() => getDefaultChatPanePercents(panelsWidth), [panelsWidth])
   const preferredPanePercents = panePercents ?? defaultPanePercents
@@ -842,6 +854,45 @@ export const App: React.FC = () => {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    let active = true
+
+    providerApi
+      .getAccessModes('codex')
+      .then((nextAccessModes) => {
+        if (!active || nextAccessModes.length === 0) return
+
+        setAccessModes(nextAccessModes)
+      })
+      .catch(() => {
+        if (active) setAccessModes(fallbackProviderAccessModes)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (accessModes.length === 0) return
+
+    const defaultAccessMode = getDefaultAccessMode(accessModes)
+
+    setAccessMode((currentAccessMode) => {
+      const currentAccessModeExists = accessModes.some((mode) => mode.id === currentAccessMode)
+
+      if (!currentAccessModeExists) return defaultAccessMode
+      if (
+        !accessModeManuallySelectedRef.current &&
+        currentAccessMode === fallbackDefaultAccessMode
+      ) {
+        return defaultAccessMode
+      }
+
+      return currentAccessMode
+    })
+  }, [accessModes])
 
   useEffect(() => {
     let active = true
@@ -1286,6 +1337,11 @@ export const App: React.FC = () => {
   const handleReasoningEffortChange = (nextReasoningEffort: ProviderReasoningEffort): void => {
     reasoningManuallySelectedRef.current = true
     setReasoningEffort(nextReasoningEffort)
+  }
+
+  const handleAccessModeChange = (nextAccessMode: ProviderAccessMode): void => {
+    accessModeManuallySelectedRef.current = true
+    setAccessMode(nextAccessMode)
   }
 
   const handleMarkChatDone = async (chat: ProviderChat): Promise<void> => {
@@ -1926,6 +1982,7 @@ export const App: React.FC = () => {
                 <MessageBox
                   active={editingMessage ? false : chatHasActiveTurn}
                   accessMode={accessMode}
+                  accessModes={accessModes}
                   autoFocus={!selectedChat && newChatOpen}
                   disabled={messageBoxDisabled}
                   editSession={editingMessage}
@@ -1934,7 +1991,7 @@ export const App: React.FC = () => {
                   models={models}
                   pending={sendState === 'sending'}
                   reasoningEffort={reasoningEffort}
-                  onAccessModeChange={setAccessMode}
+                  onAccessModeChange={handleAccessModeChange}
                   onCancelEdit={handleCancelEditMessage}
                   onModelChange={handleModelChange}
                   onReasoningEffortChange={handleReasoningEffortChange}

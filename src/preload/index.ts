@@ -25,6 +25,8 @@ const appApi: AppApi = {
 
 const providerApi: ProviderApi = {
   login: (providerId) => ipcRenderer.invoke(providerIpcChannels.login, providerId),
+  getAccessModes: (providerId) =>
+    ipcRenderer.invoke(providerIpcChannels.getAccessModes, providerId),
   getModels: (providerId) => ipcRenderer.invoke(providerIpcChannels.getModels, providerId),
   getChats: (providerId, options) =>
     ipcRenderer.invoke(providerIpcChannels.getChats, providerId, options),
