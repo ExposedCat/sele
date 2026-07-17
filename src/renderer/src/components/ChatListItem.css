@@ -142,6 +142,18 @@
   white-space: nowrap;
 }
 
+.chat-list-item__project-category {
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-list-item__context--with-project .chat-list-item__project {
+  max-width: 46%;
+}
+
 .chat-list-item__separator,
 .chat-list-item time {
   flex: none;

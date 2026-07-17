@@ -6,6 +6,7 @@ import './ChatListItem.css'
 type ChatListItemProps = {
   chat: ProviderChat
   selected: boolean
+  showProject: boolean
   onClick: () => void
   onMarkDone: () => void
   onTogglePinned: () => void
@@ -37,12 +38,15 @@ const getChatProjectName = (cwd: string | null): string => {
 export const ChatListItem: React.FC<ChatListItemProps> = ({
   chat,
   selected,
+  showProject,
   onClick,
   onMarkDone,
   onTogglePinned
 }) => {
   const createdAt = new Date(chat.createdAt)
   const contextName = chat.branchName ?? getChatProjectName(chat.cwd)
+  const projectName = getChatProjectName(chat.projectCwd ?? chat.cwd)
+  const visibleProjectName = showProject && projectName !== contextName ? projectName : null
   const isGitWorktree = chat.cwdKind === 'gitWorktree'
   const ProjectIcon = isGitWorktree ? GitBranch : Folder
   const contextTitle =
@@ -91,7 +95,16 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
           )}
         </span>
         <span className="chat-list-item__body">
-          <span className="chat-list-item__context" title={contextTitle}>
+          <span
+            className={`chat-list-item__context${visibleProjectName ? ' chat-list-item__context--with-project' : ''}`}
+            title={contextTitle}
+          >
+            {visibleProjectName && (
+              <>
+                <span className="chat-list-item__project-category">{visibleProjectName}</span>
+                <span className="chat-list-item__separator">·</span>
+              </>
+            )}
             <ProjectIcon className="chat-list-item__folder" aria-hidden="true" />
             <span className="chat-list-item__project">{contextName}</span>
             <span className="chat-list-item__separator">·</span>

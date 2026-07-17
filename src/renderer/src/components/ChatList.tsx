@@ -6,6 +6,7 @@ type ChatListProps = {
   ariaLabel?: string
   chats: ProviderChat[]
   selectedChatKey: string | null
+  showProjects?: boolean
   onMarkDone: (chat: ProviderChat) => void
   onSelect: (chat: ProviderChat) => void
   onTogglePinned: (chat: ProviderChat) => void
@@ -18,6 +19,7 @@ export const ChatList: React.FC<ChatListProps> = ({
   ariaLabel = 'Chats',
   chats,
   selectedChatKey,
+  showProjects = false,
   onMarkDone,
   onSelect,
   onTogglePinned
@@ -31,6 +33,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           key={chatKey}
           chat={chat}
           selected={chatKey === selectedChatKey}
+          showProject={showProjects}
           onMarkDone={() => onMarkDone(chat)}
           onClick={() => onSelect(chat)}
           onTogglePinned={() => onTogglePinned(chat)}

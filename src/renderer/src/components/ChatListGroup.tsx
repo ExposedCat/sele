@@ -85,6 +85,7 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
             ariaLabel={`${group.label} chats`}
             chats={group.chats}
             selectedChatKey={selectedChatKey}
+            showProjects={group.kind === 'pinned' || group.kind === 'done'}
             onMarkDone={onMarkChatDone}
             onSelect={onSelectChat}
             onTogglePinned={onToggleChatPinned}
