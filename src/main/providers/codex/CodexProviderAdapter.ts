@@ -9,6 +9,7 @@ import type {
   ProviderLoginResult,
   ProviderApprovalDecision,
   ProviderPendingApproval,
+  ProviderUpdateAvailability,
   ProviderAccessModeOption,
   ProviderTurnOptions
 } from '../../../shared/provider'
@@ -16,6 +17,7 @@ import { fallbackProviderAccessModes, fallbackProviderModels } from '../../../sh
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
 import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
+import { getCodexUpdateAvailability, updateCodexProvider } from './CodexProviderUpdate'
 import { loadRolloutCwd, loadRolloutHistory } from './CodexRolloutHistory'
 import { loadSessionThreadName, loadSessionThreadNames } from './CodexSessionIndex'
 import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
@@ -584,6 +586,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
   }
 
   getAccessModes = async (): Promise<ProviderAccessModeOption[]> => fallbackProviderAccessModes
+
+  getUpdateAvailability = async (): Promise<ProviderUpdateAvailability | null> =>
+    getCodexUpdateAvailability()
+
+  updateProvider = async (): Promise<ProviderUpdateAvailability | null> => {
+    this.client.dispose()
+    return updateCodexProvider()
+  }
 
   getModels = async (): Promise<ProviderModel[]> => {
     const models: ProviderModel[] = []

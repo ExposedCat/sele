@@ -5,6 +5,7 @@ import type {
   ProviderId,
   ProviderLoginResult,
   ProviderApprovalDecision,
+  ProviderUpdateAvailability,
   ProviderAccessModeOption,
   ProviderModel,
   ProviderTurnOptions
@@ -13,6 +14,8 @@ import type {
 export type ProviderAdapter = {
   id: ProviderId
   login: () => Promise<ProviderLoginResult>
+  getUpdateAvailability: () => Promise<ProviderUpdateAvailability | null>
+  updateProvider: () => Promise<ProviderUpdateAvailability | null>
   getAccessModes: () => Promise<ProviderAccessModeOption[]>
   getModels: () => Promise<ProviderModel[]>
   getChats: (options?: ProviderChatListOptions) => Promise<ProviderChatPage>

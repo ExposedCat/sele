@@ -113,6 +113,8 @@ for (const adapter of Object.values(adapters)) {
 
 export const providerApi: ProviderApi = {
   login: (providerId) => adapters[providerId].login(),
+  getUpdateAvailability: (providerId) => adapters[providerId].getUpdateAvailability(),
+  updateProvider: (providerId) => adapters[providerId].updateProvider(),
   getAccessModes: (providerId) => adapters[providerId].getAccessModes(),
   getModels: (providerId) => adapters[providerId].getModels(),
   getChats: async (providerId, options) => {

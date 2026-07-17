@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
+    "@react-symbols/icons": "^1.4.1",
     "better-sqlite3": "^12.11.1",
     "kysely": "^0.29.3",
     "lucide-animated": "^1.0.5",

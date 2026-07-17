@@ -169,6 +169,11 @@ export type ProviderLoginResult =
   | { status: 'pending'; loginId: string; authUrl: string }
   | { status: 'notRequired' }
 
+export type ProviderUpdateAvailability = {
+  currentVersion: string
+  latestVersion: string
+}
+
 export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
 export type ProviderChatCwdKind = 'directory' | 'gitWorktree'
 export type ProviderChatCwdMetadata = {
@@ -324,6 +329,8 @@ export type ProviderTurnOptions = {
 
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
+  getUpdateAvailability: (providerId: ProviderId) => Promise<ProviderUpdateAvailability | null>
+  updateProvider: (providerId: ProviderId) => Promise<ProviderUpdateAvailability | null>
   getAccessModes: (providerId: ProviderId) => Promise<ProviderAccessModeOption[]>
   getModels: (providerId: ProviderId) => Promise<ProviderModel[]>
   getChats: (providerId: ProviderId, options?: ProviderChatListOptions) => Promise<ProviderChatPage>
@@ -364,6 +371,8 @@ export type ProviderApi = {
 
 export const providerIpcChannels = {
   login: 'provider:login',
+  getUpdateAvailability: 'provider:get-update-availability',
+  updateProvider: 'provider:update',
   getAccessModes: 'provider:get-access-modes',
   getModels: 'provider:get-models',
   getChats: 'provider:get-chats',

@@ -45,6 +45,7 @@ type MessageBoxProps = {
 
 const minTextareaHeight = 44
 const maxTextareaHeight = 180
+const selectedControlIconClassName = 'message-box__selected-control-icon'
 
 const reasoningEffortLabels = {
   none: 'None',
@@ -60,7 +61,7 @@ const reasoningEffortLabels = {
 const accessModeIcons = {
   sandbox: <Shield aria-hidden="true" />,
   auto: <BadgeCheck aria-hidden="true" />,
-  full: <UnlockKeyhole aria-hidden="true" />
+  full: <UnlockKeyhole className={selectedControlIconClassName} aria-hidden="true" />
 } satisfies Record<ProviderAccessMode, ReactNode>
 
 const reasoningEffortIcons = {
@@ -69,7 +70,7 @@ const reasoningEffortIcons = {
   low: <Gauge aria-hidden="true" />,
   medium: <SlidersHorizontal aria-hidden="true" />,
   high: <Zap aria-hidden="true" />,
-  xhigh: <Flame aria-hidden="true" />,
+  xhigh: <Flame className={selectedControlIconClassName} aria-hidden="true" />,
   max: <Sparkles aria-hidden="true" />,
   ultra: <Sparkles aria-hidden="true" />
 } satisfies Record<string, ReactNode>

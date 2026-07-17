@@ -1,4 +1,4 @@
-import { CheckCheck, ChevronRight, PinOff } from 'lucide-react'
+import { CheckCheck, ChevronRight, PinOff, SquarePen } from 'lucide-react'
 import type { ProviderChat } from '../../../shared/provider'
 import { Button } from './Button'
 import { ChatList } from './ChatList'
@@ -19,6 +19,7 @@ type ChatListGroupProps = {
   selectedChatKey: string | null
   onMarkChatDone: (chat: ProviderChat) => void
   onMarkCwdChatsDone: (group: ChatListGroupData) => void
+  onNewChatInCwd: (group: ChatListGroupData) => void
   onSelectChat: (chat: ProviderChat) => void
   onToggle: (groupKey: string) => void
   onToggleChatPinned: (chat: ProviderChat) => void
@@ -32,6 +33,7 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
   selectedChatKey,
   onMarkChatDone,
   onMarkCwdChatsDone,
+  onNewChatInCwd,
   onSelectChat,
   onToggle,
   onToggleChatPinned,
@@ -56,6 +58,14 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
         </button>
         {group.kind === 'cwd' && (
           <span className="chat-list-group__action">
+            <Button
+              theme="transparent"
+              size="small"
+              aria-label={`New chat in ${group.label}`}
+              title="New chat"
+              callback={() => onNewChatInCwd(group)}
+              icon={<SquarePen aria-hidden="true" />}
+            />
             <Button
               theme="transparent"
               size="small"

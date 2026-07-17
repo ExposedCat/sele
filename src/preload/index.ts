@@ -1,12 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import type { AppApi, AppColorScheme } from '../shared/app'
+import type { AppApi, AppColorScheme, AppWindowState } from '../shared/app'
 import { appIpcChannels } from '../shared/app'
 import type { ProviderApi, ProviderChatUpdatedEvent } from '../shared/provider'
 import { providerIpcChannels } from '../shared/provider'
 
 const appApi: AppApi = {
   getColorScheme: () => ipcRenderer.invoke(appIpcChannels.getColorScheme),
+  getWindowState: () => ipcRenderer.invoke(appIpcChannels.getWindowState),
+  minimizeWindow: () => ipcRenderer.invoke(appIpcChannels.minimizeWindow),
+  toggleWindowMaximized: () => ipcRenderer.invoke(appIpcChannels.toggleWindowMaximized),
+  closeWindow: () => ipcRenderer.invoke(appIpcChannels.closeWindow),
   getDefaultCwd: () => ipcRenderer.invoke(appIpcChannels.getDefaultCwd),
   getGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.getGitChanges, options),
   commitGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.commitGitChanges, options),
@@ -20,11 +24,24 @@ const appApi: AppApi = {
     ipcRenderer.on(appIpcChannels.colorSchemeUpdated, handleColorSchemeUpdated)
     return () =>
       ipcRenderer.removeListener(appIpcChannels.colorSchemeUpdated, handleColorSchemeUpdated)
+  },
+  onWindowStateUpdated: (listener): (() => void) => {
+    const handleWindowStateUpdated = (_: IpcRendererEvent, state: AppWindowState): void => {
+      listener(state)
+    }
+
+    ipcRenderer.on(appIpcChannels.windowStateUpdated, handleWindowStateUpdated)
+    return () =>
+      ipcRenderer.removeListener(appIpcChannels.windowStateUpdated, handleWindowStateUpdated)
   }
 }
 
 const providerApi: ProviderApi = {
   login: (providerId) => ipcRenderer.invoke(providerIpcChannels.login, providerId),
+  getUpdateAvailability: (providerId) =>
+    ipcRenderer.invoke(providerIpcChannels.getUpdateAvailability, providerId),
+  updateProvider: (providerId) =>
+    ipcRenderer.invoke(providerIpcChannels.updateProvider, providerId),
   getAccessModes: (providerId) =>
     ipcRenderer.invoke(providerIpcChannels.getAccessModes, providerId),
   getModels: (providerId) => ipcRenderer.invoke(providerIpcChannels.getModels, providerId),

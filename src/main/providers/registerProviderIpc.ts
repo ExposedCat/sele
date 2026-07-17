@@ -113,6 +113,14 @@ export const registerProviderIpc = (): void => {
     providerApi.login(requireProviderId(providerId))
   )
 
+  ipcMain.handle(providerIpcChannels.getUpdateAvailability, (_, providerId: unknown) =>
+    providerApi.getUpdateAvailability(requireProviderId(providerId))
+  )
+
+  ipcMain.handle(providerIpcChannels.updateProvider, (_, providerId: unknown) =>
+    providerApi.updateProvider(requireProviderId(providerId))
+  )
+
   ipcMain.handle(providerIpcChannels.getAccessModes, (_, providerId: unknown) =>
     providerApi.getAccessModes(requireProviderId(providerId))
   )

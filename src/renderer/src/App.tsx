@@ -1,22 +1,37 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
+  BellOff,
+  ChevronDown,
+  ChevronRight,
   Check,
-  FilePlus2,
+  Download,
+  Files,
   FolderPlus,
   GitBranch,
   GitCommitHorizontal,
-  History,
+  GitCompareArrows,
+  Maximize2,
+  Minimize2,
+  Minus,
   Pencil,
   Search,
   Sparkles,
   SquarePen,
-  Trash2,
   Upload,
   X
 } from 'lucide-react'
 import { RefreshCwIcon as AnimatedRefreshCwIcon, type RefreshCwIconHandle } from 'lucide-animated'
-import type { AppGitChangeKind, AppGitChangesResult, AppGitCommitAction } from '../../shared/app'
+import {
+  FileIcon as SymbolsFileIcon,
+  FolderIcon as SymbolsFolderIcon
+} from '@react-symbols/icons/utils'
+import type {
+  AppGitChangeKind,
+  AppGitChangesResult,
+  AppGitCommitAction,
+  AppWindowState
+} from '../../shared/app'
 import type {
   ProviderChat,
   ProviderChatDetail,
@@ -31,7 +46,8 @@ import type {
   ProviderId,
   ProviderModel,
   ProviderModelId,
-  ProviderReasoningEffort
+  ProviderReasoningEffort,
+  ProviderUpdateAvailability
 } from '../../shared/provider'
 import { fallbackProviderAccessModes, fallbackProviderModels } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
@@ -55,15 +71,46 @@ type ApprovalResolutionState = {
   decision: ProviderApprovalDecision | null
   error: string | null
 }
+type ProviderUpdateState = 'idle' | 'updating'
+type ProviderUpdateSuggestion = ProviderUpdateAvailability & {
+  providerId: ProviderId
+}
+type ProviderUpdatePreference = {
+  neverSuggest: boolean
+  ignoredVersions: string[]
+}
+type ProviderUpdatePreferences = Partial<Record<ProviderId, ProviderUpdatePreference>>
 type ChangeSource = 'branch' | 'lastTurn' | 'uncommitted'
 type GitChangeSource = Exclude<ChangeSource, 'lastTurn'>
-type CommitMode = 'agent' | 'manual'
+type CommitMode = 'ai' | 'manual'
+type ChangesPaneView = 'git' | 'files'
+type GitCommitPromptAction = AppGitCommitAction | 'multipleCommits'
 type ChangedFile = {
   path: string
   previousPath?: string | null
+  displayPath?: string
+  displayPreviousPath?: string | null
   kind: AppGitChangeKind
   status?: string
   diff?: string
+}
+type ChangeTreeFileNode = {
+  type: 'file'
+  name: string
+  file: ChangedFile
+}
+type ChangeTreeFolderNode = {
+  type: 'folder'
+  name: string
+  path: string
+  children: ChangeTreeNode[]
+}
+type ChangeTreeNode = ChangeTreeFolderNode | ChangeTreeFileNode
+type MutableChangeTreeFolder = {
+  name: string
+  path: string
+  folders: Map<string, MutableChangeTreeFolder>
+  files: ChangeTreeFileNode[]
 }
 type ChatPaneWidths = {
   sidebar: number
@@ -73,6 +120,12 @@ type ChatPanePercents = {
   sidebar: number
   changes: number
 }
+type MessageBoxSelection = {
+  accessMode: ProviderAccessMode
+  model: ProviderModelId
+  reasoningEffort: ProviderReasoningEffort
+}
+type StoredMessageBoxSelection = Partial<MessageBoxSelection>
 type ChatResizeEdge = 'left' | 'right'
 type GitChangesScope = {
   cwd: string
@@ -93,6 +146,8 @@ const chatResizeHandleWidth = 9
 const chatResizeHandleCount = 2
 const chatPaneDefaultReferenceWidth = 1200
 const chatPanePreferenceStorageKey = 'sele:chat-pane-preference:v1'
+const messageBoxSelectionStorageKey = 'sele:message-box-selection:v1'
+const providerUpdatePreferenceStorageKey = 'sele:provider-update-preferences:v1'
 const pinnedGroupKey = 'pinned'
 const unknownCwdGroupKey = 'cwd:unknown'
 const doneGroupKey = 'done'
@@ -110,24 +165,75 @@ const providerLabels = {
   codex: 'Codex'
 } satisfies Record<ProviderId, string>
 
-const changeSourceLabels = {
-  branch: 'Branch',
-  lastTurn: 'Last turn',
-  uncommitted: 'Uncommitted'
-} satisfies Record<ChangeSource, string>
+const getProviderUpdatePreference = (
+  preferences: ProviderUpdatePreferences,
+  providerId: ProviderId
+): ProviderUpdatePreference => ({
+  neverSuggest: Boolean(preferences[providerId]?.neverSuggest),
+  ignoredVersions: preferences[providerId]?.ignoredVersions ?? []
+})
 
-const changeKindLabels = {
-  edit: 'Modified',
-  create: 'Added',
-  delete: 'Deleted',
-  rename: 'Renamed'
-} satisfies Record<AppGitChangeKind, string>
+const shouldSuggestProviderUpdate = (
+  preferences: ProviderUpdatePreferences,
+  providerId: ProviderId,
+  availability: ProviderUpdateAvailability
+): boolean => {
+  const preference = getProviderUpdatePreference(preferences, providerId)
+  return (
+    !preference.neverSuggest && !preference.ignoredVersions.includes(availability.latestVersion)
+  )
+}
+
+const isProviderUpdatePreference = (value: unknown): value is ProviderUpdatePreference => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+
+  const preference = value as Partial<ProviderUpdatePreference>
+  return (
+    typeof preference.neverSuggest === 'boolean' &&
+    Array.isArray(preference.ignoredVersions) &&
+    preference.ignoredVersions.every((version) => typeof version === 'string')
+  )
+}
+
+const readStoredProviderUpdatePreferences = (): ProviderUpdatePreferences => {
+  try {
+    const storedValue = window.localStorage.getItem(providerUpdatePreferenceStorageKey)
+    if (!storedValue) return {}
+
+    const parsedValue = JSON.parse(storedValue) as Record<string, unknown> | null
+    if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return {}
+
+    const preferences: ProviderUpdatePreferences = {}
+    for (const providerId of Object.keys(providerLabels) as ProviderId[]) {
+      const preference = parsedValue[providerId]
+      if (isProviderUpdatePreference(preference)) preferences[providerId] = preference
+    }
+
+    return preferences
+  } catch {
+    return {}
+  }
+}
+
+const writeStoredProviderUpdatePreferences = (preferences: ProviderUpdatePreferences): void => {
+  try {
+    window.localStorage.setItem(providerUpdatePreferenceStorageKey, JSON.stringify(preferences))
+  } catch {
+    // Update suggestion preferences are non-critical; ignore unavailable storage.
+  }
+}
+
+const changeSourceLabels = {
+  uncommitted: 'Uncommitted',
+  lastTurn: 'Last turn',
+  branch: 'Branch'
+} satisfies Record<ChangeSource, string>
 
 const commitActionLabels = {
   commit: 'Commit',
   amend: 'Amend',
-  commitAndPush: 'Commit & push'
-} satisfies Record<AppGitCommitAction, string>
+  multipleCommits: 'Multiple commits'
+} satisfies Record<GitCommitPromptAction, string>
 
 const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
   const iconRef = useRef<RefreshCwIconHandle | null>(null)
@@ -170,6 +276,16 @@ const getDropdownOptions = <TValue extends string>(
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), Math.max(min, max))
+
+const getScrollBottomTop = (element: HTMLElement): number =>
+  Math.max(0, element.scrollHeight - element.clientHeight)
+
+const isScrolledToBottom = (element: HTMLElement): boolean =>
+  getScrollBottomTop(element) - element.scrollTop <= 1
+
+const scrollToBottom = (element: HTMLElement): void => {
+  element.scrollTop = getScrollBottomTop(element)
+}
 
 const roundPanePercent = (value: number): number => Math.round(value * 1000) / 1000
 
@@ -285,6 +401,41 @@ const writeStoredChatPanePercents = (percents: ChatPanePercents): void => {
     window.localStorage.setItem(chatPanePreferenceStorageKey, JSON.stringify(percents))
   } catch {
     // Layout preferences are non-critical; ignore unavailable storage.
+  }
+}
+
+const isProviderAccessMode = (value: unknown): value is ProviderAccessMode =>
+  value === 'sandbox' || value === 'auto' || value === 'full'
+
+const isStoredSelectionString = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0
+
+const readStoredMessageBoxSelection = (): StoredMessageBoxSelection => {
+  try {
+    const storedValue = window.localStorage.getItem(messageBoxSelectionStorageKey)
+    if (!storedValue) return {}
+
+    const parsedValue = JSON.parse(storedValue) as Record<string, unknown> | null
+    if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return {}
+
+    const selection: StoredMessageBoxSelection = {}
+    if (isProviderAccessMode(parsedValue.accessMode)) selection.accessMode = parsedValue.accessMode
+    if (isStoredSelectionString(parsedValue.model)) selection.model = parsedValue.model
+    if (isStoredSelectionString(parsedValue.reasoningEffort)) {
+      selection.reasoningEffort = parsedValue.reasoningEffort
+    }
+
+    return selection
+  } catch {
+    return {}
+  }
+}
+
+const writeStoredMessageBoxSelection = (selection: MessageBoxSelection): void => {
+  try {
+    window.localStorage.setItem(messageBoxSelectionStorageKey, JSON.stringify(selection))
+  } catch {
+    // Composer preferences are non-critical; ignore unavailable storage.
   }
 }
 
@@ -521,6 +672,92 @@ const getVisibleChatItems = (
 const sortChangedFiles = (files: ChangedFile[]): ChangedFile[] =>
   [...files].sort((firstFile, secondFile) => firstFile.path.localeCompare(secondFile.path))
 
+const getPathParts = (path: string): string[] => path.replace(/\\/g, '/').split('/').filter(Boolean)
+
+const normalizeDisplayPath = (path: string, root: string | null): string => {
+  const normalizedPath = path.replace(/\\/g, '/')
+  const normalizedRoot = root?.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+
+  if (!normalizedRoot) return normalizedPath
+  if (normalizedPath === normalizedRoot) return getLastPathPart(normalizedPath)
+  if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
+    return normalizedPath.slice(normalizedRoot.length + 1)
+  }
+
+  return normalizedPath
+}
+
+const getChangedFileDisplayPath = (file: ChangedFile): string => file.displayPath ?? file.path
+
+const getChangedFileDisplayPreviousPath = (file: ChangedFile): string | null =>
+  file.displayPreviousPath ?? file.previousPath ?? null
+
+const getChangedFilesWithDisplayPaths = (
+  files: ChangedFile[],
+  root: string | null
+): ChangedFile[] =>
+  files.map((file) => ({
+    ...file,
+    displayPath: normalizeDisplayPath(file.path, root),
+    displayPreviousPath: file.previousPath ? normalizeDisplayPath(file.previousPath, root) : null
+  }))
+
+const createMutableChangeTreeFolder = (name: string, path: string): MutableChangeTreeFolder => ({
+  name,
+  path,
+  folders: new Map(),
+  files: []
+})
+
+const finalizeChangeTreeFolder = (folder: MutableChangeTreeFolder): ChangeTreeNode[] => {
+  const folders = Array.from(folder.folders.values())
+    .sort((firstFolder, secondFolder) => firstFolder.name.localeCompare(secondFolder.name))
+    .map<ChangeTreeFolderNode>((childFolder) => ({
+      type: 'folder',
+      name: childFolder.name,
+      path: childFolder.path,
+      children: finalizeChangeTreeFolder(childFolder)
+    }))
+
+  const files = [...folder.files].sort((firstFile, secondFile) =>
+    firstFile.name.localeCompare(secondFile.name)
+  )
+
+  return [...folders, ...files]
+}
+
+const buildChangeTree = (files: ChangedFile[]): ChangeTreeNode[] => {
+  const root = createMutableChangeTreeFolder('', '')
+
+  for (const file of files) {
+    const displayPath = getChangedFileDisplayPath(file)
+    const pathParts = getPathParts(displayPath)
+    const fileName = pathParts.pop() ?? displayPath
+    let folder = root
+    let folderPath = ''
+
+    for (const folderName of pathParts) {
+      folderPath = folderPath ? `${folderPath}/${folderName}` : folderName
+      let childFolder = folder.folders.get(folderName)
+
+      if (!childFolder) {
+        childFolder = createMutableChangeTreeFolder(folderName, folderPath)
+        folder.folders.set(folderName, childFolder)
+      }
+
+      folder = childFolder
+    }
+
+    folder.files.push({
+      type: 'file',
+      name: fileName,
+      file
+    })
+  }
+
+  return finalizeChangeTreeFolder(root)
+}
+
 const getWorkingItemDiffs = (item: ProviderWorkingItem): ProviderFileDiff[] => {
   if (item.type === 'tool') return item.diffs
   if (item.type === 'toolGroup') return item.tools.flatMap((tool) => tool.diffs)
@@ -557,8 +794,12 @@ const getGitChangedFiles = (result: AppGitChangesResult | null): ChangedFile[] =
     })) ?? []
   )
 
-const formatCommitFile = (file: ChangedFile): string =>
-  file.previousPath ? `${file.previousPath} -> ${file.path}` : file.path
+const formatCommitFile = (file: ChangedFile): string => {
+  const previousPath = getChangedFileDisplayPreviousPath(file)
+  const path = getChangedFileDisplayPath(file)
+
+  return previousPath ? `${previousPath} -> ${path}` : path
+}
 
 const getCommitFiles = (files: ChangedFile[]): string[] =>
   Array.from(
@@ -569,15 +810,38 @@ const getCommitFiles = (files: ChangedFile[]): string[] =>
     )
   )
 
-const getCommitMessage = (files: ChangedFile[], action: AppGitCommitAction): string => {
-  const fileList = files.map(formatCommitFile).join(', ')
+const getCommitPromptTarget = (files: ChangedFile[], source: ChangeSource): string => {
+  if (source === 'uncommitted') return 'all uncommitted'
 
-  if (action === 'amend') return `Amend last commit with these files: ${fileList}`
-  if (action === 'commitAndPush') {
-    return `Following repo commit preferences and naming, commit and push: ${fileList}`
+  const fileList = files.map(formatCommitFile).join(', ')
+  return fileList || 'these changes'
+}
+
+const appendCommitPromptInstructions = (prompt: string, instructions: string): string => {
+  const trimmedInstructions = instructions.trim()
+  return trimmedInstructions
+    ? `${prompt}\n\nAdditional instructions: ${trimmedInstructions}`
+    : prompt
+}
+
+const getCommitMessage = (
+  files: ChangedFile[],
+  action: GitCommitPromptAction,
+  source: ChangeSource,
+  instructions: string
+): string => {
+  const target = getCommitPromptTarget(files, source)
+  let prompt: string
+
+  if (action === 'amend') {
+    prompt = `Amend last commit with ${target}.`
+  } else if (action === 'multipleCommits') {
+    prompt = `Following repo commit preferences and naming, split ${target} into 1, 2, or more commits based on the amount and intent of the changes.`
+  } else {
+    prompt = `Following repo commit preferences and naming, commit: ${target}`
   }
 
-  return `Following repo commit preferences and naming, commit: ${fileList}`
+  return appendCommitPromptInstructions(prompt, instructions)
 }
 
 const getErrorMessage = (error: unknown, fallback: string): string => {
@@ -618,15 +882,50 @@ const getApprovalSummary = (
     : 'Command requires approval'
 }
 
-const ChangeKindIcon: React.FC<{ kind: AppGitChangeKind }> = ({ kind }) => {
-  if (kind === 'create') return <FilePlus2 aria-hidden="true" />
-  if (kind === 'delete') return <Trash2 aria-hidden="true" />
-  if (kind === 'rename') return <History aria-hidden="true" />
+const getProviderUpdateSummary = (suggestion: ProviderUpdateSuggestion): string =>
+  `Update ${providerLabels[suggestion.providerId]} from ${suggestion.currentVersion} to ${
+    suggestion.latestVersion
+  }`
 
-  return <Pencil aria-hidden="true" />
+type CommitModeToggleProps = {
+  mode: CommitMode
+  disabled: boolean
+  onChange: (mode: CommitMode) => void
 }
 
+const CommitModeToggle: React.FC<CommitModeToggleProps> = ({ mode, disabled, onChange }) => (
+  <div className="changes-sidebar__mode-toggle" role="group" aria-label="Commit mode">
+    <button
+      className={`changes-sidebar__mode-option${
+        mode === 'ai' ? ' changes-sidebar__mode-option--active' : ''
+      }`}
+      type="button"
+      aria-label="Use AI commit flow"
+      aria-pressed={mode === 'ai'}
+      title="Use AI commit flow"
+      disabled={disabled}
+      onClick={() => onChange('ai')}
+    >
+      <Sparkles aria-hidden="true" />
+    </button>
+    <button
+      className={`changes-sidebar__mode-option${
+        mode === 'manual' ? ' changes-sidebar__mode-option--active' : ''
+      }`}
+      type="button"
+      aria-label="Use manual commit message"
+      aria-pressed={mode === 'manual'}
+      title="Use manual commit message"
+      disabled={disabled}
+      onClick={() => onChange('manual')}
+    >
+      <Pencil aria-hidden="true" />
+    </button>
+  </div>
+)
+
 export const App: React.FC = () => {
+  const storedMessageBoxSelection = useMemo(() => readStoredMessageBoxSelection(), [])
   const [chats, setChats] = useState<ProviderChat[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [selectedChat, setSelectedChat] = useState<ProviderChat | null>(null)
@@ -638,17 +937,27 @@ export const App: React.FC = () => {
   const [accessModes, setAccessModes] = useState<ProviderAccessModeOption[]>(
     fallbackProviderAccessModes
   )
-  const [accessMode, setAccessMode] = useState<ProviderAccessMode>(fallbackDefaultAccessMode)
+  const [accessMode, setAccessMode] = useState<ProviderAccessMode>(
+    storedMessageBoxSelection.accessMode ?? fallbackDefaultAccessMode
+  )
   const [models, setModels] = useState<ProviderModel[]>(fallbackProviderModels)
-  const [model, setModel] = useState<ProviderModelId>(fallbackInitialModel.id)
+  const [model, setModel] = useState<ProviderModelId>(
+    storedMessageBoxSelection.model ?? fallbackInitialModel.id
+  )
   const [reasoningEffort, setReasoningEffort] = useState<ProviderReasoningEffort>(
-    fallbackInitialReasoningEffort
+    storedMessageBoxSelection.reasoningEffort ?? fallbackInitialReasoningEffort
   )
   const [approvalResolution, setApprovalResolution] = useState<ApprovalResolutionState>({
     approvalId: null,
     decision: null,
     error: null
   })
+  const [providerUpdateSuggestion, setProviderUpdateSuggestion] =
+    useState<ProviderUpdateSuggestion | null>(null)
+  const [providerUpdateState, setProviderUpdateState] = useState<ProviderUpdateState>('idle')
+  const [providerUpdateError, setProviderUpdateError] = useState<string | null>(null)
+  const [providerUpdatePreferences, setProviderUpdatePreferences] =
+    useState<ProviderUpdatePreferences>(readStoredProviderUpdatePreferences)
   const [newChatOpen, setNewChatOpen] = useState(true)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null)
   const [newSessionProvider, setNewSessionProvider] = useState<ProviderId>('codex')
@@ -658,14 +967,18 @@ export const App: React.FC = () => {
   const [collapsedCwdGroups, setCollapsedCwdGroups] = useState<Record<string, boolean>>({})
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [chatPageLoadState, setChatPageLoadState] = useState<IncrementalLoadState>('ready')
-  const [changeSource, setChangeSource] = useState<ChangeSource>('branch')
+  const [changeSource, setChangeSource] = useState<ChangeSource>('uncommitted')
+  const [changesPaneView, setChangesPaneView] = useState<ChangesPaneView>('git')
   const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
   const [gitChangesScope, setGitChangesScope] = useState<GitChangesScope | null>(null)
   const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
   const [gitChangeLoadScope, setGitChangeLoadScope] = useState<GitChangesScope | null>(null)
   const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
-  const [commitMode, setCommitMode] = useState<CommitMode>('agent')
-  const [manualCommitMessage, setManualCommitMessage] = useState('')
+  const [collapsedChangeTreeFolders, setCollapsedChangeTreeFolders] = useState<
+    Record<string, boolean>
+  >({})
+  const [commitMode, setCommitMode] = useState<CommitMode>('ai')
+  const [commitInput, setCommitInput] = useState('')
   const [commitState, setCommitState] = useState<SendState>('idle')
   const [commitError, setCommitError] = useState<string | null>(null)
   const [pushState, setPushState] = useState<SendState>('idle')
@@ -674,6 +987,7 @@ export const App: React.FC = () => {
     readStoredChatPanePercents
   )
   const [panelsWidth, setPanelsWidth] = useState(0)
+  const [windowState, setWindowState] = useState<AppWindowState>({ isMaximized: false })
   const panelsRef = useRef<HTMLDivElement>(null)
   const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -682,9 +996,11 @@ export const App: React.FC = () => {
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
-  const modelManuallySelectedRef = useRef(false)
-  const reasoningManuallySelectedRef = useRef(false)
-  const accessModeManuallySelectedRef = useRef(false)
+  const chatAutoScrollEnabledRef = useRef(true)
+  const chatAutoScrollFrameRef = useRef<number | null>(null)
+  const modelManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.model))
+  const reasoningManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.reasoningEffort))
+  const accessModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.accessMode))
 
   const defaultPanePercents = useMemo(() => getDefaultChatPanePercents(panelsWidth), [panelsWidth])
   const preferredPanePercents = panePercents ?? defaultPanePercents
@@ -698,6 +1014,95 @@ export const App: React.FC = () => {
 
     writeStoredChatPanePercents(panePercents)
   }, [panePercents])
+
+  useEffect(
+    () => () => {
+      if (chatAutoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(chatAutoScrollFrameRef.current)
+      }
+    },
+    []
+  )
+
+  useEffect(() => {
+    writeStoredMessageBoxSelection({ accessMode, model, reasoningEffort })
+  }, [accessMode, model, reasoningEffort])
+
+  useEffect(() => {
+    let active = true
+
+    appApi
+      .getWindowState()
+      .then((nextWindowState) => {
+        if (active) setWindowState(nextWindowState)
+      })
+      .catch(() => {})
+
+    const unsubscribe = appApi.onWindowStateUpdated((nextWindowState) => {
+      setWindowState(nextWindowState)
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    writeStoredProviderUpdatePreferences(providerUpdatePreferences)
+  }, [providerUpdatePreferences])
+
+  useEffect(() => {
+    const queueProviderUpdateClear = (): void => {
+      queueMicrotask(() => {
+        setProviderUpdateSuggestion(null)
+        setProviderUpdateError(null)
+      })
+    }
+
+    if (selectedChat || !newChatOpen) {
+      queueProviderUpdateClear()
+      return undefined
+    }
+
+    const providerId = newSessionProvider
+    const preference = getProviderUpdatePreference(providerUpdatePreferences, providerId)
+    if (preference.neverSuggest) {
+      queueProviderUpdateClear()
+      return undefined
+    }
+
+    let active = true
+
+    queueMicrotask(() => {
+      if (!active) return
+
+      setProviderUpdateSuggestion((currentSuggestion) =>
+        currentSuggestion?.providerId === providerId ? currentSuggestion : null
+      )
+      setProviderUpdateError(null)
+    })
+
+    providerApi
+      .getUpdateAvailability(providerId)
+      .then((availability) => {
+        if (!active) return
+
+        setProviderUpdateSuggestion(
+          availability &&
+            shouldSuggestProviderUpdate(providerUpdatePreferences, providerId, availability)
+            ? { ...availability, providerId }
+            : null
+        )
+      })
+      .catch(() => {
+        if (active) setProviderUpdateSuggestion(null)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [newChatOpen, newSessionProvider, providerUpdatePreferences, selectedChat])
 
   useEffect(() => {
     const panels = panelsRef.current
@@ -978,7 +1383,7 @@ export const App: React.FC = () => {
     []
   )
 
-  const showNewChatView = useCallback((): void => {
+  const showNewChatView = useCallback((projectCwd?: string | null): void => {
     setSelectedChat(null)
     setChatDetail(null)
     setChatLoadState('ready')
@@ -986,6 +1391,7 @@ export const App: React.FC = () => {
     setEditingMessage(null)
     setSearchOpen(false)
     setSearchQuery('')
+    if (projectCwd !== undefined) setNewSessionCwd(projectCwd)
     setNewChatOpen(true)
   }, [])
 
@@ -1027,6 +1433,9 @@ export const App: React.FC = () => {
   const selectedProviderId = selectedChat?.providerId
   const selectedChatId = selectedChat?.id
   const changesCwd = selectedChat ? (chatDetail?.cwd ?? selectedChat.cwd) : newSessionCwd
+  const changesProjectCwd = selectedChat
+    ? (chatDetail?.projectCwd ?? selectedChat.projectCwd ?? changesCwd)
+    : newSessionCwd
   const pendingApproval = chatDetail?.pendingApproval ?? null
   const currentApprovalResolution =
     approvalResolution.approvalId === pendingApproval?.id ? approvalResolution : null
@@ -1086,12 +1495,30 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!chatDetail) return
 
-    contentRef.current?.scrollTo({ top: contentRef.current.scrollHeight })
+    const contentElement = contentRef.current
+    if (!contentElement || !chatAutoScrollEnabledRef.current) return
+
+    scrollToBottom(contentElement)
+    if (chatAutoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(chatAutoScrollFrameRef.current)
+    }
+    chatAutoScrollFrameRef.current = window.requestAnimationFrame(() => {
+      chatAutoScrollFrameRef.current = null
+      if (contentRef.current !== contentElement) return
+
+      scrollToBottom(contentElement)
+      chatAutoScrollEnabledRef.current = true
+    })
   }, [chatDetail])
+
+  useEffect(() => {
+    chatAutoScrollEnabledRef.current = true
+  }, [selectedProviderId, selectedChatId])
 
   useEffect(() => {
     if (selectedChat) return
 
+    chatAutoScrollEnabledRef.current = true
     contentRef.current?.scrollTo({ top: 0 })
   }, [selectedChat])
 
@@ -1298,7 +1725,17 @@ export const App: React.FC = () => {
   }
 
   const handleNewChat = (): void => {
-    showNewChatView()
+    showNewChatView(
+      selectedChat
+        ? getChatProjectCwd(chatDetail?.id === selectedChat.id ? chatDetail : selectedChat)
+        : undefined
+    )
+  }
+
+  const handleNewChatInCwd = (group: ChatListGroupData): void => {
+    if (group.kind !== 'cwd') return
+
+    showNewChatView(group.cwd)
   }
 
   const handleCloseSearch = (): void => {
@@ -1342,6 +1779,75 @@ export const App: React.FC = () => {
   const handleAccessModeChange = (nextAccessMode: ProviderAccessMode): void => {
     accessModeManuallySelectedRef.current = true
     setAccessMode(nextAccessMode)
+  }
+
+  const updateProviderUpdatePreference = (
+    providerId: ProviderId,
+    update: (preference: ProviderUpdatePreference) => ProviderUpdatePreference
+  ): void => {
+    setProviderUpdatePreferences((currentPreferences) => ({
+      ...currentPreferences,
+      [providerId]: update(getProviderUpdatePreference(currentPreferences, providerId))
+    }))
+  }
+
+  const handleSkipProviderUpdate = (): void => {
+    setProviderUpdateSuggestion(null)
+    setProviderUpdateError(null)
+  }
+
+  const handleNeverSuggestProviderUpdate = (): void => {
+    const suggestion = providerUpdateSuggestion
+    if (!suggestion) return
+
+    updateProviderUpdatePreference(suggestion.providerId, (preference) => ({
+      ...preference,
+      neverSuggest: true
+    }))
+    setProviderUpdateSuggestion(null)
+    setProviderUpdateError(null)
+  }
+
+  const handleNeverSuggestProviderUpdateVersion = (): void => {
+    const suggestion = providerUpdateSuggestion
+    if (!suggestion) return
+
+    updateProviderUpdatePreference(suggestion.providerId, (preference) => ({
+      ...preference,
+      ignoredVersions: Array.from(
+        new Set([...preference.ignoredVersions, suggestion.latestVersion])
+      )
+    }))
+    setProviderUpdateSuggestion(null)
+    setProviderUpdateError(null)
+  }
+
+  const handleUpdateProvider = async (): Promise<void> => {
+    const suggestion = providerUpdateSuggestion
+    if (!suggestion || providerUpdateState === 'updating') return
+
+    setProviderUpdateState('updating')
+    setProviderUpdateError(null)
+
+    try {
+      const availability = await providerApi.updateProvider(suggestion.providerId)
+      setProviderUpdateSuggestion(
+        availability &&
+          shouldSuggestProviderUpdate(
+            providerUpdatePreferences,
+            suggestion.providerId,
+            availability
+          )
+          ? { ...availability, providerId: suggestion.providerId }
+          : null
+      )
+    } catch (error) {
+      setProviderUpdateError(
+        getErrorMessage(error, `Unable to update ${providerLabels[suggestion.providerId]}.`)
+      )
+    } finally {
+      setProviderUpdateState('idle')
+    }
   }
 
   const handleMarkChatDone = async (chat: ProviderChat): Promise<void> => {
@@ -1429,6 +1935,7 @@ export const App: React.FC = () => {
   const handleSendMessage = async (message: string): Promise<void> => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
+    chatAutoScrollEnabledRef.current = true
     const turnOptions = { accessMode, model, reasoningEffort }
 
     if (editingMessage) {
@@ -1550,6 +2057,13 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleChatContentScroll = (): void => {
+    const contentElement = contentRef.current
+    if (!contentElement) return
+
+    chatAutoScrollEnabledRef.current = isScrolledToBottom(contentElement)
+  }
+
   const renderChatGroup = (group: ChatListGroupData, contentId: string): React.ReactElement => {
     const groupOpen =
       searchTerms.length > 0 || !getCollapsedGroupState(group.key, collapsedCwdGroups)
@@ -1563,6 +2077,7 @@ export const App: React.FC = () => {
         selectedChatKey={selectedChat ? getChatKey(selectedChat) : null}
         onMarkChatDone={handleMarkChatDone}
         onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
+        onNewChatInCwd={handleNewChatInCwd}
         onSelectChat={handleSelectChat}
         onToggle={handleToggleCwdGroup}
         onToggleChatPinned={handleToggleChatPinned}
@@ -1600,7 +2115,13 @@ export const App: React.FC = () => {
     () => (changesCwd ? getGitChangedFiles(displayedGitChanges) : []),
     [changesCwd, displayedGitChanges]
   )
-  const changedFiles = changeSource === 'lastTurn' ? lastTurnChangedFiles : gitChangedFiles
+  const rawChangedFiles = changeSource === 'lastTurn' ? lastTurnChangedFiles : gitChangedFiles
+  const changedFilesDisplayRoot =
+    displayedGitChanges?.repositoryRoot ?? changesProjectCwd ?? changesCwd ?? null
+  const changedFiles = useMemo(
+    () => getChangedFilesWithDisplayPaths(rawChangedFiles, changedFilesDisplayRoot),
+    [changedFilesDisplayRoot, rawChangedFiles]
+  )
   const gitChangeLoadMatchesCurrentSource = isGitChangesScope(
     gitChangeLoadScope,
     changesCwd,
@@ -1617,12 +2138,26 @@ export const App: React.FC = () => {
   const unpushedCount =
     changesCwd && gitChangesScope?.cwd === changesCwd ? (gitChanges?.unpushedCount ?? 0) : 0
   const hasUnpushedChanges = unpushedCount > 0
+  const changesGitMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
+  const currentBranchName = changesGitMetadata?.branchName ?? selectedChat?.branchName ?? null
+  const branchDropdownValue = currentBranchName ?? '__no_branch__'
+  const branchDropdownOptions = useMemo<DropdownOption<string>[]>(
+    () => [
+      {
+        value: branchDropdownValue,
+        label: currentBranchName ?? 'No branch',
+        icon: <GitBranch aria-hidden="true" />
+      }
+    ],
+    [branchDropdownValue, currentBranchName]
+  )
   const canCommitChangeSource = changeSource !== 'branch'
   const commitUnavailableTitle = canCommitChangeSource
     ? undefined
     : 'Switch to Uncommitted or Last turn to commit files.'
-  const manualCommitMessageValue = manualCommitMessage.trim()
+  const commitInputValue = commitInput.trim()
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
+  const changeTree = useMemo(() => buildChangeTree(changedFiles), [changedFiles])
   const commitBaseDisabled =
     !canCommitChangeSource ||
     changedFiles.length === 0 ||
@@ -1630,24 +2165,21 @@ export const App: React.FC = () => {
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
     pushState === 'sending'
-  const getCommitActionDisabled = (action: AppGitCommitAction): boolean =>
+  const getCommitActionDisabled = (action: GitCommitPromptAction): boolean =>
     commitBaseDisabled ||
     (commitMode === 'manual'
-      ? !changesCwd || (action !== 'amend' && !manualCommitMessageValue)
+      ? !changesCwd || action === 'multipleCommits' || (action === 'commit' && !commitInputValue)
       : sendState === 'sending' ||
         Boolean(editingMessage) ||
         (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false))
   const commitDisabled = getCommitActionDisabled('commit')
   const pushDisabled = !changesCwd || pushState === 'sending' || commitState === 'sending'
   const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, displayedGitChanges)
-  const changesContextLabel =
-    changeSource === 'branch' && displayedGitChanges?.branchName
-      ? displayedGitChanges.baseRef
-        ? `${displayedGitChanges.branchName} from ${displayedGitChanges.baseRef}`
-        : displayedGitChanges.branchName
-      : changesCwd
-        ? getFolderName(changesCwd)
-        : 'No folder'
+  const showBranchEmptyIcon =
+    changeSource === 'branch' &&
+    visibleChangesLoadState === 'ready' &&
+    changedFiles.length === 0 &&
+    Boolean(displayedGitChanges?.baseRef)
   const usePercentagePaneTracks = Boolean(panePercents) || panelsWidth > 0
   const panelsStyle = {
     '--chat-sidebar-width': usePercentagePaneTracks
@@ -1658,43 +2190,91 @@ export const App: React.FC = () => {
       : `${changesSidebarDefaultWidth}px`
   } as CSSProperties
 
-  const renderChangedFile = (file: ChangedFile): React.ReactElement => (
-    <li className={`changes-sidebar__file changes-sidebar__file--${file.kind}`} key={file.path}>
-      <span
-        className="changes-sidebar__file-icon"
-        role="img"
-        aria-label={changeKindLabels[file.kind]}
-        title={changeKindLabels[file.kind]}
-      >
-        <ChangeKindIcon kind={file.kind} />
-      </span>
-      <span className="changes-sidebar__file-main">
-        <span className="changes-sidebar__file-name" title={file.path}>
-          {getLastPathPart(file.path)}
-        </span>
-        <span className="changes-sidebar__file-path" title={file.path}>
-          {getParentPath(file.path)}
-        </span>
-        {file.previousPath && (
-          <span className="changes-sidebar__file-path" title={file.previousPath}>
-            from {file.previousPath}
-          </span>
-        )}
-      </span>
-    </li>
-  )
+  const getChangeTreeRowStyle = (depth: number): CSSProperties =>
+    ({ '--change-tree-depth': depth }) as CSSProperties
 
-  const handleCommitModeToggle = (): void => {
-    setCommitState('idle')
-    setCommitError(null)
-    setCommitMode((currentMode) => (currentMode === 'manual' ? 'agent' : 'manual'))
+  const handleToggleChangeTreeFolder = (folderPath: string): void => {
+    setCollapsedChangeTreeFolders((currentFolders) => ({
+      ...currentFolders,
+      [folderPath]: !currentFolders[folderPath]
+    }))
   }
 
-  const handleCommitChangedFiles = async (action: AppGitCommitAction = 'commit'): Promise<void> => {
+  const renderChangeTreeNode = (node: ChangeTreeNode, depth: number): React.ReactElement => {
+    if (node.type === 'folder') {
+      const collapsed = Boolean(collapsedChangeTreeFolders[node.path])
+
+      return (
+        <li
+          className="changes-sidebar__tree-item changes-sidebar__tree-item--folder"
+          key={node.path}
+          role="treeitem"
+          aria-expanded={!collapsed}
+        >
+          <button
+            className="changes-sidebar__tree-row changes-sidebar__tree-row--folder"
+            type="button"
+            title={node.path}
+            style={getChangeTreeRowStyle(depth)}
+            onClick={() => handleToggleChangeTreeFolder(node.path)}
+          >
+            <span className="changes-sidebar__tree-chevron" aria-hidden="true">
+              {collapsed ? <ChevronRight /> : <ChevronDown />}
+            </span>
+            <span className="changes-sidebar__tree-icon" aria-hidden="true">
+              <SymbolsFolderIcon folderName={node.name} />
+            </span>
+            <span className="changes-sidebar__tree-name">{node.name}</span>
+          </button>
+          {!collapsed && node.children.length > 0 && (
+            <ul className="changes-sidebar__tree-group" role="group">
+              {node.children.map((childNode) => renderChangeTreeNode(childNode, depth + 1))}
+            </ul>
+          )}
+        </li>
+      )
+    }
+
+    const previousDisplayPath = getChangedFileDisplayPreviousPath(node.file)
+    const displayPath = getChangedFileDisplayPath(node.file)
+    const fileTitle = previousDisplayPath ? `${previousDisplayPath} -> ${displayPath}` : displayPath
+
+    return (
+      <li
+        className={`changes-sidebar__tree-item changes-sidebar__tree-item--file changes-sidebar__tree-item--${node.file.kind}`}
+        key={node.file.path}
+        role="treeitem"
+      >
+        <div
+          className="changes-sidebar__tree-row changes-sidebar__tree-row--file"
+          title={fileTitle}
+          style={getChangeTreeRowStyle(depth)}
+        >
+          <span className="changes-sidebar__tree-spacer" aria-hidden="true" />
+          <span className="changes-sidebar__tree-icon" aria-hidden="true">
+            <SymbolsFileIcon fileName={node.name} autoAssign />
+          </span>
+          <span className="changes-sidebar__tree-name" title={fileTitle}>
+            {node.name}
+          </span>
+        </div>
+      </li>
+    )
+  }
+
+  const handleCommitModeChange = (mode: CommitMode): void => {
+    setCommitState('idle')
+    setCommitError(null)
+    setCommitMode(mode)
+  }
+
+  const handleCommitChangedFiles = async (
+    action: GitCommitPromptAction = 'commit'
+  ): Promise<void> => {
     if (getCommitActionDisabled(action)) return
 
     if (commitMode === 'manual') {
-      if (!changesCwd) return
+      if (!changesCwd || action === 'multipleCommits') return
 
       setCommitState('sending')
       setCommitError(null)
@@ -1704,9 +2284,9 @@ export const App: React.FC = () => {
           cwd: changesCwd,
           action,
           files: commitFiles,
-          message: action === 'amend' ? null : manualCommitMessageValue
+          message: action === 'amend' ? null : commitInputValue
         })
-        setManualCommitMessage('')
+        setCommitInput('')
         setCommitState('idle')
         setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
       } catch (error) {
@@ -1717,7 +2297,7 @@ export const App: React.FC = () => {
       return
     }
 
-    await handleSendMessage(getCommitMessage(changedFiles, action))
+    await handleSendMessage(getCommitMessage(changedFiles, action, changeSource, commitInputValue))
   }
 
   const handlePushChanges = async (): Promise<void> => {
@@ -1736,6 +2316,57 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleMinimizeWindow = (): void => {
+    void appApi.minimizeWindow()
+  }
+
+  const handleToggleWindowMaximized = (): void => {
+    void appApi
+      .toggleWindowMaximized()
+      .then((nextWindowState) => setWindowState(nextWindowState))
+      .catch(() => {})
+  }
+
+  const handleCloseWindow = (): void => {
+    void appApi.closeWindow()
+  }
+
+  const renderWindowControls = (placement: 'darwin' | 'default'): React.ReactElement => (
+    <div className={`window-controls window-controls--${placement}`} aria-label="Window controls">
+      <button
+        className="window-control window-control--minimize"
+        type="button"
+        aria-label="Minimize"
+        title="Minimize"
+        onClick={handleMinimizeWindow}
+      >
+        <Minus aria-hidden="true" />
+      </button>
+      <button
+        className="window-control window-control--maximize"
+        type="button"
+        aria-label={windowState.isMaximized ? 'Restore' : 'Maximize'}
+        title={windowState.isMaximized ? 'Restore' : 'Maximize'}
+        onClick={handleToggleWindowMaximized}
+      >
+        {windowState.isMaximized ? (
+          <Minimize2 aria-hidden="true" />
+        ) : (
+          <Maximize2 aria-hidden="true" />
+        )}
+      </button>
+      <button
+        className="window-control window-control--close"
+        type="button"
+        aria-label="Close"
+        title="Close"
+        onClick={handleCloseWindow}
+      >
+        <X aria-hidden="true" />
+      </button>
+    </div>
+  )
+
   return (
     <main className={`chat${chatPanelOpen ? ' chat--has-selection' : ' chat--no-selection'}`}>
       <div className="chat__panels" ref={panelsRef} style={panelsStyle}>
@@ -1744,6 +2375,7 @@ export const App: React.FC = () => {
             <header
               className={`chat-home__header${searchOpen ? ' chat-home__header--searching' : ''}`}
             >
+              {renderWindowControls('darwin')}
               {searchOpen ? (
                 <>
                   <label className="sr-only" htmlFor="chat-search">
@@ -1839,53 +2471,9 @@ export const App: React.FC = () => {
         />
 
         <div className="chat__detail-panel" data-panel="true" id="detail">
-          <section
-            className={`chat-panel${selectedChat ? ' chat-panel--selected' : ' chat-panel--empty'}${newChatOpen ? ' chat-panel--new' : ''}`}
-            aria-label={selectedChat?.title ?? 'No chat selected'}
-          >
-            {selectedChat && (
-              <>
-                <header className="chat-detail__header">
-                  <div className="chat-detail__header-inner">
-                    <span className="chat-detail__back-slot">
-                      <Button
-                        theme="transparent"
-                        aria-label="Back"
-                        title="Back"
-                        callback={handleBack}
-                        icon={<ArrowLeft aria-hidden="true" />}
-                      />
-                    </span>
-                    <h1>{selectedChat.title}</h1>
-                  </div>
-                </header>
-                <div className="chat-detail__messages" ref={contentRef}>
-                  <div className="chat-detail__messages-inner">
-                    {chatLoadState === 'loading' && (
-                      <p className="chat__status">Loading messages…</p>
-                    )}
-                    {chatLoadState === 'error' && (
-                      <p className="chat__status">Unable to load messages.</p>
-                    )}
-                    {!editingMessage &&
-                      chatLoadState === 'ready' &&
-                      visibleChatItems.length === 0 && (
-                        <p className="chat__status">No messages found.</p>
-                      )}
-                    {visibleChatItems.map((item) => (
-                      <ChatDetailItem
-                        canEditOwnMessages={canEditOwnMessages}
-                        item={item}
-                        key={item.id}
-                        onEditMessage={handleEditMessage}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-            {!selectedChat && newChatOpen && (
-              <header className="chat-detail__header chat-detail__new-header">
+          {(selectedChat || newChatOpen) && (
+            <header className="chat-detail__header">
+              <div className="chat-detail__drag-region">
                 <div className="chat-detail__header-inner">
                   <span className="chat-detail__back-slot">
                     <Button
@@ -1896,12 +2484,104 @@ export const App: React.FC = () => {
                       icon={<ArrowLeft aria-hidden="true" />}
                     />
                   </span>
-                  <h1>New chat</h1>
                 </div>
-              </header>
+              </div>
+            </header>
+          )}
+          <section
+            className={`chat-panel${selectedChat ? ' chat-panel--selected' : ' chat-panel--empty'}${newChatOpen ? ' chat-panel--new' : ''}`}
+            aria-label={selectedChat?.title ?? 'No chat selected'}
+          >
+            {selectedChat && (
+              <div
+                className="chat-detail__messages"
+                ref={contentRef}
+                onScroll={handleChatContentScroll}
+              >
+                <div className="chat-detail__messages-inner">
+                  {chatLoadState === 'loading' && <p className="chat__status">Loading messages…</p>}
+                  {chatLoadState === 'error' && (
+                    <p className="chat__status">Unable to load messages.</p>
+                  )}
+                  {!editingMessage &&
+                    chatLoadState === 'ready' &&
+                    visibleChatItems.length === 0 && (
+                      <p className="chat__status">No messages found.</p>
+                    )}
+                  {visibleChatItems.map((item) => (
+                    <ChatDetailItem
+                      canEditOwnMessages={canEditOwnMessages}
+                      item={item}
+                      key={item.id}
+                      onEditMessage={handleEditMessage}
+                    />
+                  ))}
+                </div>
+              </div>
             )}
             <div className="chat-panel__composer">
               <div className="chat-panel__composer-inner">
+                {!selectedChat && newChatOpen && providerUpdateSuggestion && (
+                  <section
+                    className="chat-approval chat-provider-update"
+                    aria-label={`${providerLabels[providerUpdateSuggestion.providerId]} update suggestion`}
+                  >
+                    <div className="chat-approval__main">
+                      <span className="chat-approval__label">
+                        {providerLabels[providerUpdateSuggestion.providerId]} update available
+                      </span>
+                      <span
+                        className="chat-approval__summary"
+                        title={getProviderUpdateSummary(providerUpdateSuggestion)}
+                      >
+                        {getProviderUpdateSummary(providerUpdateSuggestion)}
+                      </span>
+                      {providerUpdateError && (
+                        <span className="chat-approval__error" role="status">
+                          {providerUpdateError}
+                        </span>
+                      )}
+                    </div>
+                    <div className="chat-approval__actions">
+                      <Button
+                        disabled={providerUpdateState === 'updating'}
+                        callback={handleSkipProviderUpdate}
+                        dropdownActions={[
+                          {
+                            id: 'never-suggest-version',
+                            label: 'Never suggest this version',
+                            title: `Never suggest ${providerUpdateSuggestion.latestVersion}`,
+                            disabled: providerUpdateState === 'updating',
+                            icon: <X aria-hidden="true" />,
+                            callback: handleNeverSuggestProviderUpdateVersion
+                          },
+                          {
+                            id: 'never-suggest',
+                            label: 'Never suggest',
+                            disabled: providerUpdateState === 'updating',
+                            icon: <BellOff aria-hidden="true" />,
+                            callback: handleNeverSuggestProviderUpdate
+                          }
+                        ]}
+                        dropdownLabel="Skip update options"
+                        dropdownMenuAlign="end"
+                        dropdownPlacement="top"
+                        icon={<X aria-hidden="true" />}
+                        label={<span>Skip</span>}
+                        theme="secondary"
+                      />
+                      <Button
+                        disabled={providerUpdateState === 'updating'}
+                        callback={() => void handleUpdateProvider()}
+                        icon={<Download aria-hidden="true" />}
+                        label={
+                          <span>{providerUpdateState === 'updating' ? 'Updating' : 'Update'}</span>
+                        }
+                        theme="primary"
+                      />
+                    </div>
+                  </section>
+                )}
                 {!selectedChat && newChatOpen && (
                   <div className="chat-panel__new-session">
                     <span>New session in</span>
@@ -2018,66 +2698,120 @@ export const App: React.FC = () => {
         <div className="chat__changes-panel" data-panel="true" id="changes">
           <aside className="changes-sidebar" aria-label="Changed files">
             <header className="changes-sidebar__header">
-              <div className="changes-sidebar__title-row">
-                <GitBranch aria-hidden="true" />
-                <h2>Changes</h2>
-              </div>
-              <label className="sr-only" htmlFor="changes-source">
-                Change source
-              </label>
-              <Dropdown
-                id="changes-source"
-                fill
-                options={changeSourceOptions}
-                size="large"
-                value={changeSource}
-                onChange={setChangeSource}
-              />
-              <div className="changes-sidebar__meta" title={changesContextLabel}>
-                <span>{changesContextLabel}</span>
-                {changeSource !== 'lastTurn' && (
-                  <Button
-                    theme="transparent"
-                    size="small"
-                    aria-label="Refresh changes"
-                    title="Refresh changes"
-                    disabled={!changesCwd || changesLoadState === 'loading'}
-                    callback={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
-                    icon={<GitRefreshIcon active={changesLoadState === 'loading'} />}
-                  />
-                )}
+              {renderWindowControls('default')}
+              <div className="changes-sidebar__view-toggle" role="group" aria-label="Changes view">
+                <button
+                  className={`changes-sidebar__view-option${
+                    changesPaneView === 'git' ? ' changes-sidebar__view-option--active' : ''
+                  }`}
+                  type="button"
+                  aria-label="Git"
+                  aria-pressed={changesPaneView === 'git'}
+                  title="Git"
+                  onClick={() => setChangesPaneView('git')}
+                >
+                  <GitBranch aria-hidden="true" />
+                </button>
+                <button
+                  className={`changes-sidebar__view-option${
+                    changesPaneView === 'files' ? ' changes-sidebar__view-option--active' : ''
+                  }`}
+                  type="button"
+                  aria-label="Files"
+                  aria-pressed={changesPaneView === 'files'}
+                  title="Files"
+                  onClick={() => setChangesPaneView('files')}
+                >
+                  <Files aria-hidden="true" />
+                </button>
               </div>
             </header>
             <div className="changes-sidebar__body">
-              {visibleChangesLoadState === 'loading' && (
-                <p className="changes-sidebar__status">Loading changes...</p>
-              )}
-              {visibleChangesLoadState === 'error' && (
-                <p className="changes-sidebar__status">Unable to load changes.</p>
-              )}
-              {visibleChangesLoadState === 'ready' && changedFiles.length === 0 && (
-                <p className="changes-sidebar__status">{changesEmptyMessage}</p>
-              )}
-              {visibleChangesLoadState === 'ready' && changedFiles.length > 0 && (
-                <ul className="changes-sidebar__files">
-                  {changedFiles.map((file) => renderChangedFile(file))}
-                </ul>
-              )}
+              <div className="changes-sidebar__controls">
+                <label className="sr-only" htmlFor="changes-source">
+                  Diff type
+                </label>
+                <Dropdown
+                  id="changes-source"
+                  fill
+                  options={changeSourceOptions}
+                  size="large"
+                  value={changeSource}
+                  onChange={(nextChangeSource) => {
+                    setCollapsedChangeTreeFolders({})
+                    setChangeSource(nextChangeSource)
+                  }}
+                />
+                <label className="sr-only" htmlFor="changes-branch">
+                  Branch
+                </label>
+                <Dropdown
+                  id="changes-branch"
+                  fill
+                  options={branchDropdownOptions}
+                  size="large"
+                  value={branchDropdownValue}
+                  onChange={() => {}}
+                />
+                <Button
+                  theme="transparent"
+                  size="small"
+                  aria-label="Refresh changes"
+                  title="Refresh changes"
+                  disabled={!changesCwd || changesLoadState === 'loading'}
+                  callback={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
+                  icon={<GitRefreshIcon active={changesLoadState === 'loading'} />}
+                />
+              </div>
+              <div
+                className={`changes-sidebar__content${
+                  showBranchEmptyIcon ? ' changes-sidebar__content--centered' : ''
+                }`}
+              >
+                {visibleChangesLoadState === 'loading' && (
+                  <p className="changes-sidebar__status">Loading changes...</p>
+                )}
+                {visibleChangesLoadState === 'error' && (
+                  <p className="changes-sidebar__status">Unable to load changes.</p>
+                )}
+                {visibleChangesLoadState === 'ready' && changedFiles.length === 0 && (
+                  <>
+                    {showBranchEmptyIcon ? (
+                      <GitCompareArrows
+                        className="changes-sidebar__empty-icon"
+                        aria-label="No branch changes"
+                        role="img"
+                      />
+                    ) : (
+                      <p className="changes-sidebar__status">{changesEmptyMessage}</p>
+                    )}
+                  </>
+                )}
+                {visibleChangesLoadState === 'ready' && changedFiles.length > 0 && (
+                  <ul className="changes-sidebar__tree" role="tree">
+                    {changeTree.map((node) => renderChangeTreeNode(node, 0))}
+                  </ul>
+                )}
+              </div>
             </div>
             <footer className="changes-sidebar__footer">
-              {commitMode === 'manual' && (
+              <div className="changes-sidebar__input-row">
                 <label className="changes-sidebar__commit-message">
-                  <span className="sr-only">Commit message</span>
+                  <span className="sr-only">
+                    {commitMode === 'manual' ? 'Commit message' : 'AI commit instructions'}
+                  </span>
                   <input
                     type="text"
-                    value={manualCommitMessage}
-                    placeholder="Commit message"
+                    value={commitInput}
+                    placeholder={
+                      commitMode === 'manual' ? 'Commit message' : 'AI commit instructions'
+                    }
                     disabled={!canCommitChangeSource}
                     title={commitUnavailableTitle}
                     onChange={(event) => {
                       setCommitState('idle')
                       setCommitError(null)
-                      setManualCommitMessage(event.target.value)
+                      setCommitInput(event.target.value)
                     }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' && !commitDisabled) {
@@ -2086,7 +2820,12 @@ export const App: React.FC = () => {
                     }}
                   />
                 </label>
-              )}
+                <CommitModeToggle
+                  mode={commitMode}
+                  disabled={!canCommitChangeSource}
+                  onChange={handleCommitModeChange}
+                />
+              </div>
               <div className="changes-sidebar__commit-row">
                 <Button
                   disabled={commitDisabled}
@@ -2101,11 +2840,11 @@ export const App: React.FC = () => {
                       callback: () => void handleCommitChangedFiles('amend')
                     },
                     {
-                      id: 'commitAndPush',
-                      label: commitActionLabels.commitAndPush,
-                      disabled: getCommitActionDisabled('commitAndPush'),
+                      id: 'multipleCommits',
+                      label: commitActionLabels.multipleCommits,
+                      disabled: getCommitActionDisabled('multipleCommits'),
                       title: commitUnavailableTitle,
-                      callback: () => void handleCommitChangedFiles('commitAndPush')
+                      callback: () => void handleCommitChangedFiles('multipleCommits')
                     }
                   ]}
                   dropdownLabel="Commit actions"
@@ -2115,25 +2854,6 @@ export const App: React.FC = () => {
                   label={<span>{commitActionLabels.commit}</span>}
                   theme="primary"
                   fill
-                />
-                <Button
-                  aria-label={
-                    commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message'
-                  }
-                  title={
-                    commitUnavailableTitle ??
-                    (commitMode === 'manual' ? 'Use AI commit flow' : 'Write commit message')
-                  }
-                  disabled={!canCommitChangeSource}
-                  callback={handleCommitModeToggle}
-                  icon={
-                    commitMode === 'manual' ? (
-                      <Sparkles aria-hidden="true" />
-                    ) : (
-                      <Pencil aria-hidden="true" />
-                    )
-                  }
-                  theme="secondary"
                 />
               </div>
               {hasUnpushedChanges && (

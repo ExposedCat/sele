@@ -6,7 +6,7 @@ import { appIpcChannels, type AppColorScheme } from '../shared/app'
 import { disposeDatabase } from './database/sqlite'
 import { disposeProviderAdapters } from './providers/providerService'
 import { registerProviderIpc } from './providers/registerProviderIpc'
-import { registerAppIpc } from './registerAppIpc'
+import { registerAppIpc, sendAppWindowState } from './registerAppIpc'
 
 const colorSchemeLogPrefix = '[color-scheme]'
 
@@ -43,6 +43,7 @@ const createWindow = (): void => {
     height: 670,
     show: false,
     autoHideMenuBar: true,
+    frame: false,
     backgroundColor: getWindowBackgroundColor(),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -51,8 +52,14 @@ const createWindow = (): void => {
   })
 
   mainWindow.on('ready-to-show', () => {
+    sendAppWindowState(mainWindow)
     mainWindow.show()
   })
+
+  mainWindow.on('maximize', () => sendAppWindowState(mainWindow))
+  mainWindow.on('unmaximize', () => sendAppWindowState(mainWindow))
+  mainWindow.on('enter-full-screen', () => sendAppWindowState(mainWindow))
+  mainWindow.on('leave-full-screen', () => sendAppWindowState(mainWindow))
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])

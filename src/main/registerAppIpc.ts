@@ -8,9 +8,25 @@ import type {
   AppGitChangeKind,
   AppGitChangesOptions,
   AppGitFileChange,
-  AppGitChangeSource
+  AppGitChangeSource,
+  AppWindowState
 } from '../shared/app'
 import { appIpcChannels } from '../shared/app'
+
+export const getAppWindowState = (window: BrowserWindow): AppWindowState => ({
+  isMaximized: window.isMaximized()
+})
+
+export const sendAppWindowState = (window: BrowserWindow): void => {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  window.webContents.send(appIpcChannels.windowStateUpdated, getAppWindowState(window))
+}
+
+const getBrowserWindow = (event: Electron.IpcMainInvokeEvent): BrowserWindow => {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (!window) throw new Error('Window not found')
+  return window
+}
 
 const getDefaultPath = (value: unknown): string | undefined => {
   if (value == null) return undefined
@@ -82,8 +98,7 @@ const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
   }
 
   const options = value as { action?: unknown; cwd?: unknown; files?: unknown; message?: unknown }
-  const action =
-    options.action === 'amend' || options.action === 'commitAndPush' ? options.action : 'commit'
+  const action = options.action === 'amend' ? options.action : 'commit'
   const message = typeof options.message === 'string' ? options.message.trim() : ''
 
   if (action !== 'amend' && !message) throw new Error('Commit message is required')
@@ -183,6 +198,7 @@ const getUnpushedCount = async (cwd: string): Promise<number> => {
 
 const getChangeKind = (status: string): AppGitChangeKind => {
   const code = status[0]
+  if (code === '?') return 'untracked'
   if (code === 'A' || code === 'C' || code === '?') return 'create'
   if (code === 'D') return 'delete'
   if (code === 'R') return 'rename'
@@ -190,6 +206,7 @@ const getChangeKind = (status: string): AppGitChangeKind => {
 }
 
 const getPorcelainChangeKind = (status: string): AppGitChangeKind => {
+  if (status.includes('?')) return 'untracked'
   if (status.includes('R')) return 'rename'
   if (status.includes('A') || status.includes('C') || status.includes('?')) return 'create'
   if (status.includes('D')) return 'delete'
@@ -353,14 +370,10 @@ const commitGitChanges = async (
     await runGit(repositoryRoot, ['commit', '--only', '-m', commitMessage, '--', ...files], true)
   }
 
-  if (action === 'commitAndPush') {
-    await runGit(repositoryRoot, ['push'], true)
-  }
-
   const commitHash = await runGit(repositoryRoot, ['rev-parse', 'HEAD'], true)
   if (!commitHash) throw new Error('Unable to read commit hash')
 
-  return { commitHash, pushed: action === 'commitAndPush' }
+  return { commitHash, pushed: false }
 }
 
 const pushGitChanges = async (cwd: string): Promise<{ pushed: boolean }> => {
@@ -380,6 +393,28 @@ export const registerAppIpc = (): void => {
   })
 
   ipcMain.handle(appIpcChannels.getDefaultCwd, () => process.cwd())
+
+  ipcMain.handle(appIpcChannels.getWindowState, (event) =>
+    getAppWindowState(getBrowserWindow(event))
+  )
+
+  ipcMain.handle(appIpcChannels.minimizeWindow, (event) => {
+    getBrowserWindow(event).minimize()
+  })
+
+  ipcMain.handle(appIpcChannels.toggleWindowMaximized, (event) => {
+    const window = getBrowserWindow(event)
+    if (window.isMaximized()) window.unmaximize()
+    else window.maximize()
+
+    const state = getAppWindowState(window)
+    sendAppWindowState(window)
+    return state
+  })
+
+  ipcMain.handle(appIpcChannels.closeWindow, (event) => {
+    getBrowserWindow(event).close()
+  })
 
   ipcMain.handle(appIpcChannels.getGitChanges, async (_event, value: unknown) => {
     const options = getGitChangesOptions(value)

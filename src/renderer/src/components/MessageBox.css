@@ -19,6 +19,10 @@
   max-width: 100%;
 }
 
+.message-box__select .ui-dropdown__value-icon .message-box__selected-control-icon {
+  color: var(--menu-option-check-color);
+}
+
 .message-box__input {
   position: relative;
   display: flex;
