@@ -8,29 +8,12 @@ import { disposeProviderAdapters } from './providers/providerService'
 import { registerProviderIpc } from './providers/registerProviderIpc'
 import { registerAppIpc, sendAppWindowState } from './registerAppIpc'
 
-const colorSchemeLogPrefix = '[color-scheme]'
-
 const getColorScheme = (): AppColorScheme => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
 
 const getWindowBackgroundColor = (scheme = getColorScheme()): string =>
   scheme === 'dark' ? '#141516' : '#f5f5f3'
 
-const logColorScheme = (reason: string, scheme = getColorScheme()): void => {
-  console.info(colorSchemeLogPrefix, 'nativeTheme', {
-    reason,
-    scheme,
-    shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
-    shouldUseHighContrastColors: nativeTheme.shouldUseHighContrastColors,
-    shouldUseInvertedColorScheme: nativeTheme.shouldUseInvertedColorScheme,
-    themeSource: nativeTheme.themeSource,
-    sessionType: process.env.XDG_SESSION_TYPE,
-    currentDesktop: process.env.XDG_CURRENT_DESKTOP
-  })
-}
-
 const updateAppColorScheme = (scheme: AppColorScheme): void => {
-  logColorScheme('native-theme-updated', scheme)
-
   BrowserWindow.getAllWindows().forEach((window) => {
     window.setBackgroundColor(getWindowBackgroundColor(scheme))
     window.webContents.send(appIpcChannels.colorSchemeUpdated, scheme)
@@ -71,7 +54,6 @@ const createWindow = (): void => {
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'system'
   nativeTheme.on('updated', () => updateAppColorScheme(getColorScheme()))
-  logColorScheme('startup')
   electronApp.setAppUserModelId('com.sele')
   registerAppIpc()
   registerProviderIpc()

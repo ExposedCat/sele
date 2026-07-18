@@ -38,14 +38,6 @@ const getDefaultPath = (value: unknown): string | undefined => {
 
 const getColorScheme = (): AppColorScheme => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
 
-const logColorSchemeIpcRead = (scheme: AppColorScheme): void => {
-  console.info('[color-scheme]', 'nativeTheme ipc read', {
-    scheme,
-    shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
-    themeSource: nativeTheme.themeSource
-  })
-}
-
 type BranchBase = {
   ref: string
   commit: string
@@ -538,11 +530,7 @@ const pullGitChanges = async (
 }
 
 export const registerAppIpc = (): void => {
-  ipcMain.handle(appIpcChannels.getColorScheme, () => {
-    const scheme = getColorScheme()
-    logColorSchemeIpcRead(scheme)
-    return scheme
-  })
+  ipcMain.handle(appIpcChannels.getColorScheme, getColorScheme)
 
   ipcMain.handle(appIpcChannels.getDefaultCwd, () => process.cwd())
 
