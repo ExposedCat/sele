@@ -84,7 +84,9 @@ type SendState = 'idle' | 'sending' | 'error'
 type ApplyChatDetailOptions = {
   select?: boolean
 }
-type EditingMessage = Pick<ProviderMessage, 'id' | 'content'>
+type EditingMessage =
+  | (Pick<ProviderMessage, 'id' | 'content'> & { type: 'message' })
+  | (Pick<ProviderPendingMessage, 'id' | 'content' | 'kind'> & { type: 'pending' })
 type ApprovalResolutionState = {
   approvalId: string | null
   decision: ProviderApprovalDecision | null
@@ -827,7 +829,7 @@ const getVisibleChatItems = (
   items: ProviderChatItem[],
   editingMessage: EditingMessage | null
 ): ProviderChatItem[] => {
-  if (!editingMessage) return items
+  if (!editingMessage || editingMessage.type === 'pending') return items
 
   const editingMessageIndex = items.findIndex(
     (item) => item.type === 'message' && item.id === editingMessage.id
@@ -2160,7 +2162,20 @@ export const App: React.FC = () => {
 
     setSendState('idle')
     setEditingMessage({
+      type: 'message',
       id: message.id,
+      content: message.content
+    })
+  }
+
+  const handleEditPendingMessage = (message: ProviderPendingMessage): void => {
+    if (!selectedChat || sendInFlightRef.current) return
+
+    setSendState('idle')
+    setEditingMessage({
+      type: 'pending',
+      id: message.id,
+      kind: message.kind,
       content: message.content
     })
   }
@@ -2193,13 +2208,22 @@ export const App: React.FC = () => {
       setSendState('sending')
 
       try {
-        const detail = await providerApi.editMessage(
-          selectedChat.providerId,
-          selectedChat.id,
-          editingMessage.id,
-          message,
-          turnOptions
-        )
+        const detail =
+          editingMessage.type === 'pending'
+            ? await providerApi.editPendingMessage(
+                selectedChat.providerId,
+                selectedChat.id,
+                editingMessage.id,
+                message,
+                turnOptions
+              )
+            : await providerApi.editMessage(
+                selectedChat.providerId,
+                selectedChat.id,
+                editingMessage.id,
+                message,
+                turnOptions
+              )
         applyChatDetail(selectedChat.providerId, detail)
         setEditingMessage(null)
         setSendState('idle')
@@ -2931,6 +2955,7 @@ export const App: React.FC = () => {
                       item={item}
                       key={item.id}
                       onDeletePendingMessage={handleDeletePendingMessage}
+                      onEditPendingMessage={handleEditPendingMessage}
                       onInterruptPendingMessage={
                         chatHasActiveTurn ? handleInterruptPendingMessage : undefined
                       }

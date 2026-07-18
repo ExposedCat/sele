@@ -37,7 +37,7 @@ type MessageBoxProps = {
   activePrimaryMode?: Extract<ProviderActiveSendMode, 'steer' | 'queue'>
   autoFocus?: boolean
   disabled?: boolean
-  editSession?: { id: string; content: string } | null
+  editSession?: { id: string; content: string; type?: 'message' | 'pending' } | null
   error?: string | null
   model: ProviderModelId
   models: ProviderModel[]
@@ -295,6 +295,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   const selectedReasoningEffortLabel = getReasoningEffortLabel(reasoningEffort)
   const textareaDisabled = active ? false : disabled || pending
   const activePrimaryLabel = activePrimaryMode === 'queue' ? 'Queue message' : 'Steer current turn'
+  const editingPendingMessage = editSession?.type === 'pending'
 
   useEffect(() => {
     messageRef.current = message
@@ -533,10 +534,12 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
               dropdownMenuAlign="end"
               dropdownPlacement="top"
               icon={
-                activeWithMessage && activePrimaryMode === 'steer' ? (
+                editingPendingMessage ? (
+                  <ListPlus aria-hidden="true" />
+                ) : activeWithMessage && activePrimaryMode === 'steer' ? (
                   <CornerDownRight aria-hidden="true" />
                 ) : activeWithMessage ? (
-                  <ListPlus aria-hidden="true" />
+                  <ArrowUp aria-hidden="true" />
                 ) : active ? (
                   <Square aria-hidden="true" />
                 ) : (

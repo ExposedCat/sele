@@ -67,6 +67,15 @@ const providerApi: ProviderApi = {
     ),
   deletePendingMessage: (providerId, chatId, messageId) =>
     ipcRenderer.invoke(providerIpcChannels.deletePendingMessage, providerId, chatId, messageId),
+  editPendingMessage: (providerId, chatId, messageId, message, options) =>
+    ipcRenderer.invoke(
+      providerIpcChannels.editPendingMessage,
+      providerId,
+      chatId,
+      messageId,
+      message,
+      options
+    ),
   interruptPendingMessage: (providerId, chatId, messageId) =>
     ipcRenderer.invoke(providerIpcChannels.interruptPendingMessage, providerId, chatId, messageId),
   editMessage: (providerId, chatId, messageId, message, options) =>

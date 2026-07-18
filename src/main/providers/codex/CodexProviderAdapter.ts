@@ -870,6 +870,32 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return detail
   }
 
+  editPendingMessage = async (
+    chatId: string,
+    messageId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ): Promise<ProviderChatDetail> => {
+    const text = message.trim()
+    if (!text) throw new Error('Cannot edit a pending message to empty content')
+    if (!this.threads.has(chatId)) await this.getChat(chatId)
+
+    const editedSteeringMessage = this.editSteeringMessage(chatId, messageId, text, options)
+    const editedQueuedTurn = editedSteeringMessage
+      ? false
+      : this.editQueuedTurn(chatId, messageId, text, options)
+    if (!editedSteeringMessage && !editedQueuedTurn) {
+      throw new Error('Pending message cannot be edited')
+    }
+
+    this.emitChatUpdated(chatId)
+
+    const detail = this.getCachedChatDetail(chatId)
+    if (!detail) throw new Error('Unable to edit pending message')
+
+    return detail
+  }
+
   interruptPendingMessage = async (
     chatId: string,
     messageId: string
@@ -1802,6 +1828,31 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return Boolean(queuedTurn) || this.removeSyntheticTurn(threadId, turnId)
   }
 
+  private editQueuedTurn = (
+    threadId: string,
+    turnId: string,
+    text: string,
+    options?: ProviderTurnOptions
+  ): boolean => {
+    const queuedTurns = this.queuedTurnsByThread.get(threadId)
+    if (!queuedTurns?.some((turn) => turn.id === turnId)) return false
+
+    this.queuedTurnsByThread.set(
+      threadId,
+      queuedTurns.map((turn) =>
+        turn.id === turnId
+          ? {
+              ...turn,
+              text,
+              options: options ? { ...options } : turn.options
+            }
+          : turn
+      )
+    )
+
+    return true
+  }
+
   private removeTurnItem = (threadId: string, turnId: string, itemId: string): boolean => {
     const thread = this.threads.get(threadId)
     const turn = thread?.turns.find((candidate) => candidate.id === turnId)
@@ -1926,6 +1977,43 @@ export class CodexProviderAdapter implements ProviderAdapter {
           : message
       )
     )
+  }
+
+  private editSteeringMessage = (
+    threadId: string,
+    messageId: string,
+    text: string,
+    options?: ProviderTurnOptions
+  ): boolean => {
+    const steeringMessage =
+      this.steeringMessagesByThread
+        .get(threadId)
+        ?.find((message) => message.id === messageId && message.status === 'pending') ?? null
+    if (!steeringMessage) return false
+
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              text,
+              options: options ? { ...options } : message.options
+            }
+          : message
+      )
+    )
+    this.updateTurnItems(threadId, steeringMessage.turnId, (items) =>
+      items.map((item) =>
+        item.id === steeringMessage.itemId
+          ? {
+              ...item,
+              content: [{ type: 'text', text }]
+            }
+          : item
+      )
+    )
+
+    return true
   }
 
   private updateSteeringMessageTurn = (

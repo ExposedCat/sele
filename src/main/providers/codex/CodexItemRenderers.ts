@@ -1293,17 +1293,12 @@ export const getChatItems = (
         continue
       }
 
-      if (item.type === 'agentMessage' && item.phase === 'final_answer' && item.text?.trim()) {
-        const hasLaterSteeringMessage = turn.items.slice(itemIndex + 1).some(hasUserMessageContent)
-        if (hasLaterSteeringMessage) {
-          pushWorkingStep('worked')
-          chatItems.push(createAssistantMessage(turn, item, completedAt))
-          continue
-        }
-      }
-
       if (itemIndex === finalMessageIndex && item.text?.trim()) {
-        finalMessage = createAssistantMessage(turn, item, completedAt)
+        if (turn.items.slice(itemIndex + 1).some(hasUserMessageContent)) {
+          workingItems.push(...renderWorkingItems(item, turn.id))
+        } else {
+          finalMessage = createAssistantMessage(turn, item, completedAt)
+        }
         continue
       }
 

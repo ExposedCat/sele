@@ -141,6 +141,10 @@ export const providerApi: ProviderApi = {
     adapters[providerId]
       .deletePendingMessage(chatId, messageId)
       .then((detail) => applyMetadataToDetail(detail)),
+  editPendingMessage: (providerId, chatId, messageId, message, options) =>
+    adapters[providerId]
+      .editPendingMessage(chatId, messageId, message, options)
+      .then((detail) => applyMetadataToDetail(detail)),
   interruptPendingMessage: (providerId, chatId, messageId) =>
     adapters[providerId]
       .interruptPendingMessage(chatId, messageId)

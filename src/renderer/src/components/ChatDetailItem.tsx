@@ -17,6 +17,7 @@ import {
   WrenchIcon as AnimatedWrenchIcon
 } from 'lucide-animated'
 import {
+  ArrowUp,
   Check,
   ChevronRight,
   Copy,
@@ -50,6 +51,7 @@ type ChatDetailItemProps = {
   canEditOwnMessages?: boolean
   item: ProviderChatItem
   onDeletePendingMessage?: (message: ProviderPendingMessage) => void
+  onEditPendingMessage?: (message: ProviderPendingMessage) => void
   onInterruptPendingMessage?: (message: ProviderPendingMessage) => void
   onEditMessage?: (message: ProviderMessage) => void
 }
@@ -712,6 +714,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   canEditOwnMessages = false,
   item,
   onDeletePendingMessage,
+  onEditPendingMessage,
   onInterruptPendingMessage,
   onEditMessage
 }) => {
@@ -730,6 +733,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
     const messageLabel = pending ? getPendingMessageLabel(item) : (item.label ?? null)
     const pendingActionLabel = pending ? getPendingMessageActionLabel(item) : 'pending'
     const canEdit = !pending && role === 'user' && canEditOwnMessages && Boolean(onEditMessage)
+    const canEditPending = pending && Boolean(onEditPendingMessage)
     const canDelete = pending && Boolean(onDeletePendingMessage)
     const canInterrupt = pending && Boolean(onInterruptPendingMessage)
     const timestamp = formatMessageTimestamp(item.createdAt)
@@ -751,6 +755,16 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
             icon={<Pencil aria-hidden="true" />}
           />
         )}
+        {canEditPending && pending && (
+          <Button
+            theme="secondary"
+            size="small"
+            aria-label={`Edit ${pendingActionLabel} message`}
+            title={`Edit ${pendingActionLabel} message`}
+            callback={() => onEditPendingMessage?.(item)}
+            icon={<Pencil aria-hidden="true" />}
+          />
+        )}
         {canInterrupt && pending && (
           <Button
             theme="secondary"
@@ -758,7 +772,13 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
             aria-label={`Interrupt with ${pendingActionLabel} message`}
             title={`Interrupt with ${pendingActionLabel} message`}
             callback={() => onInterruptPendingMessage?.(item)}
-            icon={<Square aria-hidden="true" />}
+            icon={
+              item.kind === 'queued' ? (
+                <ArrowUp aria-hidden="true" />
+              ) : (
+                <Square aria-hidden="true" />
+              )
+            }
           />
         )}
         {canDelete && pending && (
@@ -771,7 +791,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
             icon={<Trash2 aria-hidden="true" />}
           />
         )}
-        {!canEdit && !canInterrupt && !canDelete && role === 'user' ? (
+        {!canEdit && !canEditPending && !canInterrupt && !canDelete && role === 'user' ? (
           <span className="chat-detail__message-action-placeholder" aria-hidden="true" />
         ) : null}
         <Button
