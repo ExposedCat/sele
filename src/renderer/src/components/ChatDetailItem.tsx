@@ -700,31 +700,30 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   )
 }
 
-const PendingMessageItem: React.FC<{
-  item: ProviderPendingMessage
-  onDeletePendingMessage?: (message: ProviderPendingMessage) => void
-}> = ({ item, onDeletePendingMessage }) => {
-  const label = item.kind === 'steering' ? 'Steering' : 'Queue'
+const getPendingMessageLabel = (message: ProviderPendingMessage): string =>
+  message.kind === 'steering' ? 'Steering' : 'Queue'
 
-  return (
-    <div className={`chat-detail__pending-message chat-detail__pending-message--${item.kind}`}>
-      <div className="chat-detail__pending-message-header">
-        <span className="chat-detail__pending-message-label">{label}</span>
-        {onDeletePendingMessage && (
-          <Button
-            theme="secondary"
-            size="small"
-            aria-label={`Delete ${label.toLocaleLowerCase()} message`}
-            title={`Delete ${label.toLocaleLowerCase()} message`}
-            callback={() => onDeletePendingMessage(item)}
-            icon={<Trash2 aria-hidden="true" />}
-          />
-        )}
-      </div>
-      <MarkdownMessage className="chat-detail__pending-message-content" content={item.content} />
-    </div>
-  )
-}
+const PendingMessageDate: React.FC<{
+  label: string
+  timestamp: ReturnType<typeof formatMessageTimestamp>
+}> = ({ label, timestamp }) => (
+  <span className="chat-detail__message-date chat-detail__message-date--pending">
+    <span>{label}</span>
+    {timestamp && (
+      <>
+        <span className="chat-detail__message-date-marker" aria-hidden="true">
+          ·
+        </span>
+        <time dateTime={timestamp.dateTime} title={timestamp.label}>
+          {timestamp.label}
+        </time>
+      </>
+    )}
+    <span className="chat-detail__message-date-marker" aria-hidden="true">
+      ·
+    </span>
+  </span>
+)
 
 export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   canEditOwnMessages = false,
@@ -741,8 +740,13 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
     return () => window.clearTimeout(timeout)
   }, [copied])
 
-  if (item.type === 'message') {
-    const canEdit = item.role === 'user' && canEditOwnMessages && Boolean(onEditMessage)
+  if (item.type === 'message' || item.type === 'pendingMessage') {
+    const pending = item.type === 'pendingMessage'
+    const role = pending ? 'user' : item.role
+    const pendingLabel = pending ? getPendingMessageLabel(item) : null
+    const pendingActionLabel = pendingLabel?.toLocaleLowerCase() ?? 'pending'
+    const canEdit = !pending && role === 'user' && canEditOwnMessages && Boolean(onEditMessage)
+    const canDelete = pending && Boolean(onDeletePendingMessage)
     const timestamp = formatMessageTimestamp(item.createdAt)
     const handleCopyMessage = async (): Promise<void> => {
       await copyTextToClipboard(item.content)
@@ -756,10 +760,21 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
             size="small"
             aria-label="Edit message"
             title="Edit message"
-            callback={() => onEditMessage?.(item)}
+            callback={() => {
+              if (item.type === 'message') onEditMessage?.(item)
+            }}
             icon={<Pencil aria-hidden="true" />}
           />
-        ) : item.role === 'user' ? (
+        ) : canDelete && pending ? (
+          <Button
+            theme="secondary"
+            size="small"
+            aria-label={`Delete ${pendingActionLabel} message`}
+            title={`Delete ${pendingActionLabel} message`}
+            callback={() => onDeletePendingMessage?.(item)}
+            icon={<Trash2 aria-hidden="true" />}
+          />
+        ) : role === 'user' ? (
           <span className="chat-detail__message-action-placeholder" aria-hidden="true" />
         ) : null}
         <Button
@@ -772,27 +787,33 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
         />
       </span>
     )
-    const messageDate = (
-      <MessageDate markerSide={item.role === 'user' ? 'right' : 'left'} timestamp={timestamp} />
+    const messageDate = pending ? (
+      <PendingMessageDate label={pendingLabel ?? ''} timestamp={timestamp} />
+    ) : (
+      <MessageDate markerSide={role === 'user' ? 'right' : 'left'} timestamp={timestamp} />
     )
+    const messageBlockClassName = [
+      'chat-detail__message-block',
+      `chat-detail__message-block--${role}`,
+      pending ? 'chat-detail__message-block--pending' : null,
+      pending ? `chat-detail__message-block--pending-${item.kind}` : null
+    ]
+      .filter(Boolean)
+      .join(' ')
 
     return (
-      <div className={`chat-detail__message-block chat-detail__message-block--${item.role}`}>
+      <div className={messageBlockClassName}>
         <MarkdownMessage
-          className={`chat-detail__message chat-detail__message--${item.role}`}
+          className={`chat-detail__message chat-detail__message--${role}`}
           content={item.content}
         />
         <div className="chat-detail__message-footer">
-          {item.role === 'user' && messageDate}
+          {role === 'user' && messageDate}
           {messageActions}
-          {item.role === 'assistant' && messageDate}
+          {role === 'assistant' && messageDate}
         </div>
       </div>
     )
-  }
-
-  if (item.type === 'pendingMessage') {
-    return <PendingMessageItem item={item} onDeletePendingMessage={onDeletePendingMessage} />
   }
 
   return <WorkingStep item={item} />

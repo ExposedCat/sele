@@ -344,6 +344,21 @@ const getRawResponseMessage = (
 const isNoActiveTurnError = (error: unknown): boolean =>
   error instanceof Error && /no active turn/i.test(error.message)
 
+const getFoundActiveTurnId = (error: unknown): string | null => {
+  if (!(error instanceof Error)) return null
+
+  const match = error.message.match(
+    /expected active turn id\s+\S+\s+but found\s+([A-Za-z0-9:_-]+)/i
+  )
+  const foundTurnId = match?.[1]
+  return foundTurnId && foundTurnId.toLocaleLowerCase() !== 'none' ? foundTurnId : null
+}
+
+const getSteerResponseTurnId = (response: TurnSteerResponse | string): string | null => {
+  if (typeof response === 'string') return response.trim() || null
+  return getStringValue(response.turnId)
+}
+
 const isLocalUserMessage = (item: CodexThreadItem): boolean =>
   item.type === 'userMessage' &&
   (item.id.startsWith('pending:') || item.id.startsWith('queued:') || item.id.startsWith('steer:'))
@@ -1003,14 +1018,40 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.rememberSteeredMessage(chatId, turnId, text)
     this.emitChatUpdated(chatId)
 
+    let expectedTurnId = turnId
+    let didRetryWithServerTurnId = false
+
     try {
-      await this.client.request<TurnSteerResponse | string>('turn/steer', {
-        threadId: chatId,
-        input: createUserTextInput(text)
-      })
+      for (;;) {
+        try {
+          const response = await this.client.request<TurnSteerResponse | string>('turn/steer', {
+            threadId: chatId,
+            expectedTurnId,
+            input: createUserTextInput(text)
+          })
+          const acceptedTurnId = getSteerResponseTurnId(response) ?? expectedTurnId
+          if (acceptedTurnId !== expectedTurnId) {
+            this.forgetSteeredMessage(chatId, expectedTurnId, text)
+            this.updateSteeringMessageTurn(chatId, steeringMessage.id, acceptedTurnId)
+            this.rememberSteeredMessage(chatId, acceptedTurnId, text)
+          }
+          this.activeTurnIds.set(chatId, acceptedTurnId)
+          break
+        } catch (error) {
+          const serverTurnId = didRetryWithServerTurnId ? null : getFoundActiveTurnId(error)
+          if (!serverTurnId || serverTurnId === expectedTurnId) throw error
+
+          this.forgetSteeredMessage(chatId, expectedTurnId, text)
+          this.updateSteeringMessageTurn(chatId, steeringMessage.id, serverTurnId)
+          this.rememberSteeredMessage(chatId, serverTurnId, text)
+          this.activeTurnIds.set(chatId, serverTurnId)
+          expectedTurnId = serverTurnId
+          didRetryWithServerTurnId = true
+        }
+      }
     } catch (error) {
       this.removeSteeringMessage(chatId, steeringMessage.id)
-      this.forgetSteeredMessage(chatId, turnId, text)
+      this.forgetSteeredMessage(chatId, expectedTurnId, text)
       this.emitChatUpdated(chatId)
 
       if (isNoActiveTurnError(error)) {
@@ -1087,6 +1128,36 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return started.turn
   }
 
+  private interruptTurn = async (
+    threadId: string,
+    turnId: string
+  ): Promise<{ turnId: string; interrupted: boolean }> => {
+    try {
+      await this.client.request('turn/interrupt', {
+        threadId,
+        turnId
+      })
+      return { turnId, interrupted: true }
+    } catch (error) {
+      const serverTurnId = getFoundActiveTurnId(error)
+      if (!serverTurnId || serverTurnId === turnId) {
+        if (isNoActiveTurnError(error)) return { turnId, interrupted: false }
+        throw error
+      }
+
+      try {
+        await this.client.request('turn/interrupt', {
+          threadId,
+          turnId: serverTurnId
+        })
+        return { turnId: serverTurnId, interrupted: true }
+      } catch (retryError) {
+        if (isNoActiveTurnError(retryError)) return { turnId: serverTurnId, interrupted: false }
+        throw retryError
+      }
+    }
+  }
+
   private stopActiveTurn = async (
     chatId: string,
     options: { startQueuedTurn: boolean }
@@ -1103,21 +1174,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
       return
     }
 
-    let interrupted = false
-    try {
-      await this.client.request('turn/interrupt', {
-        threadId: chatId,
-        turnId
-      })
-      interrupted = true
-    } catch (error) {
-      if (!isNoActiveTurnError(error)) throw error
-    }
+    const interruptResult = await this.interruptTurn(chatId, turnId)
+    const stoppedTurnId = interruptResult.turnId
 
     this.activeTurnIds.delete(chatId)
-    this.removeSteeringMessageForTurn(chatId, turnId)
-    if (interrupted) this.markTurnInterrupted(chatId, turnId)
-    else this.markTurnCompleted(chatId, turnId)
+    this.removeSteeringMessageForTurn(chatId, stoppedTurnId)
+    if (interruptResult.interrupted) this.markTurnInterrupted(chatId, stoppedTurnId)
+    else this.markTurnCompleted(chatId, stoppedTurnId)
+    if (stoppedTurnId !== turnId) this.markTurnCompleted(chatId, turnId)
     this.setThreadStatus(chatId, { type: 'idle' })
     this.emitChatUpdated(chatId)
     if (options.startQueuedTurn) this.startNextQueuedTurn(chatId)
@@ -1680,6 +1744,20 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return true
   }
 
+  private updateSteeringMessageTurn = (
+    threadId: string,
+    messageId: string,
+    turnId: string
+  ): void => {
+    const steeringMessage = this.steeringMessagesByThread.get(threadId)
+    if (steeringMessage?.id !== messageId) return
+
+    this.steeringMessagesByThread.set(threadId, {
+      ...steeringMessage,
+      turnId
+    })
+  }
+
   private removeSteeringMessageForThread = (threadId: string): boolean =>
     this.steeringMessagesByThread.delete(threadId)
 
@@ -1824,11 +1902,11 @@ export class CodexProviderAdapter implements ProviderAdapter {
   }
 
   private getActiveTurnId = (threadId: string): string | null => {
-    const activeTurnId = this.activeTurnIds.get(threadId)
-    if (activeTurnId) return activeTurnId
-
     const thread = this.threads.get(threadId)
-    return thread?.turns.findLast((turn) => turn.status === 'inProgress')?.id ?? null
+    const activeThreadTurnId = thread?.turns.findLast((turn) => turn.status === 'inProgress')?.id
+    if (activeThreadTurnId) return activeThreadTurnId
+
+    return this.activeTurnIds.get(threadId) ?? null
   }
 
   private markTurnInterrupted = (threadId: string, turnId: string): void => {

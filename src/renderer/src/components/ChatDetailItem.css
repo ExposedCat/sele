@@ -45,6 +45,21 @@
   backdrop-filter: blur(12px) saturate(1.25);
 }
 
+.chat-detail__message-block--pending .chat-detail__message--user {
+  border-style: dashed;
+  color: color-mix(in srgb, var(--lead) 72%, transparent);
+  background: color-mix(in srgb, var(--assistant-message) 68%, transparent);
+  box-shadow: none;
+}
+
+.chat-detail__message-block--pending-queued .chat-detail__message--user {
+  opacity: 0.72;
+}
+
+.chat-detail__message-block--pending-steering .chat-detail__message--user {
+  opacity: 0.82;
+}
+
 .chat-detail__message-footer {
   display: flex;
   width: 100%;
@@ -95,50 +110,6 @@
   width: var(--control-height-small);
   height: var(--control-height-small);
   flex: none;
-}
-
-.chat-detail__pending-message {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  flex-direction: column;
-  gap: 8px;
-  align-self: stretch;
-  padding: 10px 12px;
-  border-left: 2px solid var(--accent);
-  color: var(--lead);
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-}
-
-.chat-detail__pending-message--queued {
-  border-left-color: var(--quiet);
-  background: color-mix(in srgb, var(--quiet) 7%, transparent);
-}
-
-.chat-detail__pending-message-header {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.chat-detail__pending-message-label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--quiet);
-  font-weight: 700;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-detail__pending-message-content {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  line-height: 1.5;
-  white-space: normal;
 }
 
 .chat-detail__message-date {
@@ -270,14 +241,12 @@
 }
 
 .chat-detail__message > :first-child,
-.chat-detail__working-message > :first-child,
-.chat-detail__pending-message-content > :first-child {
+.chat-detail__working-message > :first-child {
   margin-top: 0;
 }
 
 .chat-detail__message > :last-child,
-.chat-detail__working-message > :last-child,
-.chat-detail__pending-message-content > :last-child {
+.chat-detail__working-message > :last-child {
   margin-bottom: 0;
 }
 
