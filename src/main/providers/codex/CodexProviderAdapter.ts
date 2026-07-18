@@ -10,10 +10,15 @@ import type {
   ProviderApprovalDecision,
   ProviderPendingApproval,
   ProviderUpdateAvailability,
-  ProviderAccessModeOption,
+  ProviderApprovalModeOption,
+  ProviderSandboxModeOption,
   ProviderTurnOptions
 } from '../../../shared/provider'
-import { fallbackProviderAccessModes, fallbackProviderModels } from '../../../shared/provider'
+import {
+  fallbackProviderApprovalModes,
+  fallbackProviderModels,
+  fallbackProviderSandboxModes
+} from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
 import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
@@ -108,7 +113,7 @@ type ThreadRollbackResponse = {
 type CodexThreadAccessOptions = {
   approvalPolicy: 'on-request' | 'on-failure' | 'never'
   approvalsReviewer?: 'user' | 'auto_review'
-  sandbox: 'workspace-write' | 'danger-full-access'
+  sandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
 }
 
 type CodexThreadModelOptions = {
@@ -118,7 +123,10 @@ type CodexThreadModelOptions = {
 type CodexTurnAccessOptions = {
   approvalPolicy: 'on-request' | 'on-failure' | 'never'
   approvalsReviewer?: 'user' | 'auto_review'
-  sandboxPolicy: { type: 'workspaceWrite'; networkAccess: boolean } | { type: 'dangerFullAccess' }
+  sandboxPolicy:
+    | { type: 'readOnly'; networkAccess: boolean }
+    | { type: 'workspaceWrite'; networkAccess: boolean }
+    | { type: 'dangerFullAccess' }
 }
 
 type CodexTurnModelOptions = {
@@ -479,8 +487,15 @@ const mapCodexModel = (model: CodexModel): ProviderModel | null => {
   }
 }
 
-const getAccessMode = (options?: ProviderTurnOptions): ProviderTurnOptions['accessMode'] =>
-  options?.accessMode ?? 'sandbox'
+const getApprovalPolicy = (options?: ProviderTurnOptions): ProviderTurnOptions['approvalPolicy'] =>
+  options?.approvalPolicy ?? 'on-request'
+
+const getApprovalsReviewer = (
+  options?: ProviderTurnOptions
+): ProviderTurnOptions['approvalsReviewer'] => options?.approvalsReviewer ?? 'user'
+
+const getSandboxMode = (options?: ProviderTurnOptions): ProviderTurnOptions['sandboxMode'] =>
+  options?.sandboxMode ?? 'workspace-write'
 
 const getThreadModelOptions = (options?: ProviderTurnOptions): CodexThreadModelOptions => ({
   model: options?.model ?? 'gpt-5.5'
@@ -492,49 +507,34 @@ const getTurnModelOptions = (options?: ProviderTurnOptions): CodexTurnModelOptio
 })
 
 const getThreadAccessOptions = (options?: ProviderTurnOptions): CodexThreadAccessOptions => {
-  const accessMode = getAccessMode(options)
-  if (accessMode === 'full') {
-    return {
-      approvalPolicy: 'never',
-      sandbox: 'danger-full-access'
-    }
+  const approvalPolicy = getApprovalPolicy(options)
+  const accessOptions: CodexThreadAccessOptions = {
+    approvalPolicy,
+    sandbox: getSandboxMode(options)
   }
 
-  if (accessMode === 'auto') {
-    return {
-      approvalPolicy: 'never',
-      sandbox: 'workspace-write'
-    }
-  }
+  if (approvalPolicy !== 'never') accessOptions.approvalsReviewer = getApprovalsReviewer(options)
 
-  return {
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
-    sandbox: 'workspace-write'
-  }
+  return accessOptions
 }
 
 const getTurnAccessOptions = (options?: ProviderTurnOptions): CodexTurnAccessOptions => {
-  const accessMode = getAccessMode(options)
-  if (accessMode === 'full') {
-    return {
-      approvalPolicy: 'never',
-      sandboxPolicy: { type: 'dangerFullAccess' }
-    }
+  const approvalPolicy = getApprovalPolicy(options)
+  const sandboxMode = getSandboxMode(options)
+  const accessOptions: CodexTurnAccessOptions = {
+    approvalPolicy,
+    sandboxPolicy:
+      sandboxMode === 'danger-full-access'
+        ? { type: 'dangerFullAccess' }
+        : {
+            type: sandboxMode === 'read-only' ? 'readOnly' : 'workspaceWrite',
+            networkAccess: false
+          }
   }
 
-  if (accessMode === 'auto') {
-    return {
-      approvalPolicy: 'never',
-      sandboxPolicy: { type: 'workspaceWrite', networkAccess: false }
-    }
-  }
+  if (approvalPolicy !== 'never') accessOptions.approvalsReviewer = getApprovalsReviewer(options)
 
-  return {
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'user',
-    sandboxPolicy: { type: 'workspaceWrite', networkAccess: false }
-  }
+  return accessOptions
 }
 
 export class CodexProviderAdapter implements ProviderAdapter {
@@ -585,7 +585,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }
   }
 
-  getAccessModes = async (): Promise<ProviderAccessModeOption[]> => fallbackProviderAccessModes
+  getApprovalModes = async (): Promise<ProviderApprovalModeOption[]> =>
+    fallbackProviderApprovalModes
+
+  getSandboxModes = async (): Promise<ProviderSandboxModeOption[]> => fallbackProviderSandboxModes
 
   getUpdateAvailability = async (): Promise<ProviderUpdateAvailability | null> =>
     getCodexUpdateAvailability()

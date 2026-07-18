@@ -13,10 +13,20 @@ export const providerReasoningEfforts = ['low', 'medium', 'high', 'xhigh'] as co
 export type ProviderId = (typeof providerIds)[number]
 export type ProviderModelId = string
 export type ProviderReasoningEffort = string
-export type ProviderAccessMode = 'sandbox' | 'auto' | 'full'
+export type ProviderApprovalPolicy = 'on-request' | 'on-failure' | 'never'
+export type ProviderApprovalsReviewer = 'user' | 'auto_review'
+export type ProviderApprovalMode = 'ask-user' | 'auto-review' | 'never'
+export type ProviderSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 
-export type ProviderAccessModeOption = {
-  id: ProviderAccessMode
+export type ProviderApprovalModeOption = {
+  id: ProviderApprovalMode
+  label: string
+  description: string
+  isDefault: boolean
+}
+
+export type ProviderSandboxModeOption = {
+  id: ProviderSandboxMode
   label: string
   description: string
   isDefault: boolean
@@ -139,23 +149,44 @@ export const fallbackProviderModels: ProviderModel[] = [
   }
 ]
 
-export const fallbackProviderAccessModes: ProviderAccessModeOption[] = [
+export const fallbackProviderApprovalModes: ProviderApprovalModeOption[] = [
   {
-    id: 'sandbox',
-    label: 'Sandbox',
-    description: 'Ask before approval-gated actions while keeping commands workspace sandboxed.',
+    id: 'ask-user',
+    label: 'Ask me',
+    description: 'Ask you before approval-gated actions.',
     isDefault: true
   },
   {
-    id: 'auto',
-    label: 'Auto approve',
-    description: 'Run without approval prompts while keeping commands workspace sandboxed.',
+    id: 'auto-review',
+    label: 'Auto-review',
+    description: 'Send eligible approval prompts to the reviewer subagent.',
     isDefault: false
   },
   {
-    id: 'full',
+    id: 'never',
+    label: 'Never ask',
+    description: 'Run without approval prompts.',
+    isDefault: false
+  }
+]
+
+export const fallbackProviderSandboxModes: ProviderSandboxModeOption[] = [
+  {
+    id: 'read-only',
+    label: 'Read only',
+    description: 'Allow reads without workspace writes.',
+    isDefault: false
+  },
+  {
+    id: 'workspace-write',
+    label: 'Workspace write',
+    description: 'Allow reads and writes inside the workspace sandbox.',
+    isDefault: true
+  },
+  {
+    id: 'danger-full-access',
     label: 'Full access',
-    description: 'Run without approval prompts or sandbox restrictions.',
+    description: 'Disable filesystem sandbox restrictions.',
     isDefault: false
   }
 ]
@@ -321,17 +352,20 @@ export type ProviderChatUpdatedEvent = {
 }
 
 export type ProviderTurnOptions = {
-  accessMode: ProviderAccessMode
+  approvalPolicy: ProviderApprovalPolicy
+  approvalsReviewer: ProviderApprovalsReviewer
   cwd?: string
   model: ProviderModelId
   reasoningEffort: ProviderReasoningEffort
+  sandboxMode: ProviderSandboxMode
 }
 
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
   getUpdateAvailability: (providerId: ProviderId) => Promise<ProviderUpdateAvailability | null>
   updateProvider: (providerId: ProviderId) => Promise<ProviderUpdateAvailability | null>
-  getAccessModes: (providerId: ProviderId) => Promise<ProviderAccessModeOption[]>
+  getApprovalModes: (providerId: ProviderId) => Promise<ProviderApprovalModeOption[]>
+  getSandboxModes: (providerId: ProviderId) => Promise<ProviderSandboxModeOption[]>
   getModels: (providerId: ProviderId) => Promise<ProviderModel[]>
   getChats: (providerId: ProviderId, options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
@@ -373,7 +407,8 @@ export const providerIpcChannels = {
   login: 'provider:login',
   getUpdateAvailability: 'provider:get-update-availability',
   updateProvider: 'provider:update',
-  getAccessModes: 'provider:get-access-modes',
+  getApprovalModes: 'provider:get-approval-modes',
+  getSandboxModes: 'provider:get-sandbox-modes',
   getModels: 'provider:get-models',
   getChats: 'provider:get-chats',
   getChat: 'provider:get-chat',
@@ -391,8 +426,17 @@ export const providerIpcChannels = {
 export const isProviderId = (value: unknown): value is ProviderId =>
   providerIds.includes(value as ProviderId)
 
-export const isProviderAccessMode = (value: unknown): value is ProviderAccessMode =>
-  value === 'sandbox' || value === 'auto' || value === 'full'
+export const isProviderApprovalPolicy = (value: unknown): value is ProviderApprovalPolicy =>
+  value === 'on-request' || value === 'on-failure' || value === 'never'
+
+export const isProviderApprovalsReviewer = (value: unknown): value is ProviderApprovalsReviewer =>
+  value === 'user' || value === 'auto_review'
+
+export const isProviderApprovalMode = (value: unknown): value is ProviderApprovalMode =>
+  value === 'ask-user' || value === 'auto-review' || value === 'never'
+
+export const isProviderSandboxMode = (value: unknown): value is ProviderSandboxMode =>
+  value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access'
 
 export const isProviderModelId = (value: unknown): value is ProviderModelId =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 128

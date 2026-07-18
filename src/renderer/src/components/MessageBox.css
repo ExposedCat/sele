@@ -43,6 +43,7 @@
   color: var(--ink);
   background: transparent;
   line-height: 1.5;
+  overscroll-behavior: contain;
 }
 
 .message-box__controls {

@@ -7,10 +7,12 @@ import type {
   ProviderTurnOptions
 } from '../../shared/provider'
 import {
-  isProviderAccessMode,
+  isProviderApprovalPolicy,
+  isProviderApprovalsReviewer,
   isProviderId,
   isProviderModelId,
   isProviderReasoningEffort,
+  isProviderSandboxMode,
   providerIpcChannels
 } from '../../shared/provider'
 import { providerApi } from './providerService'
@@ -80,13 +82,23 @@ const requireTurnOptions = (value: unknown): ProviderTurnOptions | undefined => 
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid turn options')
 
   const options = value as {
-    accessMode?: unknown
+    approvalPolicy?: unknown
+    approvalsReviewer?: unknown
     cwd?: unknown
     model?: unknown
     reasoningEffort?: unknown
+    sandboxMode?: unknown
   }
-  const accessMode = options.accessMode
-  if (!isProviderAccessMode(accessMode)) throw new Error('Invalid access mode')
+  const approvalPolicy = options.approvalPolicy
+  if (!isProviderApprovalPolicy(approvalPolicy)) throw new Error('Invalid approval policy')
+
+  const approvalsReviewer = options.approvalsReviewer ?? 'user'
+  if (!isProviderApprovalsReviewer(approvalsReviewer)) {
+    throw new Error('Invalid approvals reviewer')
+  }
+
+  const sandboxMode = options.sandboxMode
+  if (!isProviderSandboxMode(sandboxMode)) throw new Error('Invalid sandbox mode')
 
   const cwd = options.cwd
   if (cwd != null && (typeof cwd !== 'string' || !isAbsolute(cwd))) {
@@ -99,7 +111,14 @@ const requireTurnOptions = (value: unknown): ProviderTurnOptions | undefined => 
   const reasoningEffort = options.reasoningEffort ?? 'xhigh'
   if (!isProviderReasoningEffort(reasoningEffort)) throw new Error('Invalid reasoning effort')
 
-  return { accessMode, cwd: cwd ?? undefined, model, reasoningEffort }
+  return {
+    approvalPolicy,
+    approvalsReviewer,
+    cwd: cwd ?? undefined,
+    model,
+    reasoningEffort,
+    sandboxMode
+  }
 }
 
 export const registerProviderIpc = (): void => {
@@ -121,8 +140,12 @@ export const registerProviderIpc = (): void => {
     providerApi.updateProvider(requireProviderId(providerId))
   )
 
-  ipcMain.handle(providerIpcChannels.getAccessModes, (_, providerId: unknown) =>
-    providerApi.getAccessModes(requireProviderId(providerId))
+  ipcMain.handle(providerIpcChannels.getApprovalModes, (_, providerId: unknown) =>
+    providerApi.getApprovalModes(requireProviderId(providerId))
+  )
+
+  ipcMain.handle(providerIpcChannels.getSandboxModes, (_, providerId: unknown) =>
+    providerApi.getSandboxModes(requireProviderId(providerId))
   )
 
   ipcMain.handle(providerIpcChannels.getModels, (_, providerId: unknown) =>

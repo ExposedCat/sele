@@ -3,9 +3,11 @@ import {
   ArrowUp,
   BadgeCheck,
   Bot,
+  FileLock,
   Flame,
+  FolderPen,
   Gauge,
-  Shield,
+  ShieldQuestionMark,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -13,19 +15,21 @@ import {
   Zap
 } from 'lucide-react'
 import type {
-  ProviderAccessMode,
-  ProviderAccessModeOption,
+  ProviderApprovalMode,
+  ProviderApprovalModeOption,
   ProviderModel,
   ProviderModelId,
-  ProviderReasoningEffort
+  ProviderReasoningEffort,
+  ProviderSandboxMode,
+  ProviderSandboxModeOption
 } from '../../../shared/provider'
 import { Button } from './Button'
 import { Dropdown, type DropdownOption } from './Dropdown'
 import './MessageBox.css'
 
 type MessageBoxProps = {
-  accessMode: ProviderAccessMode
-  accessModes: ProviderAccessModeOption[]
+  approvalMode: ProviderApprovalMode
+  approvalModes: ProviderApprovalModeOption[]
   active?: boolean
   autoFocus?: boolean
   disabled?: boolean
@@ -35,10 +39,13 @@ type MessageBoxProps = {
   models: ProviderModel[]
   pending?: boolean
   reasoningEffort: ProviderReasoningEffort
-  onAccessModeChange: (accessMode: ProviderAccessMode) => void
+  sandboxMode: ProviderSandboxMode
+  sandboxModes: ProviderSandboxModeOption[]
+  onApprovalModeChange: (approvalMode: ProviderApprovalMode) => void
   onCancelEdit?: () => void
   onModelChange: (model: ProviderModelId) => void
   onReasoningEffortChange: (reasoningEffort: ProviderReasoningEffort) => void
+  onSandboxModeChange: (sandboxMode: ProviderSandboxMode) => void
   onStop?: () => Promise<void> | void
   onSend: (message: string) => Promise<void> | void
 }
@@ -46,6 +53,49 @@ type MessageBoxProps = {
 const minTextareaHeight = 44
 const maxTextareaHeight = 180
 const selectedControlIconClassName = 'message-box__selected-control-icon'
+
+type ScrollSnapshot = {
+  element: HTMLElement
+  scrollLeft: number
+  scrollTop: number
+}
+
+const restoreAncestorScrollAfterNativeNavigation = (element: HTMLElement): void => {
+  const snapshots: ScrollSnapshot[] = []
+  const addSnapshot = (candidate: HTMLElement): void => {
+    if (candidate === element || snapshots.some((snapshot) => snapshot.element === candidate)) {
+      return
+    }
+
+    snapshots.push({
+      element: candidate,
+      scrollLeft: candidate.scrollLeft,
+      scrollTop: candidate.scrollTop
+    })
+  }
+
+  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    addSnapshot(ancestor)
+  }
+
+  if (document.scrollingElement instanceof HTMLElement) {
+    addSnapshot(document.scrollingElement)
+  }
+
+  if (snapshots.length === 0) return
+
+  const restoreSnapshots = (): void => {
+    snapshots.forEach((snapshot) => {
+      snapshot.element.scrollLeft = snapshot.scrollLeft
+      snapshot.element.scrollTop = snapshot.scrollTop
+    })
+  }
+
+  window.requestAnimationFrame(() => {
+    restoreSnapshots()
+    window.requestAnimationFrame(restoreSnapshots)
+  })
+}
 
 const reasoningEffortLabels = {
   none: 'None',
@@ -58,11 +108,19 @@ const reasoningEffortLabels = {
   ultra: 'Ultra'
 } satisfies Record<string, string>
 
-const accessModeIcons = {
-  sandbox: <Shield aria-hidden="true" />,
-  auto: <BadgeCheck aria-hidden="true" />,
-  full: <UnlockKeyhole className={selectedControlIconClassName} aria-hidden="true" />
-} satisfies Record<ProviderAccessMode, ReactNode>
+const approvalModeIcons = {
+  'ask-user': <ShieldQuestionMark aria-hidden="true" />,
+  'auto-review': <Sparkles aria-hidden="true" />,
+  never: <BadgeCheck className={selectedControlIconClassName} aria-hidden="true" />
+} satisfies Record<ProviderApprovalMode, ReactNode>
+
+const sandboxModeIcons = {
+  'read-only': <FileLock aria-hidden="true" />,
+  'workspace-write': <FolderPen aria-hidden="true" />,
+  'danger-full-access': (
+    <UnlockKeyhole className={selectedControlIconClassName} aria-hidden="true" />
+  )
+} satisfies Record<ProviderSandboxMode, ReactNode>
 
 const reasoningEffortIcons = {
   none: <Gauge aria-hidden="true" />,
@@ -101,16 +159,16 @@ const getReasoningEffortIcon = (reasoningEffort: ProviderReasoningEffort): React
 
 const formatModelLabel = (label: string): string => label.replace(/-/g, ' ')
 
-const formatAccessModeLabel = (mode: ProviderAccessMode): string =>
-  mode
+const formatOptionLabel = (value: string): string =>
+  value
     .split(/[-_\s]+/)
     .filter(Boolean)
     .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
-    .join(' ') || mode
+    .join(' ') || value
 
 export const MessageBox: React.FC<MessageBoxProps> = ({
-  accessMode,
-  accessModes,
+  approvalMode,
+  approvalModes,
   active = false,
   autoFocus = false,
   disabled = false,
@@ -120,10 +178,13 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   models,
   pending = false,
   reasoningEffort,
-  onAccessModeChange,
+  sandboxMode,
+  sandboxModes,
+  onApprovalModeChange,
   onCancelEdit,
   onModelChange,
   onReasoningEffortChange,
+  onSandboxModeChange,
   onStop,
   onSend
 }) => {
@@ -133,22 +194,44 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   const messageBeforeEditRef = useRef<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const editing = Boolean(editSession)
-  const selectedAccessMode = accessModes.find((candidateMode) => candidateMode.id === accessMode)
-  const accessModeOptions = accessModes.map((mode): DropdownOption<ProviderAccessMode> => ({
+  const selectedApprovalMode = approvalModes.find((mode) => mode.id === approvalMode)
+  const approvalModeOptions = approvalModes.map((mode): DropdownOption<ProviderApprovalMode> => ({
     value: mode.id,
     label: mode.label,
     menuLabel: mode.isDefault ? `${mode.label} (default)` : mode.label,
     description: mode.description || undefined,
-    icon: accessModeIcons[mode.id]
+    icon: approvalModeIcons[mode.id]
   }))
-  const displayedAccessModeOptions = accessModeOptions.some((option) => option.value === accessMode)
-    ? accessModeOptions
+  const displayedApprovalModeOptions = approvalModeOptions.some(
+    (option) => option.value === approvalMode
+  )
+    ? approvalModeOptions
     : [
-        ...accessModeOptions,
+        ...approvalModeOptions,
         {
-          value: accessMode,
-          label: formatAccessModeLabel(accessMode),
-          icon: accessModeIcons[accessMode]
+          value: approvalMode,
+          label: formatOptionLabel(approvalMode),
+          icon: approvalModeIcons[approvalMode]
+        }
+      ]
+  const selectedSandboxMode = sandboxModes.find((mode) => mode.id === sandboxMode)
+  const sandboxModeOptions = sandboxModes.map((mode): DropdownOption<ProviderSandboxMode> => ({
+    value: mode.id,
+    label: mode.label,
+    menuLabel: mode.isDefault ? `${mode.label} (default)` : mode.label,
+    description: mode.description || undefined,
+    icon: sandboxModeIcons[mode.id]
+  }))
+  const displayedSandboxModeOptions = sandboxModeOptions.some(
+    (option) => option.value === sandboxMode
+  )
+    ? sandboxModeOptions
+    : [
+        ...sandboxModeOptions,
+        {
+          value: sandboxMode,
+          label: formatOptionLabel(sandboxMode),
+          icon: sandboxModeIcons[sandboxMode]
         }
       ]
   const selectedModel = models.find((candidateModel) => candidateModel.id === model)
@@ -198,9 +281,12 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   const selectedModelTitle = selectedModel?.description
     ? `${formatModelLabel(selectedModel.label)}: ${selectedModel.description}`
     : formatModelLabel(selectedModel?.label ?? model)
-  const selectedAccessModeTitle = selectedAccessMode?.description
-    ? `${selectedAccessMode.label}: ${selectedAccessMode.description}`
-    : (selectedAccessMode?.label ?? formatAccessModeLabel(accessMode))
+  const selectedApprovalModeTitle = selectedApprovalMode?.description
+    ? `${selectedApprovalMode.label}: ${selectedApprovalMode.description}`
+    : (selectedApprovalMode?.label ?? formatOptionLabel(approvalMode))
+  const selectedSandboxModeTitle = selectedSandboxMode?.description
+    ? `${selectedSandboxMode.label}: ${selectedSandboxMode.description}`
+    : (selectedSandboxMode?.label ?? formatOptionLabel(sandboxMode))
   const selectedReasoningEffortLabel = getReasoningEffortLabel(reasoningEffort)
 
   useEffect(() => {
@@ -285,6 +371,23 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
     onCancelEdit?.()
   }
 
+  const handleMessageKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (
+      event.key === 'PageUp' ||
+      event.key === 'PageDown' ||
+      event.key === 'Home' ||
+      event.key === 'End'
+    ) {
+      event.stopPropagation()
+      restoreAncestorScrollAfterNativeNavigation(event.currentTarget)
+    }
+
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+
+    event.preventDefault()
+    submitMessage()
+  }
+
   const buttonLabel = active ? 'Stop response' : editing ? 'Save edit' : 'Send message'
   const selectorsDisabled = active || pending || editing
 
@@ -298,8 +401,11 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
       <label className="sr-only" htmlFor="message-input">
         Message
       </label>
-      <label className="sr-only" htmlFor="access-mode">
-        Access mode
+      <label className="sr-only" htmlFor="approval-mode">
+        Approval mode
+      </label>
+      <label className="sr-only" htmlFor="sandbox-mode">
+        Sandbox mode
       </label>
       <label className="sr-only" htmlFor="model-mode">
         Model
@@ -316,25 +422,32 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           value={message}
           placeholder="Message the assistant"
           onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
-
-            event.preventDefault()
-            submitMessage()
-          }}
+          onKeyDown={handleMessageKeyDown}
         />
         <div className="message-box__controls">
           <div className="message-box__selectors">
-            <span className="message-box__select message-box__access">
+            <span className="message-box__select message-box__approval">
               <Dropdown
-                id="access-mode"
+                id="approval-mode"
                 disabled={selectorsDisabled}
-                icon={accessModeIcons[accessMode]}
-                options={displayedAccessModeOptions}
+                icon={approvalModeIcons[approvalMode]}
+                options={displayedApprovalModeOptions}
                 placement="top"
-                value={accessMode}
-                title={selectedAccessModeTitle}
-                onChange={onAccessModeChange}
+                value={approvalMode}
+                title={selectedApprovalModeTitle}
+                onChange={onApprovalModeChange}
+              />
+            </span>
+            <span className="message-box__select message-box__sandbox">
+              <Dropdown
+                id="sandbox-mode"
+                disabled={selectorsDisabled}
+                icon={sandboxModeIcons[sandboxMode]}
+                options={displayedSandboxModeOptions}
+                placement="top"
+                value={sandboxMode}
+                title={selectedSandboxModeTitle}
+                onChange={onSandboxModeChange}
               />
             </span>
             <span className="message-box__select message-box__model">

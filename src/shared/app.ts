@@ -50,8 +50,38 @@ export type AppGitPushOptions = {
   cwd?: string | null
 }
 
+export type AppGitPullStrategy = 'ff-only' | 'rebase' | 'merge'
+
+export type AppGitRecoveryActionId = 'pull-rebase' | 'pull-merge' | 'pull-and-push'
+
+export type AppGitRecoveryAction = {
+  id: AppGitRecoveryActionId
+  label: string
+  description: string
+}
+
+export type AppGitRecoverableFailure = {
+  kind: 'pull-diverged' | 'push-rejected'
+  title: string
+  message: string
+  command: string
+  actions: AppGitRecoveryAction[]
+}
+
 export type AppGitPushResult = {
   pushed: boolean
+  failure?: AppGitRecoverableFailure | null
+}
+
+export type AppGitPullOptions = {
+  cwd?: string | null
+  rememberStrategy?: boolean
+  strategy?: AppGitPullStrategy
+}
+
+export type AppGitPullResult = {
+  pulled: boolean
+  failure?: AppGitRecoverableFailure | null
 }
 
 export type AppApi = {
@@ -63,6 +93,7 @@ export type AppApi = {
   getDefaultCwd: () => Promise<string>
   getGitChanges: (options: AppGitChangesOptions) => Promise<AppGitChangesResult>
   commitGitChanges: (options: AppGitCommitOptions) => Promise<AppGitCommitResult>
+  pullGitChanges: (options?: AppGitPullOptions) => Promise<AppGitPullResult>
   pushGitChanges: (options?: AppGitPushOptions) => Promise<AppGitPushResult>
   selectFolder: (options?: FolderSelectionOptions) => Promise<string | null>
   onColorSchemeUpdated: (listener: (scheme: AppColorScheme) => void) => () => void
@@ -80,6 +111,7 @@ export const appIpcChannels = {
   getDefaultCwd: 'app:get-default-cwd',
   getGitChanges: 'app:get-git-changes',
   commitGitChanges: 'app:commit-git-changes',
+  pullGitChanges: 'app:pull-git-changes',
   pushGitChanges: 'app:push-git-changes',
   selectFolder: 'app:select-folder'
 } as const

@@ -9,6 +9,8 @@ import type {
   AppGitChangesOptions,
   AppGitFileChange,
   AppGitChangeSource,
+  AppGitPullStrategy,
+  AppGitRecoverableFailure,
   AppWindowState
 } from '../shared/app'
 import { appIpcChannels } from '../shared/app'
@@ -57,6 +59,7 @@ const runGit = (cwd: string, args: string[], required = false): Promise<string |
       {
         cwd,
         encoding: 'utf8',
+        env: { ...process.env, GIT_MERGE_AUTOEDIT: 'no' },
         maxBuffer: 10 * 1024 * 1024,
         timeout: 10_000
       },
@@ -73,6 +76,65 @@ const runGit = (cwd: string, args: string[], required = false): Promise<string |
       }
     )
   })
+
+const getGitErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+const isGitPullStrategy = (value: unknown): value is AppGitPullStrategy =>
+  value === 'ff-only' || value === 'rebase' || value === 'merge'
+
+const isDivergedPullFailure = (message: string): boolean => {
+  const normalizedMessage = message.toLocaleLowerCase()
+  return (
+    normalizedMessage.includes('not possible to fast-forward') ||
+    normalizedMessage.includes("diverging branches can't be fast-forwarded") ||
+    normalizedMessage.includes('need to specify how to reconcile divergent branches')
+  )
+}
+
+const isPushRejectedFailure = (message: string): boolean => {
+  const normalizedMessage = message.toLocaleLowerCase()
+  return (
+    normalizedMessage.includes('non-fast-forward') ||
+    normalizedMessage.includes('fetch first') ||
+    normalizedMessage.includes('updates were rejected') ||
+    normalizedMessage.includes('failed to push some refs')
+  )
+}
+
+const getDivergedPullFailure = (command: string): AppGitRecoverableFailure => ({
+  kind: 'pull-diverged',
+  title: 'Pull needs a strategy',
+  message:
+    'Local and remote commits have diverged. Choose whether to rebase your commits or create a merge commit.',
+  command,
+  actions: [
+    {
+      id: 'pull-rebase',
+      label: 'Rebase',
+      description: 'Replay local commits on top of the remote branch.'
+    },
+    {
+      id: 'pull-merge',
+      label: 'Merge',
+      description: 'Create a merge commit that combines local and remote commits.'
+    }
+  ]
+})
+
+const getPushRejectedFailure = (command: string): AppGitRecoverableFailure => ({
+  kind: 'push-rejected',
+  title: 'Remote changed before push',
+  message: 'The remote branch has commits that are not local yet. Pull them before pushing.',
+  command,
+  actions: [
+    {
+      id: 'pull-and-push',
+      label: 'Pull & Push',
+      description: 'Pull remote changes with fast-forward-only, then push local commits.'
+    }
+  ]
+})
 
 const getGitChangesOptions = (value: unknown): AppGitChangesOptions => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -118,13 +180,28 @@ const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
   }
 }
 
-const getGitPushOptions = (value: unknown): { cwd?: string | null } => {
-  if (value == null) return {}
-  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Git push options')
+const getGitSyncOptions = (
+  value: unknown
+): { cwd?: string | null; rememberStrategy: boolean; strategy?: AppGitPullStrategy } => {
+  if (value == null) return { rememberStrategy: false }
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Git sync options')
 
-  const options = value as { cwd?: unknown }
+  const options = value as { cwd?: unknown; rememberStrategy?: unknown; strategy?: unknown }
+  const rememberStrategy = options.rememberStrategy
+  const strategy = options.strategy
+
+  if (rememberStrategy != null && typeof rememberStrategy !== 'boolean') {
+    throw new Error('Invalid Git remember strategy option')
+  }
+
+  if (strategy != null && !isGitPullStrategy(strategy)) {
+    throw new Error('Invalid Git pull strategy')
+  }
+
   return {
-    cwd: getDefaultPath(options.cwd)
+    cwd: getDefaultPath(options.cwd),
+    rememberStrategy: Boolean(rememberStrategy),
+    strategy: isGitPullStrategy(strategy) ? strategy : undefined
   }
 }
 
@@ -376,13 +453,88 @@ const commitGitChanges = async (
   return { commitHash, pushed: false }
 }
 
-const pushGitChanges = async (cwd: string): Promise<{ pushed: boolean }> => {
+const pushGitChanges = async (
+  cwd: string
+): Promise<{ pushed: boolean; failure?: AppGitRecoverableFailure | null }> => {
   const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
   if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
 
-  await runGit(repositoryRoot, ['push'], true)
+  try {
+    await runGit(repositoryRoot, ['push'], true)
+  } catch (error) {
+    const message = getGitErrorMessage(error)
+    if (isPushRejectedFailure(message)) {
+      return { pushed: false, failure: getPushRejectedFailure('git push') }
+    }
 
-  return { pushed: true }
+    throw new Error(message)
+  }
+
+  return { pushed: true, failure: null }
+}
+
+const hasLocalGitPullConfig = async (repositoryRoot: string): Promise<boolean> => {
+  const pullRebase = await runGit(repositoryRoot, ['config', '--local', '--get', 'pull.rebase'])
+  const pullFf = await runGit(repositoryRoot, ['config', '--local', '--get', 'pull.ff'])
+
+  return Boolean(pullRebase || pullFf)
+}
+
+const rememberGitPullStrategy = async (
+  repositoryRoot: string,
+  strategy: AppGitPullStrategy
+): Promise<void> => {
+  if (strategy === 'rebase') {
+    await runGit(repositoryRoot, ['config', 'pull.rebase', 'true'], true)
+    await runGit(repositoryRoot, ['config', '--unset-all', 'pull.ff'])
+  }
+
+  if (strategy === 'merge') {
+    await runGit(repositoryRoot, ['config', 'pull.rebase', 'false'], true)
+    await runGit(repositoryRoot, ['config', '--unset-all', 'pull.ff'])
+  }
+}
+
+const getGitPullArgs = async (
+  repositoryRoot: string,
+  strategy?: AppGitPullStrategy
+): Promise<string[]> => {
+  if (strategy === 'rebase') return ['pull', '--rebase']
+  if (strategy === 'merge') return ['pull', '--no-rebase', '--no-ff', '--no-edit']
+  if (!strategy && (await hasLocalGitPullConfig(repositoryRoot))) return ['pull']
+
+  return ['pull', '--ff-only']
+}
+
+const pullGitChanges = async (
+  cwd: string,
+  strategy?: AppGitPullStrategy,
+  rememberStrategy = false
+): Promise<{ pulled: boolean; failure?: AppGitRecoverableFailure | null }> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  if (rememberStrategy && strategy) {
+    await rememberGitPullStrategy(repositoryRoot, strategy)
+  }
+
+  const args = await getGitPullArgs(repositoryRoot, strategy)
+
+  try {
+    await runGit(repositoryRoot, args, true)
+  } catch (error) {
+    const message = getGitErrorMessage(error)
+    if ((strategy == null || strategy === 'ff-only') && isDivergedPullFailure(message)) {
+      return {
+        pulled: false,
+        failure: getDivergedPullFailure(`git ${args.join(' ')}`)
+      }
+    }
+
+    throw new Error(message)
+  }
+
+  return { pulled: true, failure: null }
 }
 
 export const registerAppIpc = (): void => {
@@ -431,8 +583,13 @@ export const registerAppIpc = (): void => {
     )
   })
 
+  ipcMain.handle(appIpcChannels.pullGitChanges, async (_event, value: unknown) => {
+    const options = getGitSyncOptions(value)
+    return pullGitChanges(options.cwd ?? process.cwd(), options.strategy, options.rememberStrategy)
+  })
+
   ipcMain.handle(appIpcChannels.pushGitChanges, async (_event, value: unknown) => {
-    const options = getGitPushOptions(value)
+    const options = getGitSyncOptions(value)
     return pushGitChanges(options.cwd ?? process.cwd())
   })
 

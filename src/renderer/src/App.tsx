@@ -11,6 +11,8 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitCompareArrows,
+  GitMerge,
+  GitPullRequestArrow,
   Maximize2,
   Minimize2,
   Minus,
@@ -30,6 +32,9 @@ import type {
   AppGitChangeKind,
   AppGitChangesResult,
   AppGitCommitAction,
+  AppGitPullStrategy,
+  AppGitRecoverableFailure,
+  AppGitRecoveryActionId,
   AppWindowState
 } from '../../shared/app'
 import type {
@@ -40,16 +45,28 @@ import type {
   ProviderChatItem,
   ProviderChatMetadata,
   ProviderMessage,
-  ProviderAccessMode,
-  ProviderAccessModeOption,
+  ProviderApprovalMode,
+  ProviderApprovalModeOption,
+  ProviderApprovalPolicy,
+  ProviderApprovalsReviewer,
   ProviderApprovalDecision,
   ProviderId,
   ProviderModel,
   ProviderModelId,
   ProviderReasoningEffort,
+  ProviderSandboxMode,
+  ProviderSandboxModeOption,
   ProviderUpdateAvailability
 } from '../../shared/provider'
-import { fallbackProviderAccessModes, fallbackProviderModels } from '../../shared/provider'
+import {
+  fallbackProviderApprovalModes,
+  fallbackProviderModels,
+  fallbackProviderSandboxModes,
+  isProviderApprovalMode,
+  isProviderApprovalPolicy,
+  isProviderApprovalsReviewer,
+  isProviderSandboxMode
+} from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
 import { Button } from './components/Button'
@@ -85,6 +102,18 @@ type GitChangeSource = Exclude<ChangeSource, 'lastTurn'>
 type CommitMode = 'ai' | 'manual'
 type ChangesPaneView = 'git' | 'files'
 type GitCommitPromptAction = AppGitCommitAction | 'multipleCommits'
+type GitSyncAction = 'pull' | 'push' | 'pullAndPush'
+type GitSyncStep = Exclude<GitSyncAction, 'pullAndPush'>
+type GitSyncRecoveryState = {
+  cwd: string
+  requestedAction: GitSyncAction
+  failedAction: GitSyncStep
+  failure: AppGitRecoverableFailure
+  error: string | null
+}
+type GitSyncRecoveryActionOptions = {
+  rememberStrategy?: boolean
+}
 type ChangedFile = {
   path: string
   previousPath?: string | null
@@ -120,10 +149,12 @@ type ChatPanePercents = {
   sidebar: number
   changes: number
 }
+type LegacyProviderAccessMode = 'sandbox' | 'auto' | 'full'
 type MessageBoxSelection = {
-  accessMode: ProviderAccessMode
+  approvalMode: ProviderApprovalMode
   model: ProviderModelId
   reasoningEffort: ProviderReasoningEffort
+  sandboxMode: ProviderSandboxMode
 }
 type StoredMessageBoxSelection = Partial<MessageBoxSelection>
 type ChatResizeEdge = 'left' | 'right'
@@ -155,10 +186,14 @@ const newSessionProjectPlaceholderValue = '__sele_new_session_project_placeholde
 const fallbackDefaultModel = fallbackProviderModels.find((model) => model.isDefault)
 const fallbackInitialModel = fallbackDefaultModel ?? fallbackProviderModels[0]!
 const fallbackInitialReasoningEffort = fallbackInitialModel?.defaultReasoningEffort ?? 'medium'
-const fallbackDefaultAccessMode =
-  fallbackProviderAccessModes.find((mode) => mode.isDefault)?.id ??
-  fallbackProviderAccessModes[0]?.id ??
-  'sandbox'
+const fallbackDefaultApprovalMode =
+  fallbackProviderApprovalModes.find((mode) => mode.isDefault)?.id ??
+  fallbackProviderApprovalModes[0]?.id ??
+  'ask-user'
+const fallbackDefaultSandboxMode =
+  fallbackProviderSandboxModes.find((mode) => mode.isDefault)?.id ??
+  fallbackProviderSandboxModes[0]?.id ??
+  'workspace-write'
 const refreshIconReplayMs = 1_050
 
 const providerLabels = {
@@ -264,6 +299,66 @@ const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
       aria-hidden="true"
     />
   )
+}
+
+const getGitRecoveryPullStrategy = (
+  actionId: AppGitRecoveryActionId
+): AppGitPullStrategy | null => {
+  if (actionId === 'pull-rebase') return 'rebase'
+  if (actionId === 'pull-merge') return 'merge'
+
+  return null
+}
+
+const getGitRecoveryActionIcon = (
+  actionId: AppGitRecoveryActionId,
+  active: boolean
+): React.ReactNode => {
+  if (actionId === 'pull-rebase') return <GitPullRequestArrow aria-hidden="true" />
+  if (actionId === 'pull-merge') return <GitMerge aria-hidden="true" />
+
+  return <GitRefreshIcon active={active} />
+}
+
+const getGitRecoveryRememberLabel = (actionId: AppGitRecoveryActionId): string | null => {
+  if (actionId === 'pull-rebase') return 'Remember rebase'
+  if (actionId === 'pull-merge') return 'Remember merge'
+
+  return null
+}
+
+const getGitSyncWorkflowLabel = (action: GitSyncAction): string => {
+  if (action === 'pullAndPush') return 'pull remote changes and push local commits'
+  if (action === 'push') return 'push local commits'
+
+  return 'pull remote changes'
+}
+
+const getGitAiResolutionPrompt = (
+  recovery: GitSyncRecoveryState,
+  rememberStrategy: boolean
+): string => {
+  const workflow = getGitSyncWorkflowLabel(recovery.requestedAction)
+  const promptParts = [
+    `Resolve this Git sync failure in ${recovery.cwd}.`,
+    `Failed command: ${recovery.failure.command}.`,
+    `Failure: ${recovery.failure.title}. ${recovery.failure.message}`
+  ]
+
+  if (rememberStrategy) {
+    promptParts.push(
+      'Make the pull strategy persistent for this repository using repo-local Git config before resolving it.',
+      'Choose rebase or merge based on the repository history, then pull and push.'
+    )
+  } else {
+    promptParts.push(
+      `Resolve it once without changing persistent Git pull configuration, then complete the original workflow: ${workflow}.`
+    )
+  }
+
+  promptParts.push('If conflicts occur, stop and explain the files that need manual resolution.')
+
+  return promptParts.join('\n')
 }
 
 const getDropdownOptions = <TValue extends string>(
@@ -415,8 +510,35 @@ const writeStoredChatPanePercents = (percents: ChatPanePercents): void => {
   }
 }
 
-const isProviderAccessMode = (value: unknown): value is ProviderAccessMode =>
+const isLegacyProviderAccessMode = (value: unknown): value is LegacyProviderAccessMode =>
   value === 'sandbox' || value === 'auto' || value === 'full'
+
+const getLegacyApprovalMode = (accessMode: LegacyProviderAccessMode): ProviderApprovalMode =>
+  accessMode === 'sandbox' ? 'ask-user' : 'never'
+
+const getApprovalModeForPolicy = (
+  approvalPolicy: ProviderApprovalPolicy,
+  approvalsReviewer: ProviderApprovalsReviewer
+): ProviderApprovalMode => {
+  if (approvalPolicy === 'never') return 'never'
+  if (approvalPolicy === 'on-request' && approvalsReviewer === 'auto_review') return 'auto-review'
+
+  return 'ask-user'
+}
+
+const getApprovalAccessOptions = (
+  approvalMode: ProviderApprovalMode
+): { approvalPolicy: ProviderApprovalPolicy; approvalsReviewer: ProviderApprovalsReviewer } => {
+  if (approvalMode === 'never') return { approvalPolicy: 'never', approvalsReviewer: 'user' }
+  if (approvalMode === 'auto-review') {
+    return { approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' }
+  }
+
+  return { approvalPolicy: 'on-request', approvalsReviewer: 'user' }
+}
+
+const getLegacySandboxMode = (accessMode: LegacyProviderAccessMode): ProviderSandboxMode =>
+  accessMode === 'full' ? 'danger-full-access' : 'workspace-write'
 
 const isStoredSelectionString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0
@@ -430,7 +552,27 @@ const readStoredMessageBoxSelection = (): StoredMessageBoxSelection => {
     if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return {}
 
     const selection: StoredMessageBoxSelection = {}
-    if (isProviderAccessMode(parsedValue.accessMode)) selection.accessMode = parsedValue.accessMode
+    if (isProviderApprovalMode(parsedValue.approvalMode)) {
+      selection.approvalMode = parsedValue.approvalMode
+    } else if (isProviderApprovalPolicy(parsedValue.approvalPolicy)) {
+      const approvalsReviewer = isProviderApprovalsReviewer(parsedValue.approvalsReviewer)
+        ? parsedValue.approvalsReviewer
+        : 'user'
+
+      selection.approvalMode = getApprovalModeForPolicy(
+        parsedValue.approvalPolicy,
+        approvalsReviewer
+      )
+    }
+    if (isProviderSandboxMode(parsedValue.sandboxMode))
+      selection.sandboxMode = parsedValue.sandboxMode
+    if (
+      (!selection.approvalMode || !selection.sandboxMode) &&
+      isLegacyProviderAccessMode(parsedValue.accessMode)
+    ) {
+      selection.approvalMode ??= getLegacyApprovalMode(parsedValue.accessMode)
+      selection.sandboxMode ??= getLegacySandboxMode(parsedValue.accessMode)
+    }
     if (isStoredSelectionString(parsedValue.model)) selection.model = parsedValue.model
     if (isStoredSelectionString(parsedValue.reasoningEffort)) {
       selection.reasoningEffort = parsedValue.reasoningEffort
@@ -467,8 +609,17 @@ const getDefaultReasoningEffort = (model: ProviderModel | undefined): ProviderRe
   model?.supportedReasoningEfforts[0]?.id ||
   fallbackInitialReasoningEffort
 
-const getDefaultAccessMode = (accessModes: ProviderAccessModeOption[]): ProviderAccessMode =>
-  accessModes.find((mode) => mode.isDefault)?.id ?? accessModes[0]?.id ?? fallbackDefaultAccessMode
+const getDefaultApprovalMode = (
+  approvalModes: ProviderApprovalModeOption[]
+): ProviderApprovalMode =>
+  approvalModes.find((mode) => mode.isDefault)?.id ??
+  approvalModes[0]?.id ??
+  fallbackDefaultApprovalMode
+
+const getDefaultSandboxMode = (sandboxModes: ProviderSandboxModeOption[]): ProviderSandboxMode =>
+  sandboxModes.find((mode) => mode.isDefault)?.id ??
+  sandboxModes[0]?.id ??
+  fallbackDefaultSandboxMode
 
 const modelSupportsReasoningEffort = (
   model: ProviderModel | undefined,
@@ -945,11 +1096,17 @@ export const App: React.FC = () => {
   const [chatLoadRequest, setChatLoadRequest] = useState(0)
   const [sendState, setSendState] = useState<SendState>('idle')
   const [editingMessage, setEditingMessage] = useState<EditingMessage | null>(null)
-  const [accessModes, setAccessModes] = useState<ProviderAccessModeOption[]>(
-    fallbackProviderAccessModes
+  const [approvalModes, setApprovalModes] = useState<ProviderApprovalModeOption[]>(
+    fallbackProviderApprovalModes
   )
-  const [accessMode, setAccessMode] = useState<ProviderAccessMode>(
-    storedMessageBoxSelection.accessMode ?? fallbackDefaultAccessMode
+  const [approvalMode, setApprovalMode] = useState<ProviderApprovalMode>(
+    storedMessageBoxSelection.approvalMode ?? fallbackDefaultApprovalMode
+  )
+  const [sandboxModes, setSandboxModes] = useState<ProviderSandboxModeOption[]>(
+    fallbackProviderSandboxModes
+  )
+  const [sandboxMode, setSandboxMode] = useState<ProviderSandboxMode>(
+    storedMessageBoxSelection.sandboxMode ?? fallbackDefaultSandboxMode
   )
   const [models, setModels] = useState<ProviderModel[]>(fallbackProviderModels)
   const [model, setModel] = useState<ProviderModelId>(
@@ -992,8 +1149,9 @@ export const App: React.FC = () => {
   const [commitInput, setCommitInput] = useState('')
   const [commitState, setCommitState] = useState<SendState>('idle')
   const [commitError, setCommitError] = useState<string | null>(null)
-  const [pushState, setPushState] = useState<SendState>('idle')
-  const [pushError, setPushError] = useState<string | null>(null)
+  const [syncState, setSyncState] = useState<SendState>('idle')
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncRecovery, setSyncRecovery] = useState<GitSyncRecoveryState | null>(null)
   const [panePercents, setPanePercents] = useState<ChatPanePercents | null>(
     readStoredChatPanePercents
   )
@@ -1011,7 +1169,8 @@ export const App: React.FC = () => {
   const chatAutoScrollFrameRef = useRef<number | null>(null)
   const modelManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.model))
   const reasoningManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.reasoningEffort))
-  const accessModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.accessMode))
+  const approvalModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.approvalMode))
+  const sandboxModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.sandboxMode))
 
   const defaultPanePercents = useMemo(() => getDefaultChatPanePercents(panelsWidth), [panelsWidth])
   const preferredPanePercents = panePercents ?? defaultPanePercents
@@ -1036,8 +1195,8 @@ export const App: React.FC = () => {
   )
 
   useEffect(() => {
-    writeStoredMessageBoxSelection({ accessMode, model, reasoningEffort })
-  }, [accessMode, model, reasoningEffort])
+    writeStoredMessageBoxSelection({ approvalMode, model, reasoningEffort, sandboxMode })
+  }, [approvalMode, model, reasoningEffort, sandboxMode])
 
   useEffect(() => {
     let active = true
@@ -1275,14 +1434,14 @@ export const App: React.FC = () => {
     let active = true
 
     providerApi
-      .getAccessModes('codex')
-      .then((nextAccessModes) => {
-        if (!active || nextAccessModes.length === 0) return
+      .getApprovalModes('codex')
+      .then((nextApprovalModes) => {
+        if (!active || nextApprovalModes.length === 0) return
 
-        setAccessModes(nextAccessModes)
+        setApprovalModes(nextApprovalModes)
       })
       .catch(() => {
-        if (active) setAccessModes(fallbackProviderAccessModes)
+        if (active) setApprovalModes(fallbackProviderApprovalModes)
       })
 
     return () => {
@@ -1291,24 +1450,65 @@ export const App: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    if (accessModes.length === 0) return
+    if (approvalModes.length === 0) return
 
-    const defaultAccessMode = getDefaultAccessMode(accessModes)
+    const defaultApprovalMode = getDefaultApprovalMode(approvalModes)
 
-    setAccessMode((currentAccessMode) => {
-      const currentAccessModeExists = accessModes.some((mode) => mode.id === currentAccessMode)
+    setApprovalMode((currentApprovalMode) => {
+      const currentApprovalModeExists = approvalModes.some(
+        (mode) => mode.id === currentApprovalMode
+      )
 
-      if (!currentAccessModeExists) return defaultAccessMode
+      if (!currentApprovalModeExists) return defaultApprovalMode
       if (
-        !accessModeManuallySelectedRef.current &&
-        currentAccessMode === fallbackDefaultAccessMode
+        !approvalModeManuallySelectedRef.current &&
+        currentApprovalMode === fallbackDefaultApprovalMode
       ) {
-        return defaultAccessMode
+        return defaultApprovalMode
       }
 
-      return currentAccessMode
+      return currentApprovalMode
     })
-  }, [accessModes])
+  }, [approvalModes])
+
+  useEffect(() => {
+    let active = true
+
+    providerApi
+      .getSandboxModes('codex')
+      .then((nextSandboxModes) => {
+        if (!active || nextSandboxModes.length === 0) return
+
+        setSandboxModes(nextSandboxModes)
+      })
+      .catch(() => {
+        if (active) setSandboxModes(fallbackProviderSandboxModes)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (sandboxModes.length === 0) return
+
+    const defaultSandboxMode = getDefaultSandboxMode(sandboxModes)
+
+    setSandboxMode((currentSandboxMode) => {
+      const currentSandboxModeExists = sandboxModes.some((mode) => mode.id === currentSandboxMode)
+
+      if (!currentSandboxModeExists) return defaultSandboxMode
+      if (
+        !sandboxModeManuallySelectedRef.current &&
+        currentSandboxMode === fallbackDefaultSandboxMode
+      ) {
+        return defaultSandboxMode
+      }
+
+      return currentSandboxMode
+    })
+  }, [sandboxModes])
 
   useEffect(() => {
     let active = true
@@ -1538,6 +1738,22 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
+
+  useEffect(() => {
+    let active = true
+
+    queueMicrotask(() => {
+      if (!active) return
+
+      setSyncState('idle')
+      setSyncError(null)
+      setSyncRecovery(null)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [changesCwd, newChatOpen, selectedChatId, selectedProviderId])
 
   useEffect(() => {
     let active = true
@@ -1789,9 +2005,14 @@ export const App: React.FC = () => {
     setReasoningEffort(nextReasoningEffort)
   }
 
-  const handleAccessModeChange = (nextAccessMode: ProviderAccessMode): void => {
-    accessModeManuallySelectedRef.current = true
-    setAccessMode(nextAccessMode)
+  const handleApprovalModeChange = (nextApprovalMode: ProviderApprovalMode): void => {
+    approvalModeManuallySelectedRef.current = true
+    setApprovalMode(nextApprovalMode)
+  }
+
+  const handleSandboxModeChange = (nextSandboxMode: ProviderSandboxMode): void => {
+    sandboxModeManuallySelectedRef.current = true
+    setSandboxMode(nextSandboxMode)
   }
 
   const updateProviderUpdatePreference = (
@@ -1949,7 +2170,12 @@ export const App: React.FC = () => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
-    const turnOptions = { accessMode, model, reasoningEffort }
+    const turnOptions = {
+      ...getApprovalAccessOptions(approvalMode),
+      model,
+      reasoningEffort,
+      sandboxMode
+    }
 
     if (editingMessage) {
       if (!selectedChat) {
@@ -2171,13 +2397,15 @@ export const App: React.FC = () => {
   const commitInputValue = commitInput.trim()
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
   const changeTree = useMemo(() => buildChangeTree(changedFiles), [changedFiles])
+  const syncInProgress = syncState === 'sending'
+  const visibleSyncRecovery = syncRecovery && syncRecovery.cwd === changesCwd ? syncRecovery : null
   const commitBaseDisabled =
     !canCommitChangeSource ||
     changedFiles.length === 0 ||
     commitFiles.length === 0 ||
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
-    pushState === 'sending'
+    syncInProgress
   const getCommitActionDisabled = (action: GitCommitPromptAction): boolean =>
     commitBaseDisabled ||
     (commitMode === 'manual'
@@ -2186,7 +2414,12 @@ export const App: React.FC = () => {
         Boolean(editingMessage) ||
         (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false))
   const commitDisabled = getCommitActionDisabled('commit')
-  const pushDisabled = !changesCwd || pushState === 'sending' || commitState === 'sending'
+  const syncDisabled = !changesCwd || syncInProgress || commitState === 'sending'
+  const gitAiResolutionDisabled =
+    syncInProgress ||
+    sendState === 'sending' ||
+    Boolean(editingMessage) ||
+    (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false)
   const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, displayedGitChanges)
   const showBranchEmptyIcon =
     changeSource === 'branch' &&
@@ -2313,20 +2546,126 @@ export const App: React.FC = () => {
     await handleSendMessage(getCommitMessage(changedFiles, action, changeSource, commitInputValue))
   }
 
-  const handlePushChanges = async (): Promise<void> => {
-    if (pushDisabled || !changesCwd) return
+  const showRecoverableGitFailure = (
+    cwd: string,
+    requestedAction: GitSyncAction,
+    failedAction: GitSyncStep,
+    failure: AppGitRecoverableFailure
+  ): void => {
+    setSyncState('error')
+    setSyncError(null)
+    setSyncRecovery({
+      cwd,
+      requestedAction,
+      failedAction,
+      failure,
+      error: null
+    })
+  }
 
-    setPushState('sending')
-    setPushError(null)
+  const runSyncChanges = async (
+    action: GitSyncAction,
+    cwd: string,
+    options: {
+      pullStrategy?: AppGitPullStrategy
+      rememberStrategy?: boolean
+      recovery?: GitSyncRecoveryState | null
+    } = {}
+  ): Promise<void> => {
+    setSyncState('sending')
+    setSyncError(null)
+    setSyncRecovery(options.recovery ? { ...options.recovery, error: null } : null)
+
+    let currentAction: GitSyncStep = action === 'push' ? 'push' : 'pull'
 
     try {
-      await appApi.pushGitChanges({ cwd: changesCwd })
-      setPushState('idle')
+      if (action === 'pull' || action === 'pullAndPush') {
+        currentAction = 'pull'
+        const pullResult = await appApi.pullGitChanges({
+          cwd,
+          rememberStrategy: options.rememberStrategy,
+          strategy: options.pullStrategy
+        })
+
+        if (pullResult.failure) {
+          showRecoverableGitFailure(cwd, action, 'pull', pullResult.failure)
+          return
+        }
+      }
+
+      if (action === 'push' || action === 'pullAndPush') {
+        currentAction = 'push'
+        const pushResult = await appApi.pushGitChanges({ cwd })
+
+        if (pushResult.failure) {
+          showRecoverableGitFailure(cwd, action, 'push', pushResult.failure)
+          return
+        }
+      }
+
+      setSyncState('idle')
+      setSyncRecovery(null)
       setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
     } catch (error) {
-      setPushState('error')
-      setPushError(getErrorMessage(error, 'Unable to push changes.'))
+      const message = getErrorMessage(
+        error,
+        currentAction === 'pull' ? 'Unable to pull changes.' : 'Unable to push changes.'
+      )
+
+      setSyncState('error')
+      if (options.recovery) {
+        setSyncRecovery({ ...options.recovery, error: message })
+        setSyncError(null)
+        return
+      }
+
+      setSyncRecovery(null)
+      setSyncError(message)
     }
+  }
+
+  const handleSyncChanges = async (action: GitSyncAction): Promise<void> => {
+    if (syncDisabled || !changesCwd) return
+
+    await runSyncChanges(action, changesCwd)
+  }
+
+  const handleDismissGitSyncRecovery = (): void => {
+    setSyncRecovery(null)
+    setSyncState('idle')
+    setSyncError(null)
+  }
+
+  const handleGitSyncRecoveryAction = async (
+    actionId: AppGitRecoveryActionId,
+    options: GitSyncRecoveryActionOptions = {}
+  ): Promise<void> => {
+    const recovery = visibleSyncRecovery
+    if (!recovery || syncInProgress) return
+
+    if (actionId === 'pull-and-push') {
+      await runSyncChanges('pullAndPush', recovery.cwd, { recovery })
+      return
+    }
+
+    const pullStrategy = getGitRecoveryPullStrategy(actionId)
+    if (!pullStrategy) return
+
+    await runSyncChanges(
+      recovery.requestedAction === 'pullAndPush' ? 'pullAndPush' : 'pull',
+      recovery.cwd,
+      { pullStrategy, recovery, rememberStrategy: options.rememberStrategy }
+    )
+  }
+
+  const handleGitAiResolution = async (rememberStrategy = false): Promise<void> => {
+    const recovery = visibleSyncRecovery
+    if (!recovery || gitAiResolutionDisabled) return
+
+    setSyncRecovery(null)
+    setSyncState('idle')
+    setSyncError(null)
+    await handleSendMessage(getGitAiResolutionPrompt(recovery, rememberStrategy))
   }
 
   const handleMinimizeWindow = (): void => {
@@ -2674,8 +3013,8 @@ export const App: React.FC = () => {
                 )}
                 <MessageBox
                   active={editingMessage ? false : chatHasActiveTurn}
-                  accessMode={accessMode}
-                  accessModes={accessModes}
+                  approvalMode={approvalMode}
+                  approvalModes={approvalModes}
                   autoFocus={!selectedChat && newChatOpen}
                   disabled={messageBoxDisabled}
                   editSession={editingMessage}
@@ -2684,10 +3023,13 @@ export const App: React.FC = () => {
                   models={models}
                   pending={sendState === 'sending'}
                   reasoningEffort={reasoningEffort}
-                  onAccessModeChange={handleAccessModeChange}
+                  sandboxMode={sandboxMode}
+                  sandboxModes={sandboxModes}
+                  onApprovalModeChange={handleApprovalModeChange}
                   onCancelEdit={handleCancelEditMessage}
                   onModelChange={handleModelChange}
                   onReasoningEffortChange={handleReasoningEffortChange}
+                  onSandboxModeChange={handleSandboxModeChange}
                   onStop={handleStopChat}
                   onSend={handleSendMessage}
                 />
@@ -2870,24 +3212,149 @@ export const App: React.FC = () => {
                 />
               </div>
               {hasUnpushedChanges && (
-                <Button
-                  title={`${unpushedCount} unpushed commit${unpushedCount === 1 ? '' : 's'}`}
-                  disabled={pushDisabled}
-                  callback={() => void handlePushChanges()}
-                  icon={<Upload aria-hidden="true" />}
-                  label={<span>{pushState === 'sending' ? 'Pushing' : 'Push'}</span>}
-                  theme="secondary"
-                  fill
-                />
+                <div className="changes-sidebar__sync-row">
+                  <Button
+                    title={`${unpushedCount} unpushed commit${unpushedCount === 1 ? '' : 's'}`}
+                    disabled={syncDisabled}
+                    callback={() => void handleSyncChanges('pullAndPush')}
+                    dropdownActions={[
+                      {
+                        id: 'pull',
+                        label: 'Pull',
+                        disabled: syncDisabled,
+                        callback: () => void handleSyncChanges('pull'),
+                        icon: <Download aria-hidden="true" />
+                      },
+                      {
+                        id: 'push',
+                        label: 'Push',
+                        disabled: syncDisabled,
+                        callback: () => void handleSyncChanges('push'),
+                        icon: <Upload aria-hidden="true" />
+                      }
+                    ]}
+                    dropdownLabel="Sync actions"
+                    dropdownMenuAlign="end"
+                    dropdownPlacement="top"
+                    icon={<GitRefreshIcon active={syncInProgress} />}
+                    label={<span>Pull & Push</span>}
+                    theme="secondary"
+                    fill
+                  />
+                </div>
+              )}
+              {visibleSyncRecovery && (
+                <section
+                  className="chat-approval changes-sidebar__sync-recovery"
+                  aria-label="Git recovery options"
+                >
+                  <div className="changes-sidebar__sync-recovery-header">
+                    <span className="chat-approval__label">
+                      {visibleSyncRecovery.failure.title}
+                    </span>
+                    <Button
+                      aria-label="Dismiss Git recovery options"
+                      title="Dismiss"
+                      disabled={syncInProgress}
+                      callback={handleDismissGitSyncRecovery}
+                      icon={<X aria-hidden="true" />}
+                      theme="transparent"
+                      size="small"
+                    />
+                  </div>
+                  <span
+                    className="chat-approval__summary"
+                    title={visibleSyncRecovery.failure.message}
+                  >
+                    {visibleSyncRecovery.failure.message}
+                  </span>
+                  <span
+                    className="chat-approval__cwd changes-sidebar__sync-recovery-command"
+                    title={visibleSyncRecovery.failure.command}
+                  >
+                    {visibleSyncRecovery.failure.command}
+                  </span>
+                  {visibleSyncRecovery.error && (
+                    <span className="chat-approval__error" role="status">
+                      {visibleSyncRecovery.error}
+                    </span>
+                  )}
+                  <div
+                    className={`changes-sidebar__sync-recovery-actions${
+                      visibleSyncRecovery.failure.actions.length === 1
+                        ? ' changes-sidebar__sync-recovery-actions--single'
+                        : ''
+                    }`}
+                  >
+                    {visibleSyncRecovery.failure.actions.map((action, actionIndex) => {
+                      const rememberLabel = getGitRecoveryRememberLabel(action.id)
+
+                      return (
+                        <Button
+                          key={action.id}
+                          title={action.description}
+                          disabled={syncInProgress}
+                          callback={() => void handleGitSyncRecoveryAction(action.id)}
+                          dropdownActions={
+                            rememberLabel
+                              ? [
+                                  {
+                                    id: `${action.id}-remember`,
+                                    label: rememberLabel,
+                                    title: `${rememberLabel} for this repository`,
+                                    callback: () =>
+                                      void handleGitSyncRecoveryAction(action.id, {
+                                        rememberStrategy: true
+                                      })
+                                  }
+                                ]
+                              : undefined
+                          }
+                          dropdownLabel={`${action.label} options`}
+                          dropdownMenuAlign="end"
+                          dropdownPlacement="top"
+                          icon={getGitRecoveryActionIcon(action.id, syncInProgress)}
+                          label={<span>{action.label}</span>}
+                          theme={actionIndex === 0 ? 'primary' : 'secondary'}
+                          size="small"
+                          fill
+                        />
+                      )
+                    })}
+                  </div>
+                  <div className="changes-sidebar__sync-recovery-ai">
+                    <Button
+                      title="Ask Codex to resolve this Git sync issue once"
+                      disabled={gitAiResolutionDisabled}
+                      callback={() => void handleGitAiResolution()}
+                      dropdownActions={[
+                        {
+                          id: 'ai-remember',
+                          label: 'Make it remember',
+                          title: 'Ask Codex to configure a repo-local pull strategy, then sync',
+                          callback: () => void handleGitAiResolution(true)
+                        }
+                      ]}
+                      dropdownLabel="AI resolution options"
+                      dropdownMenuAlign="end"
+                      dropdownPlacement="top"
+                      icon={<Sparkles aria-hidden="true" />}
+                      label={<span>AI Resolution</span>}
+                      theme="secondary"
+                      size="small"
+                      fill
+                    />
+                  </div>
+                </section>
               )}
               {commitState === 'error' && (
                 <p className="changes-sidebar__commit-error" role="status">
                   {commitError ?? 'Unable to commit these files.'}
                 </p>
               )}
-              {pushState === 'error' && (
+              {syncState === 'error' && !syncRecovery && (
                 <p className="changes-sidebar__commit-error" role="status">
-                  {pushError ?? 'Unable to push changes.'}
+                  {syncError ?? 'Unable to sync changes.'}
                 </p>
               )}
             </footer>

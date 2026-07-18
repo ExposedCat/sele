@@ -6,7 +6,8 @@ import type {
   ProviderLoginResult,
   ProviderApprovalDecision,
   ProviderUpdateAvailability,
-  ProviderAccessModeOption,
+  ProviderApprovalModeOption,
+  ProviderSandboxModeOption,
   ProviderModel,
   ProviderTurnOptions
 } from '../../shared/provider'
@@ -16,7 +17,8 @@ export type ProviderAdapter = {
   login: () => Promise<ProviderLoginResult>
   getUpdateAvailability: () => Promise<ProviderUpdateAvailability | null>
   updateProvider: () => Promise<ProviderUpdateAvailability | null>
-  getAccessModes: () => Promise<ProviderAccessModeOption[]>
+  getApprovalModes: () => Promise<ProviderApprovalModeOption[]>
+  getSandboxModes: () => Promise<ProviderSandboxModeOption[]>
   getModels: () => Promise<ProviderModel[]>
   getChats: (options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (chatId: string) => Promise<ProviderChatDetail>

@@ -14,6 +14,7 @@ const appApi: AppApi = {
   getDefaultCwd: () => ipcRenderer.invoke(appIpcChannels.getDefaultCwd),
   getGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.getGitChanges, options),
   commitGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.commitGitChanges, options),
+  pullGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pullGitChanges, options),
   pushGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pushGitChanges, options),
   selectFolder: (options) => ipcRenderer.invoke(appIpcChannels.selectFolder, options),
   onColorSchemeUpdated: (listener): (() => void) => {
@@ -42,8 +43,10 @@ const providerApi: ProviderApi = {
     ipcRenderer.invoke(providerIpcChannels.getUpdateAvailability, providerId),
   updateProvider: (providerId) =>
     ipcRenderer.invoke(providerIpcChannels.updateProvider, providerId),
-  getAccessModes: (providerId) =>
-    ipcRenderer.invoke(providerIpcChannels.getAccessModes, providerId),
+  getApprovalModes: (providerId) =>
+    ipcRenderer.invoke(providerIpcChannels.getApprovalModes, providerId),
+  getSandboxModes: (providerId) =>
+    ipcRenderer.invoke(providerIpcChannels.getSandboxModes, providerId),
   getModels: (providerId) => ipcRenderer.invoke(providerIpcChannels.getModels, providerId),
   getChats: (providerId, options) =>
     ipcRenderer.invoke(providerIpcChannels.getChats, providerId, options),
