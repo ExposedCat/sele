@@ -1108,7 +1108,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const initialSteeringMessage = this.getSteeringMessage(chatId, initialMessageId)
     if (!initialSteeringMessage || initialSteeringMessage.status !== 'waiting') return
 
-    await this.waitForTurnRenderSettled(chatId, initialSteeringMessage.turnId)
+    await this.waitForTurnReadyForSteering(chatId, initialSteeringMessage.turnId)
 
     const currentSteeringMessage = this.getSteeringMessage(chatId, initialMessageId)
     if (!currentSteeringMessage || currentSteeringMessage.status !== 'waiting') return
@@ -1651,6 +1651,23 @@ export class CodexProviderAdapter implements ProviderAdapter {
           this.chatUpdatedTimers.has(threadId) ? chatUpdateDebounceMs : 0
         )
       )
+    }
+  }
+
+  private isTurnWaitingOnUserInput = (threadId: string, turnId: string): boolean => {
+    if (this.getActiveTurnId(threadId) !== turnId) return false
+
+    const status = this.threads.get(threadId)?.status
+    return status?.type === 'active' && status.activeFlags.includes('waitingOnUserInput')
+  }
+
+  private waitForTurnReadyForSteering = async (threadId: string, turnId: string): Promise<void> => {
+    for (;;) {
+      await this.waitForTurnRenderSettled(threadId, turnId)
+      if (this.getActiveTurnId(threadId) !== turnId) return
+      if (this.isTurnWaitingOnUserInput(threadId, turnId)) return
+
+      await sleep(turnRenderPollMs)
     }
   }
 
