@@ -60,6 +60,14 @@
   opacity: 0.82;
 }
 
+.chat-detail__pending-message-label {
+  max-width: 82%;
+  color: var(--quiet);
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .chat-detail__message-footer {
   display: flex;
   width: 100%;
@@ -466,7 +474,8 @@
 }
 
 @media (max-width: 600px) {
-  .chat-detail__message--user {
+  .chat-detail__message--user,
+  .chat-detail__pending-message-label {
     max-width: 90%;
   }
 }

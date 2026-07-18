@@ -701,29 +701,7 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
 }
 
 const getPendingMessageLabel = (message: ProviderPendingMessage): string =>
-  message.kind === 'steering' ? 'Steering' : 'Queue'
-
-const PendingMessageDate: React.FC<{
-  label: string
-  timestamp: ReturnType<typeof formatMessageTimestamp>
-}> = ({ label, timestamp }) => (
-  <span className="chat-detail__message-date chat-detail__message-date--pending">
-    <span>{label}</span>
-    {timestamp && (
-      <>
-        <span className="chat-detail__message-date-marker" aria-hidden="true">
-          ·
-        </span>
-        <time dateTime={timestamp.dateTime} title={timestamp.label}>
-          {timestamp.label}
-        </time>
-      </>
-    )}
-    <span className="chat-detail__message-date-marker" aria-hidden="true">
-      ·
-    </span>
-  </span>
-)
+  message.kind === 'steering' ? 'Steering with' : 'Queue'
 
 export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   canEditOwnMessages = false,
@@ -787,9 +765,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
         />
       </span>
     )
-    const messageDate = pending ? (
-      <PendingMessageDate label={pendingLabel ?? ''} timestamp={timestamp} />
-    ) : (
+    const messageDate = (
       <MessageDate markerSide={role === 'user' ? 'right' : 'left'} timestamp={timestamp} />
     )
     const messageBlockClassName = [
@@ -803,6 +779,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
 
     return (
       <div className={messageBlockClassName}>
+        {pendingLabel && <span className="chat-detail__pending-message-label">{pendingLabel}</span>}
         <MarkdownMessage
           className={`chat-detail__message chat-detail__message--${role}`}
           content={item.content}

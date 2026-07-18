@@ -49,6 +49,10 @@ export type CodexTurn = {
   items: CodexThreadItem[]
 }
 
+type GetChatItemsOptions = {
+  hiddenPendingMessageIds?: ReadonlySet<string>
+}
+
 type WorkingItemRenderResult =
   | { type: 'message'; content: string }
   | {
@@ -1193,9 +1197,26 @@ const getWorkingStepStatus = (
 const toMilliseconds = (seconds: number | null | undefined): number | null =>
   typeof seconds === 'number' && Number.isFinite(seconds) ? seconds * 1_000 : null
 
+const hasUserMessageContent = (item: CodexThreadItem): boolean =>
+  item.type === 'userMessage' &&
+  Boolean(item.content?.map(getUserInputText).filter(Boolean).join('\n').trim())
+
+const createAssistantMessage = (
+  turn: CodexTurn,
+  item: CodexThreadItem,
+  completedAt: number | null | undefined
+): ProviderMessage => ({
+  type: 'message',
+  id: `${turn.id}:${item.id}`,
+  role: 'assistant',
+  content: item.text?.trim() ?? '',
+  createdAt: toMilliseconds(completedAt)
+})
+
 export const getChatItems = (
   turns: CodexTurn[],
-  fallbackStartedAt: number | null = null
+  fallbackStartedAt: number | null = null,
+  options: GetChatItemsOptions = {}
 ): ProviderChatItem[] => {
   const chatItems: ProviderChatItem[] = []
 
@@ -1206,30 +1227,71 @@ export const getChatItems = (
     const finalMessageIndex = getFinalMessageIndex(turn.items, turn.status ?? null)
     let finalMessage: ProviderMessage | null = null
     const workingItems: ProviderWorkingItem[] = []
+    let hasSeenInitialUserMessage = false
+    let workingStepCount = 0
+    const pushWorkingStep = (status: ProviderWorkingStep['status']): void => {
+      if (
+        workingItems.length === 0 &&
+        status !== 'stopped' &&
+        status !== 'working' &&
+        status !== 'queued'
+      ) {
+        return
+      }
+
+      chatItems.push({
+        type: 'working',
+        id: `${turn.id}:working${workingStepCount === 0 ? '' : `:${workingStepCount}`}`,
+        status,
+        items: [...workingItems]
+      })
+      workingItems.length = 0
+      workingStepCount += 1
+    }
 
     for (const [itemIndex, item] of turn.items.entries()) {
       if (item.type === 'userMessage' && item.content) {
         const content = item.content.map(getUserInputText).filter(Boolean).join('\n').trim()
         if (content) {
-          chatItems.push({
-            type: 'message',
-            id: `${turn.id}:${item.id}`,
-            role: 'user',
-            content,
-            createdAt: toMilliseconds(startedAt)
-          })
+          const itemId = `${turn.id}:${item.id}`
+
+          if (hasSeenInitialUserMessage) {
+            pushWorkingStep('worked')
+
+            if (!options.hiddenPendingMessageIds?.has(itemId)) {
+              chatItems.push({
+                type: 'pendingMessage',
+                id: itemId,
+                kind: 'steering',
+                content,
+                createdAt: toMilliseconds(startedAt)
+              })
+            }
+          } else {
+            chatItems.push({
+              type: 'message',
+              id: itemId,
+              role: 'user',
+              content,
+              createdAt: toMilliseconds(startedAt)
+            })
+            hasSeenInitialUserMessage = true
+          }
         }
         continue
       }
 
-      if (itemIndex === finalMessageIndex && item.text?.trim()) {
-        finalMessage = {
-          type: 'message',
-          id: `${turn.id}:${item.id}`,
-          role: 'assistant',
-          content: item.text.trim(),
-          createdAt: toMilliseconds(completedAt)
+      if (item.type === 'agentMessage' && item.phase === 'final_answer' && item.text?.trim()) {
+        const hasLaterSteeringMessage = turn.items.slice(itemIndex + 1).some(hasUserMessageContent)
+        if (hasLaterSteeringMessage) {
+          pushWorkingStep('worked')
+          chatItems.push(createAssistantMessage(turn, item, completedAt))
+          continue
         }
+      }
+
+      if (itemIndex === finalMessageIndex && item.text?.trim()) {
+        finalMessage = createAssistantMessage(turn, item, completedAt)
         continue
       }
 
@@ -1237,20 +1299,7 @@ export const getChatItems = (
     }
 
     const workingStepStatus = getWorkingStepStatus(workingStatus, finalMessage)
-
-    if (
-      workingItems.length > 0 ||
-      workingStepStatus === 'stopped' ||
-      workingStepStatus === 'working' ||
-      workingStepStatus === 'queued'
-    ) {
-      chatItems.push({
-        type: 'working',
-        id: `${turn.id}:working`,
-        status: workingStepStatus,
-        items: workingItems
-      })
-    }
+    pushWorkingStep(workingStepStatus)
     if (finalMessage) chatItems.push(finalMessage)
   }
 
