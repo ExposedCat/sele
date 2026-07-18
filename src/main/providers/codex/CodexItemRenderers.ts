@@ -1165,6 +1165,8 @@ const getFinalMessageIndex = (items: CodexThreadItem[], turnStatus: string | nul
 }
 
 const getWorkingStatus = (turn: CodexTurn): ProviderWorkingStep['status'] => {
+  if (turn.status === 'queued') return 'queued'
+
   if (
     turn.status === 'interrupted' ||
     turn.status === 'failed' ||
@@ -1182,7 +1184,9 @@ const getWorkingStepStatus = (
   workingStatus: ProviderWorkingStep['status'],
   finalMessage: ProviderMessage | null
 ): ProviderWorkingStep['status'] => {
-  if (!finalMessage || workingStatus === 'stopped') return workingStatus
+  if (!finalMessage || workingStatus === 'stopped' || workingStatus === 'queued') {
+    return workingStatus
+  }
   return 'worked'
 }
 
@@ -1237,7 +1241,8 @@ export const getChatItems = (
     if (
       workingItems.length > 0 ||
       workingStepStatus === 'stopped' ||
-      workingStepStatus === 'working'
+      workingStepStatus === 'working' ||
+      workingStepStatus === 'queued'
     ) {
       chatItems.push({
         type: 'working',

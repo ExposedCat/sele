@@ -133,6 +133,14 @@ export const providerApi: ProviderApi = {
     adapters[providerId]
       .continueChat(chatId, message, options)
       .then((detail) => applyMetadataToDetail(detail)),
+  sendActiveChatMessage: (providerId, chatId, message, mode, options) =>
+    adapters[providerId]
+      .sendActiveChatMessage(chatId, message, mode, options)
+      .then((detail) => applyMetadataToDetail(detail)),
+  deletePendingMessage: (providerId, chatId, messageId) =>
+    adapters[providerId]
+      .deletePendingMessage(chatId, messageId)
+      .then((detail) => applyMetadataToDetail(detail)),
   editMessage: (providerId, chatId, messageId, message, options) =>
     adapters[providerId]
       .editMessage(chatId, messageId, message, options)

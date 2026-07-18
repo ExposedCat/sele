@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import type {
   ProviderApprovalDecision,
+  ProviderActiveSendMode,
   ProviderChatListOptions,
   ProviderId,
   ProviderTurnOptions
@@ -9,6 +10,7 @@ import type {
 import {
   isProviderApprovalPolicy,
   isProviderApprovalsReviewer,
+  isProviderActiveSendMode,
   isProviderId,
   isProviderModelId,
   isProviderReasoningEffort,
@@ -45,6 +47,11 @@ const requireBoolean = (value: unknown): boolean => {
 
 const requireApprovalDecision = (value: unknown): ProviderApprovalDecision => {
   if (value !== 'allow' && value !== 'deny') throw new Error('Invalid approval decision')
+  return value
+}
+
+const requireActiveSendMode = (value: unknown): ProviderActiveSendMode => {
+  if (!isProviderActiveSendMode(value)) throw new Error('Invalid active send mode')
   return value
 }
 
@@ -178,6 +185,28 @@ export const registerProviderIpc = (): void => {
         requireChatId(chatId),
         requireMessage(message),
         requireTurnOptions(options)
+      )
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.sendActiveChatMessage,
+    (_, providerId: unknown, chatId: unknown, message: unknown, mode: unknown, options: unknown) =>
+      providerApi.sendActiveChatMessage(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireMessage(message),
+        requireActiveSendMode(mode),
+        requireTurnOptions(options)
+      )
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.deletePendingMessage,
+    (_, providerId: unknown, chatId: unknown, messageId: unknown) =>
+      providerApi.deletePendingMessage(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireMessageId(messageId)
       )
   )
 

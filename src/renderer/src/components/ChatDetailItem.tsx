@@ -36,6 +36,7 @@ import Markdown from 'markdown-to-jsx'
 import type {
   ProviderChatItem,
   ProviderMessage,
+  ProviderPendingMessage,
   ProviderToolActivity,
   ProviderWorkingItem,
   ProviderWorkingStep,
@@ -47,6 +48,7 @@ import './ChatDetailItem.css'
 type ChatDetailItemProps = {
   canEditOwnMessages?: boolean
   item: ProviderChatItem
+  onDeletePendingMessage?: (message: ProviderPendingMessage) => void
   onEditMessage?: (message: ProviderMessage) => void
 }
 
@@ -625,18 +627,23 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
     [item.items, item.status]
   )
   const activeToolIds = useMemo(() => getActiveToolIds(item), [item])
+  const active = item.status === 'working'
   const showPlaceholder = useSilencePlaceholder(
     signature,
-    item.status === 'working' && (!lastWorkingItem || lastWorkingItem.type === 'message'),
+    active && (!lastWorkingItem || lastWorkingItem.type === 'message'),
     !lastWorkingItem
   )
   const label =
-    item.status === 'stopped' ? 'Stopped' : item.status === 'worked' ? 'Worked' : 'Working'
+    item.status === 'queued'
+      ? 'Queued'
+      : item.status === 'stopped'
+        ? 'Stopped'
+        : item.status === 'worked'
+          ? 'Worked'
+          : 'Working'
   const heading = (
     <span className="chat-detail__working-label">
-      {item.status === 'working' && (
-        <LoaderCircle className="chat-detail__working-spinner" aria-hidden="true" />
-      )}
+      {active && <LoaderCircle className="chat-detail__working-spinner" aria-hidden="true" />}
       <span>{label}</span>
     </span>
   )
@@ -658,7 +665,7 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   return (
     <details
       className={`chat-detail__step chat-detail__working chat-detail__working--${item.status}`}
-      open={item.status === 'working'}
+      open={active}
     >
       <summary>
         {heading}
@@ -693,9 +700,36 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
   )
 }
 
+const PendingMessageItem: React.FC<{
+  item: ProviderPendingMessage
+  onDeletePendingMessage?: (message: ProviderPendingMessage) => void
+}> = ({ item, onDeletePendingMessage }) => {
+  const label = item.kind === 'steering' ? 'Steering' : 'Queue'
+
+  return (
+    <div className={`chat-detail__pending-message chat-detail__pending-message--${item.kind}`}>
+      <div className="chat-detail__pending-message-header">
+        <span className="chat-detail__pending-message-label">{label}</span>
+        {onDeletePendingMessage && (
+          <Button
+            theme="secondary"
+            size="small"
+            aria-label={`Delete ${label.toLocaleLowerCase()} message`}
+            title={`Delete ${label.toLocaleLowerCase()} message`}
+            callback={() => onDeletePendingMessage(item)}
+            icon={<Trash2 aria-hidden="true" />}
+          />
+        )}
+      </div>
+      <MarkdownMessage className="chat-detail__pending-message-content" content={item.content} />
+    </div>
+  )
+}
+
 export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   canEditOwnMessages = false,
   item,
+  onDeletePendingMessage,
   onEditMessage
 }) => {
   const [copied, setCopied] = useState(false)
@@ -755,6 +789,10 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
         </div>
       </div>
     )
+  }
+
+  if (item.type === 'pendingMessage') {
+    return <PendingMessageItem item={item} onDeletePendingMessage={onDeletePendingMessage} />
   }
 
   return <WorkingStep item={item} />

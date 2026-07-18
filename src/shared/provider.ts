@@ -17,6 +17,7 @@ export type ProviderApprovalPolicy = 'on-request' | 'on-failure' | 'never'
 export type ProviderApprovalsReviewer = 'user' | 'auto_review'
 export type ProviderApprovalMode = 'ask-user' | 'auto-review' | 'never'
 export type ProviderSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type ProviderActiveSendMode = 'steer' | 'queue' | 'interrupt'
 
 export type ProviderApprovalModeOption = {
   id: ProviderApprovalMode
@@ -258,6 +259,7 @@ export type ProviderChatPage = {
 
 export type ProviderCapabilities = {
   editMessages: boolean
+  activeMessages: boolean
 }
 
 export type ProviderMessage = {
@@ -324,11 +326,21 @@ export type ProviderWorkingItem =
 export type ProviderWorkingStep = {
   type: 'working'
   id: string
-  status: 'working' | 'worked' | 'stopped'
+  status: 'working' | 'worked' | 'stopped' | 'queued'
   items: ProviderWorkingItem[]
 }
 
-export type ProviderChatItem = ProviderMessage | ProviderWorkingStep
+export type ProviderPendingMessageKind = 'steering' | 'queued'
+
+export type ProviderPendingMessage = {
+  type: 'pendingMessage'
+  id: string
+  kind: ProviderPendingMessageKind
+  content: string
+  createdAt?: number | null
+}
+
+export type ProviderChatItem = ProviderMessage | ProviderWorkingStep | ProviderPendingMessage
 
 export type ProviderChatDetail = {
   id: string
@@ -380,6 +392,18 @@ export type ProviderApi = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  sendActiveChatMessage: (
+    providerId: ProviderId,
+    chatId: string,
+    message: string,
+    mode: ProviderActiveSendMode,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
+  deletePendingMessage: (
+    providerId: ProviderId,
+    chatId: string,
+    messageId: string
+  ) => Promise<ProviderChatDetail>
   editMessage: (
     providerId: ProviderId,
     chatId: string,
@@ -414,6 +438,8 @@ export const providerIpcChannels = {
   getChat: 'provider:get-chat',
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
+  sendActiveChatMessage: 'provider:send-active-chat-message',
+  deletePendingMessage: 'provider:delete-pending-message',
   editMessage: 'provider:edit-message',
   resolveApproval: 'provider:resolve-approval',
   stopChat: 'provider:stop-chat',
@@ -437,6 +463,9 @@ export const isProviderApprovalMode = (value: unknown): value is ProviderApprova
 
 export const isProviderSandboxMode = (value: unknown): value is ProviderSandboxMode =>
   value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access'
+
+export const isProviderActiveSendMode = (value: unknown): value is ProviderActiveSendMode =>
+  value === 'steer' || value === 'queue' || value === 'interrupt'
 
 export const isProviderModelId = (value: unknown): value is ProviderModelId =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= 128

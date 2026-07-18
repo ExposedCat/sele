@@ -45,6 +45,8 @@ import type {
   ProviderChatItem,
   ProviderChatMetadata,
   ProviderMessage,
+  ProviderPendingMessage,
+  ProviderActiveSendMode,
   ProviderApprovalMode,
   ProviderApprovalModeOption,
   ProviderApprovalPolicy,
@@ -817,6 +819,9 @@ const getOptimisticItems = (items: ProviderChatItem[], message: string): Provide
 
 const hasActiveWorkingStep = (detail: ProviderChatDetail | null): boolean =>
   detail?.items.some((item) => item.type === 'working' && item.status === 'working') ?? false
+
+const hasPendingSteeringMessage = (detail: ProviderChatDetail | null): boolean =>
+  detail?.items.some((item) => item.type === 'pendingMessage' && item.kind === 'steering') ?? false
 
 const getVisibleChatItems = (
   items: ProviderChatItem[],
@@ -2148,7 +2153,6 @@ export const App: React.FC = () => {
     if (
       message.role !== 'user' ||
       !chatDetail?.capabilities.editMessages ||
-      chatIsBusy ||
       sendInFlightRef.current
     ) {
       return
@@ -2166,7 +2170,10 @@ export const App: React.FC = () => {
     setEditingMessage(null)
   }
 
-  const handleSendMessage = async (message: string): Promise<void> => {
+  const handleSendMessage = async (
+    message: string,
+    activeMode?: ProviderActiveSendMode
+  ): Promise<void> => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
@@ -2228,6 +2235,26 @@ export const App: React.FC = () => {
     const providerId = selectedChat.providerId
     const chatId = selectedChat.id
     setSendState('sending')
+
+    if (chatHasActiveTurn && chatDetail?.capabilities.activeMessages) {
+      try {
+        const detail = await providerApi.sendActiveChatMessage(
+          providerId,
+          chatId,
+          message,
+          activeMode ?? 'steer',
+          turnOptions
+        )
+        applyChatDetail(providerId, detail)
+        setSendState('idle')
+      } catch {
+        setSendState('error')
+      } finally {
+        sendInFlightRef.current = false
+      }
+
+      return
+    }
 
     if (chatDetail?.id === chatId) {
       applyChatDetail(providerId, {
@@ -2296,6 +2323,22 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleDeletePendingMessage = async (message: ProviderPendingMessage): Promise<void> => {
+    if (!selectedChat) return
+
+    try {
+      const detail = await providerApi.deletePendingMessage(
+        selectedChat.providerId,
+        selectedChat.id,
+        message.id
+      )
+      applyChatDetail(selectedChat.providerId, detail)
+      if (sendState === 'error') setSendState('idle')
+    } catch {
+      setSendState('error')
+    }
+  }
+
   const handleChatContentScroll = (): void => {
     const contentElement = contentRef.current
     if (!contentElement) return
@@ -2328,14 +2371,16 @@ export const App: React.FC = () => {
   const chatIsWaiting =
     chatDetail?.status === 'waitingOnApproval' || chatDetail?.status === 'waitingOnUserInput'
   const chatHasActiveTurn = chatDetail?.status === 'active' || chatIsWaiting
+  const chatHasPendingSteeringMessage = hasPendingSteeringMessage(chatDetail)
   const chatIsBusy =
     chatHasActiveTurn || (sendState === 'sending' && hasActiveWorkingStep(chatDetail))
-  const messageBoxDisabled = selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false
+  const messageBoxDisabled = selectedChat
+    ? chatLoadState !== 'ready' || (chatHasActiveTurn && !chatDetail?.capabilities.activeMessages)
+    : false
   const canEditOwnMessages = Boolean(
     selectedChat &&
     chatDetail?.capabilities.editMessages &&
     chatLoadState === 'ready' &&
-    !chatIsBusy &&
     sendState !== 'sending' &&
     !editingMessage
   )
@@ -2865,6 +2910,7 @@ export const App: React.FC = () => {
                       canEditOwnMessages={canEditOwnMessages}
                       item={item}
                       key={item.id}
+                      onDeletePendingMessage={handleDeletePendingMessage}
                       onEditMessage={handleEditMessage}
                     />
                   ))}
@@ -3013,6 +3059,7 @@ export const App: React.FC = () => {
                 )}
                 <MessageBox
                   active={editingMessage ? false : chatHasActiveTurn}
+                  activePrimaryMode={chatHasPendingSteeringMessage ? 'queue' : 'steer'}
                   approvalMode={approvalMode}
                   approvalModes={approvalModes}
                   autoFocus={!selectedChat && newChatOpen}

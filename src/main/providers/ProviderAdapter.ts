@@ -9,6 +9,7 @@ import type {
   ProviderApprovalModeOption,
   ProviderSandboxModeOption,
   ProviderModel,
+  ProviderActiveSendMode,
   ProviderTurnOptions
 } from '../../shared/provider'
 
@@ -28,6 +29,13 @@ export type ProviderAdapter = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  sendActiveChatMessage: (
+    chatId: string,
+    message: string,
+    mode: ProviderActiveSendMode,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
+  deletePendingMessage: (chatId: string, messageId: string) => Promise<ProviderChatDetail>
   editMessage: (
     chatId: string,
     messageId: string,
