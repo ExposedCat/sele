@@ -268,6 +268,7 @@ export type ProviderMessage = {
   role: 'user' | 'assistant'
   content: string
   createdAt?: number | null
+  label?: string | null
 }
 
 export type ProviderWorkingMessage = {
@@ -404,6 +405,11 @@ export type ProviderApi = {
     chatId: string,
     messageId: string
   ) => Promise<ProviderChatDetail>
+  interruptPendingMessage: (
+    providerId: ProviderId,
+    chatId: string,
+    messageId: string
+  ) => Promise<ProviderChatDetail>
   editMessage: (
     providerId: ProviderId,
     chatId: string,
@@ -440,6 +446,7 @@ export const providerIpcChannels = {
   continueChat: 'provider:continue-chat',
   sendActiveChatMessage: 'provider:send-active-chat-message',
   deletePendingMessage: 'provider:delete-pending-message',
+  interruptPendingMessage: 'provider:interrupt-pending-message',
   editMessage: 'provider:edit-message',
   resolveApproval: 'provider:resolve-approval',
   stopChat: 'provider:stop-chat',

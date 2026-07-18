@@ -211,6 +211,16 @@ export const registerProviderIpc = (): void => {
   )
 
   ipcMain.handle(
+    providerIpcChannels.interruptPendingMessage,
+    (_, providerId: unknown, chatId: unknown, messageId: unknown) =>
+      providerApi.interruptPendingMessage(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireMessageId(messageId)
+      )
+  )
+
+  ipcMain.handle(
     providerIpcChannels.editMessage,
     (
       _,

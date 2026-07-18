@@ -36,6 +36,7 @@ export type ProviderAdapter = {
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
   deletePendingMessage: (chatId: string, messageId: string) => Promise<ProviderChatDetail>
+  interruptPendingMessage: (chatId: string, messageId: string) => Promise<ProviderChatDetail>
   editMessage: (
     chatId: string,
     messageId: string,

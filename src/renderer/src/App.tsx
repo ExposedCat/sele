@@ -2339,6 +2339,26 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleInterruptPendingMessage = async (message: ProviderPendingMessage): Promise<void> => {
+    if (!selectedChat || sendInFlightRef.current) return
+    sendInFlightRef.current = true
+    setSendState('sending')
+
+    try {
+      const detail = await providerApi.interruptPendingMessage(
+        selectedChat.providerId,
+        selectedChat.id,
+        message.id
+      )
+      applyChatDetail(selectedChat.providerId, detail)
+      setSendState('idle')
+    } catch {
+      setSendState('error')
+    } finally {
+      sendInFlightRef.current = false
+    }
+  }
+
   const handleChatContentScroll = (): void => {
     const contentElement = contentRef.current
     if (!contentElement) return
@@ -2911,6 +2931,9 @@ export const App: React.FC = () => {
                       item={item}
                       key={item.id}
                       onDeletePendingMessage={handleDeletePendingMessage}
+                      onInterruptPendingMessage={
+                        chatHasActiveTurn ? handleInterruptPendingMessage : undefined
+                      }
                       onEditMessage={handleEditMessage}
                     />
                   ))}

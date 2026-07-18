@@ -28,6 +28,7 @@ import {
   Package,
   Pencil,
   Search,
+  Square,
   Terminal,
   Trash2,
   Wrench
@@ -49,6 +50,7 @@ type ChatDetailItemProps = {
   canEditOwnMessages?: boolean
   item: ProviderChatItem
   onDeletePendingMessage?: (message: ProviderPendingMessage) => void
+  onInterruptPendingMessage?: (message: ProviderPendingMessage) => void
   onEditMessage?: (message: ProviderMessage) => void
 }
 
@@ -703,10 +705,14 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
 const getPendingMessageLabel = (message: ProviderPendingMessage): string =>
   message.kind === 'steering' ? 'Steering with' : 'Queue'
 
+const getPendingMessageActionLabel = (message: ProviderPendingMessage): string =>
+  message.kind === 'steering' ? 'steering' : 'queued'
+
 export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   canEditOwnMessages = false,
   item,
   onDeletePendingMessage,
+  onInterruptPendingMessage,
   onEditMessage
 }) => {
   const [copied, setCopied] = useState(false)
@@ -721,10 +727,11 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   if (item.type === 'message' || item.type === 'pendingMessage') {
     const pending = item.type === 'pendingMessage'
     const role = pending ? 'user' : item.role
-    const pendingLabel = pending ? getPendingMessageLabel(item) : null
-    const pendingActionLabel = pendingLabel?.toLocaleLowerCase() ?? 'pending'
+    const messageLabel = pending ? getPendingMessageLabel(item) : (item.label ?? null)
+    const pendingActionLabel = pending ? getPendingMessageActionLabel(item) : 'pending'
     const canEdit = !pending && role === 'user' && canEditOwnMessages && Boolean(onEditMessage)
     const canDelete = pending && Boolean(onDeletePendingMessage)
+    const canInterrupt = pending && Boolean(onInterruptPendingMessage)
     const timestamp = formatMessageTimestamp(item.createdAt)
     const handleCopyMessage = async (): Promise<void> => {
       await copyTextToClipboard(item.content)
@@ -732,7 +739,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
     }
     const messageActions = (
       <span className="chat-detail__message-actions">
-        {canEdit ? (
+        {canEdit && (
           <Button
             theme="secondary"
             size="small"
@@ -743,7 +750,18 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
             }}
             icon={<Pencil aria-hidden="true" />}
           />
-        ) : canDelete && pending ? (
+        )}
+        {canInterrupt && pending && (
+          <Button
+            theme="secondary"
+            size="small"
+            aria-label={`Interrupt with ${pendingActionLabel} message`}
+            title={`Interrupt with ${pendingActionLabel} message`}
+            callback={() => onInterruptPendingMessage?.(item)}
+            icon={<Square aria-hidden="true" />}
+          />
+        )}
+        {canDelete && pending && (
           <Button
             theme="secondary"
             size="small"
@@ -752,7 +770,8 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
             callback={() => onDeletePendingMessage?.(item)}
             icon={<Trash2 aria-hidden="true" />}
           />
-        ) : role === 'user' ? (
+        )}
+        {!canEdit && !canInterrupt && !canDelete && role === 'user' ? (
           <span className="chat-detail__message-action-placeholder" aria-hidden="true" />
         ) : null}
         <Button
@@ -779,7 +798,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
 
     return (
       <div className={messageBlockClassName}>
-        {pendingLabel && <span className="chat-detail__pending-message-label">{pendingLabel}</span>}
+        {messageLabel && <span className="chat-detail__pending-message-label">{messageLabel}</span>}
         <MarkdownMessage
           className={`chat-detail__message chat-detail__message--${role}`}
           content={item.content}

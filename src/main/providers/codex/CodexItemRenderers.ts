@@ -51,6 +51,7 @@ export type CodexTurn = {
 
 type GetChatItemsOptions = {
   hiddenPendingMessageIds?: ReadonlySet<string>
+  pendingSteeringMessageIds?: ReadonlySet<string>
 }
 
 type WorkingItemRenderResult =
@@ -1258,12 +1259,23 @@ export const getChatItems = (
           if (hasSeenInitialUserMessage) {
             pushWorkingStep('worked')
 
-            if (!options.hiddenPendingMessageIds?.has(itemId)) {
+            if (options.pendingSteeringMessageIds?.has(itemId)) {
+              if (!options.hiddenPendingMessageIds?.has(itemId)) {
+                chatItems.push({
+                  type: 'pendingMessage',
+                  id: itemId,
+                  kind: 'steering',
+                  content,
+                  createdAt: toMilliseconds(startedAt)
+                })
+              }
+            } else {
               chatItems.push({
-                type: 'pendingMessage',
+                type: 'message',
                 id: itemId,
-                kind: 'steering',
+                role: 'user',
                 content,
+                label: 'Steering with',
                 createdAt: toMilliseconds(startedAt)
               })
             }

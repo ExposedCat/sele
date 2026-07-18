@@ -221,6 +221,8 @@ type SteeringMessage = {
   turnId: string
   text: string
   createdAt: number
+  status: 'pending' | 'sent'
+  options?: ProviderTurnOptions
 }
 
 const getAccountLabel = (account: CodexAccount): string => {
@@ -607,12 +609,13 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private threads = new Map<string, CodexThread>()
   private pendingTurnIds = new Map<string, string>()
   private activeTurnIds = new Map<string, string>()
-  private steeringMessagesByThread = new Map<string, SteeringMessage>()
+  private steeringMessagesByThread = new Map<string, SteeringMessage[]>()
   private hiddenPendingMessageIdsByThread = new Map<string, Set<string>>()
   private queuedTurnsByThread = new Map<string, QueuedTurn[]>()
   private queuedTurnStartThreads = new Set<string>()
   private chatUpdatedTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private rolledBackTurnIds = new Map<string, Set<string>>()
+  private manuallyStoppedTurnIds = new Map<string, Set<string>>()
   private pendingApprovalsByThread = new Map<string, CodexPendingApproval[]>()
 
   constructor() {
@@ -867,6 +870,27 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return detail
   }
 
+  interruptPendingMessage = async (
+    chatId: string,
+    messageId: string
+  ): Promise<ProviderChatDetail> => {
+    if (!this.threads.has(chatId)) await this.getChat(chatId)
+
+    const steeringMessage = this.takeSteeringMessage(chatId, messageId)
+    if (steeringMessage) {
+      this.emitChatUpdated(chatId)
+      return this.interruptAndContinueChat(chatId, steeringMessage.text, steeringMessage.options)
+    }
+
+    const queuedTurn = this.takeQueuedTurn(chatId, messageId)
+    if (queuedTurn) {
+      this.emitChatUpdated(chatId)
+      return this.interruptAndContinueChat(chatId, queuedTurn.text, queuedTurn.options)
+    }
+
+    throw new Error('Pending message cannot be interrupted')
+  }
+
   editMessage = async (
     chatId: string,
     messageId: string,
@@ -960,7 +984,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
   }
 
   stopChat = async (chatId: string): Promise<ProviderChatDetail> => {
-    await this.stopActiveTurn(chatId, { startQueuedTurn: true })
+    await this.stopActiveTurn(chatId, { startQueuedTurn: false })
 
     const detail = this.getCachedChatDetail(chatId)
     if (!detail) throw new Error('Unable to stop chat')
@@ -984,6 +1008,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.hiddenPendingMessageIdsByThread.clear()
     this.queuedTurnsByThread.clear()
     this.queuedTurnStartThreads.clear()
+    this.manuallyStoppedTurnIds.clear()
     this.client.dispose()
   }
 
@@ -1013,11 +1038,11 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const turnId = this.getActiveTurnId(chatId)
     if (!turnId) return this.continueChat(chatId, text, options)
 
-    if (this.steeringMessagesByThread.has(chatId)) {
+    if (this.hasPendingSteeringMessage(chatId)) {
       return this.queueChatMessage(chatId, text, options)
     }
 
-    const steeringMessage = this.addSteeringMessage(chatId, turnId, text)
+    const steeringMessage = this.addSteeringMessage(chatId, turnId, text, options)
     if (!steeringMessage) throw new Error('Unable to steer chat')
 
     this.emitChatUpdated(chatId)
@@ -1041,6 +1066,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
               steeringMessageId
           }
           this.activeTurnIds.set(chatId, acceptedTurnId)
+          this.markSteeringMessageSent(chatId, steeringMessageId)
+          this.emitChatUpdated(chatId)
           break
         } catch (error) {
           const serverTurnId = didRetryWithServerTurnId ? null : getFoundActiveTurnId(error)
@@ -1182,7 +1209,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const stoppedTurnId = interruptResult.turnId
 
     this.activeTurnIds.delete(chatId)
-    this.removeSteeringMessageForTurn(chatId, stoppedTurnId)
+    this.rememberManuallyStoppedTurn(chatId, stoppedTurnId)
+    this.markSteeringMessagesSentForTurn(chatId, stoppedTurnId)
     if (interruptResult.interrupted) this.markTurnInterrupted(chatId, stoppedTurnId)
     else this.markTurnCompleted(chatId, stoppedTurnId)
     if (stoppedTurnId !== turnId) this.markTurnCompleted(chatId, turnId)
@@ -1205,7 +1233,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
     pendingApproval: this.getProviderPendingApproval(thread.id),
     items: [
       ...getChatItems(this.getRenderableTurns(thread), thread.createdAt, {
-        hiddenPendingMessageIds: this.hiddenPendingMessageIdsByThread.get(thread.id)
+        hiddenPendingMessageIds: this.hiddenPendingMessageIdsByThread.get(thread.id),
+        pendingSteeringMessageIds: this.getPendingSteeringMessageIds(thread.id)
       }),
       ...this.getProviderPendingMessages(thread.id)
     ]
@@ -1248,6 +1277,21 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
   private isRolledBackTurn = (threadId: string, turnId: string): boolean =>
     this.rolledBackTurnIds.get(threadId)?.has(turnId) ?? false
+
+  private rememberManuallyStoppedTurn = (threadId: string, turnId: string): void => {
+    const turnIds = this.manuallyStoppedTurnIds.get(threadId) ?? new Set<string>()
+    turnIds.add(turnId)
+    this.manuallyStoppedTurnIds.set(threadId, turnIds)
+  }
+
+  private takeManuallyStoppedTurn = (threadId: string, turnId: string): boolean => {
+    const turnIds = this.manuallyStoppedTurnIds.get(threadId)
+    if (!turnIds?.has(turnId)) return false
+
+    turnIds.delete(turnId)
+    if (turnIds.size === 0) this.manuallyStoppedTurnIds.delete(threadId)
+    return true
+  }
 
   private filterRolledBackTurns = (threadId: string, turns: CodexTurn[]): CodexTurn[] => {
     const rolledBackTurnIds = this.rolledBackTurnIds.get(threadId)
@@ -1728,24 +1772,34 @@ export class CodexProviderAdapter implements ProviderAdapter {
     else this.queuedTurnsByThread.delete(threadId)
   }
 
-  private removeQueuedTurn = (threadId: string, turnId: string): boolean => {
+  private takeQueuedTurn = (threadId: string, turnId: string): QueuedTurn | null => {
     const queuedTurns = this.queuedTurnsByThread.get(threadId)
-    const nextQueuedTurns = queuedTurns?.filter((turn) => turn.id !== turnId) ?? []
-    const removedQueuedTurn = Boolean(queuedTurns?.some((turn) => turn.id === turnId))
+    const queuedTurn = queuedTurns?.find((turn) => turn.id === turnId) ?? null
+    if (!queuedTurns || !queuedTurn) return null
 
+    const nextQueuedTurns = queuedTurns.filter((turn) => turn.id !== turnId)
     if (nextQueuedTurns.length > 0) this.queuedTurnsByThread.set(threadId, nextQueuedTurns)
     else this.queuedTurnsByThread.delete(threadId)
 
-    const thread = this.threads.get(threadId)
-    const removedSyntheticTurn = Boolean(thread?.turns.some((turn) => turn.id === turnId))
-    if (removedSyntheticTurn) {
-      this.updateThread(threadId, (currentThread) => ({
-        ...currentThread,
-        turns: currentThread.turns.filter((turn) => turn.id !== turnId)
-      }))
-    }
+    this.removeSyntheticTurn(threadId, turnId)
+    return queuedTurn
+  }
 
-    return removedQueuedTurn || removedSyntheticTurn
+  private removeSyntheticTurn = (threadId: string, turnId: string): boolean => {
+    const thread = this.threads.get(threadId)
+    if (!thread?.turns.some((turn) => turn.id === turnId)) return false
+
+    this.updateThread(threadId, (currentThread) => ({
+      ...currentThread,
+      turns: currentThread.turns.filter((turn) => turn.id !== turnId)
+    }))
+
+    return true
+  }
+
+  private removeQueuedTurn = (threadId: string, turnId: string): boolean => {
+    const queuedTurn = this.takeQueuedTurn(threadId, turnId)
+    return Boolean(queuedTurn) || this.removeSyntheticTurn(threadId, turnId)
   }
 
   private removeTurnItem = (threadId: string, turnId: string, itemId: string): boolean => {
@@ -1771,7 +1825,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private addSteeringMessage = (
     threadId: string,
     turnId: string,
-    text: string
+    text: string,
+    options?: ProviderTurnOptions
   ): SteeringMessage | null => {
     if (!this.threads.has(threadId)) return null
 
@@ -1792,20 +1847,85 @@ export class CodexProviderAdapter implements ProviderAdapter {
       itemId,
       turnId,
       text,
-      createdAt
+      createdAt,
+      status: 'pending',
+      options: options ? { ...options } : undefined
     } satisfies SteeringMessage
 
-    this.steeringMessagesByThread.set(threadId, steeringMessage)
+    const steeringMessages = this.steeringMessagesByThread.get(threadId) ?? []
+    this.steeringMessagesByThread.set(threadId, [...steeringMessages, steeringMessage])
+    return steeringMessage
+  }
+
+  private getPendingSteeringMessageIds = (threadId: string): Set<string> => {
+    const steeringMessages = this.steeringMessagesByThread.get(threadId) ?? []
+    return new Set(
+      steeringMessages
+        .filter((steeringMessage) => steeringMessage.status === 'pending')
+        .map((steeringMessage) => steeringMessage.id)
+    )
+  }
+
+  private hasPendingSteeringMessage = (threadId: string): boolean =>
+    this.getPendingSteeringMessageIds(threadId).size > 0
+
+  private updateSteeringMessages = (
+    threadId: string,
+    update: (steeringMessages: SteeringMessage[]) => SteeringMessage[]
+  ): void => {
+    const steeringMessages = this.steeringMessagesByThread.get(threadId) ?? []
+    const nextSteeringMessages = update(steeringMessages)
+    if (nextSteeringMessages.length > 0) {
+      this.steeringMessagesByThread.set(threadId, nextSteeringMessages)
+    } else {
+      this.steeringMessagesByThread.delete(threadId)
+    }
+  }
+
+  private takeSteeringMessage = (threadId: string, messageId: string): SteeringMessage | null => {
+    const steeringMessages = this.steeringMessagesByThread.get(threadId) ?? []
+    const steeringMessage = steeringMessages.find((message) => message.id === messageId) ?? null
+    if (!steeringMessage) return null
+
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.filter((message) => message.id !== messageId)
+    )
+    this.removeTurnItem(threadId, steeringMessage.turnId, steeringMessage.itemId)
+    this.hidePendingMessage(threadId, messageId)
     return steeringMessage
   }
 
   private removeSteeringMessage = (threadId: string, messageId: string): boolean => {
-    const steeringMessage = this.steeringMessagesByThread.get(threadId)
-    if (steeringMessage?.id !== messageId) return false
+    const steeringMessage = this.takeSteeringMessage(threadId, messageId)
+    if (!steeringMessage) return false
 
-    this.steeringMessagesByThread.delete(threadId)
-    this.removeTurnItem(threadId, steeringMessage.turnId, steeringMessage.itemId)
     return true
+  }
+
+  private markSteeringMessageSent = (threadId: string, messageId: string): void => {
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              status: 'sent'
+            }
+          : message
+      )
+    )
+  }
+
+  private markSteeringMessagesSentForTurn = (threadId: string, turnId: string): void => {
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.map((message) =>
+        message.turnId === turnId
+          ? {
+              ...message,
+              status: 'sent'
+            }
+          : message
+      )
+    )
   }
 
   private updateSteeringMessageTurn = (
@@ -1813,8 +1933,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     messageId: string,
     turnId: string
   ): string | null => {
-    const steeringMessage = this.steeringMessagesByThread.get(threadId)
-    if (steeringMessage?.id !== messageId) return null
+    const steeringMessage =
+      this.steeringMessagesByThread.get(threadId)?.find((message) => message.id === messageId) ??
+      null
+    if (!steeringMessage) return null
 
     if (steeringMessage.turnId !== turnId) {
       this.removeTurnItem(threadId, steeringMessage.turnId, steeringMessage.itemId)
@@ -1829,11 +1951,17 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }
 
     const nextMessageId = `${turnId}:${steeringMessage.itemId}`
-    this.steeringMessagesByThread.set(threadId, {
-      ...steeringMessage,
-      id: nextMessageId,
-      turnId
-    })
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              id: nextMessageId,
+              turnId
+            }
+          : message
+      )
+    )
 
     return nextMessageId
   }
@@ -1842,18 +1970,19 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.steeringMessagesByThread.delete(threadId)
 
   private removeSteeringMessageForTurn = (threadId: string, turnId: string): boolean => {
-    const steeringMessage = this.steeringMessagesByThread.get(threadId)
-    if (steeringMessage?.turnId !== turnId) return false
+    const steeringMessages = this.steeringMessagesByThread.get(threadId)
+    if (!steeringMessages?.some((message) => message.turnId === turnId)) return false
 
-    this.steeringMessagesByThread.delete(threadId)
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.filter((message) => message.turnId !== turnId)
+    )
     return true
   }
 
   private removeSteeringMessagesForTurnIds = (threadId: string, turnIds: Set<string>): void => {
-    const steeringMessage = this.steeringMessagesByThread.get(threadId)
-    if (steeringMessage && turnIds.has(steeringMessage.turnId)) {
-      this.steeringMessagesByThread.delete(threadId)
-    }
+    this.updateSteeringMessages(threadId, (messages) =>
+      messages.filter((message) => !turnIds.has(message.turnId))
+    )
   }
 
   private getProviderPendingMessages = (threadId: string): ProviderPendingMessage[] => {
@@ -2041,20 +2170,47 @@ export class CodexProviderAdapter implements ProviderAdapter {
         )
         .map((item) => item.id)
     )
-    const steeringMessage = this.steeringMessagesByThread.get(threadId)
-    const shouldDropLocalSteeringMessage =
-      steeringMessage?.turnId === turnId &&
-      nextItems.some(
-        (item) =>
-          item.type === 'userMessage' &&
-          !isLocalSteeringUserMessage(item) &&
-          !previousServerUserMessageIds.has(item.id) &&
-          getCodexUserMessageText(item) === steeringMessage.text
+    const turnSteeringMessages = (this.steeringMessagesByThread.get(threadId) ?? []).filter(
+      (message) => message.turnId === turnId
+    )
+    const unmatchedSteeringMessages = [...turnSteeringMessages]
+    const replacedLocalSteeringItemIds = new Set<string>()
+    const replacementSteeringMessages = new Map<string, SteeringMessage>()
+
+    for (const item of nextItems) {
+      if (
+        item.type !== 'userMessage' ||
+        isLocalSteeringUserMessage(item) ||
+        previousServerUserMessageIds.has(item.id)
+      ) {
+        continue
+      }
+
+      const text = getCodexUserMessageText(item)
+      const steeringMessageIndex = unmatchedSteeringMessages.findIndex(
+        (message) => message.text === text
       )
+      if (steeringMessageIndex < 0) continue
+
+      const [steeringMessage] = unmatchedSteeringMessages.splice(steeringMessageIndex, 1)
+      replacedLocalSteeringItemIds.add(steeringMessage.itemId)
+      replacementSteeringMessages.set(steeringMessage.id, {
+        ...steeringMessage,
+        id: `${turnId}:${item.id}`,
+        itemId: item.id,
+        status: 'sent'
+      })
+    }
+
+    if (replacementSteeringMessages.size > 0) {
+      this.updateSteeringMessages(threadId, (messages) =>
+        messages.map((message) => replacementSteeringMessages.get(message.id) ?? message)
+      )
+    }
 
     return previousItems.filter((item) => {
       if (isLocalTurnStartUserMessage(item)) return !shouldDropLocalTurnStartMessage
-      if (isLocalSteeringUserMessage(item)) return !shouldDropLocalSteeringMessage
+      if (isLocalSteeringUserMessage(item)) return !replacedLocalSteeringItemIds.has(item.id)
       return true
     })
   }
@@ -2224,13 +2380,21 @@ export class CodexProviderAdapter implements ProviderAdapter {
           ? (liveTurn.status ?? 'completed')
           : liveTurn.status
     })
-    const turn =
+    let turn =
       notification.method === 'turn/completed'
         ? {
             ...normalizedTurn,
             items: normalizedTurn.items.map((item) => this.applyLiveItemStatus(item, 'finished'))
           }
         : normalizedTurn
+    const wasManuallyStoppedTurn =
+      notification.method === 'turn/completed' && this.takeManuallyStoppedTurn(threadId, turn.id)
+    if (wasManuallyStoppedTurn && turn.status === 'completed') {
+      turn = {
+        ...turn,
+        status: 'interrupted'
+      }
+    }
 
     if (this.isRolledBackTurn(threadId, turn.id)) {
       if (notification.method !== 'turn/started' || !this.pendingTurnIds.has(threadId)) return
@@ -2243,7 +2407,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }
     if (notification.method === 'turn/completed') {
       if (this.activeTurnIds.get(threadId) === turn.id) this.activeTurnIds.delete(threadId)
-      this.removeSteeringMessageForTurn(threadId, turn.id)
       this.pendingApprovalsByThread.delete(threadId)
       this.setThreadStatus(threadId, { type: 'idle' })
     }
@@ -2260,7 +2423,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
     this.scheduleChatUpdated(threadId)
 
-    if (notification.method === 'turn/completed') this.startNextQueuedTurn(threadId)
+    if (notification.method === 'turn/completed') {
+      this.removeSteeringMessageForTurn(threadId, turn.id)
+      if (turn.status === 'completed' && !wasManuallyStoppedTurn) this.startNextQueuedTurn(threadId)
+    }
   }
 
   private handleItemNotification = (
