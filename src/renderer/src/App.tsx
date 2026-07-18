@@ -287,6 +287,17 @@ const scrollToBottom = (element: HTMLElement): void => {
   element.scrollTop = getScrollBottomTop(element)
 }
 
+const resetDocumentScroll = (): void => {
+  window.scrollTo(0, 0)
+  document.body.scrollLeft = 0
+  document.body.scrollTop = 0
+
+  if (document.scrollingElement instanceof HTMLElement) {
+    document.scrollingElement.scrollLeft = 0
+    document.scrollingElement.scrollTop = 0
+  }
+}
+
 const roundPanePercent = (value: number): number => Math.round(value * 1000) / 1000
 
 const getChatPanePercentsFromWidths = (
@@ -1513,6 +1524,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     chatAutoScrollEnabledRef.current = true
+    resetDocumentScroll()
   }, [selectedProviderId, selectedChatId])
 
   useEffect(() => {
@@ -1520,6 +1532,7 @@ export const App: React.FC = () => {
 
     chatAutoScrollEnabledRef.current = true
     contentRef.current?.scrollTo({ top: 0 })
+    resetDocumentScroll()
   }, [selectedChat])
 
   useEffect(() => {

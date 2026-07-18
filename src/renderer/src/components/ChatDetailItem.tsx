@@ -643,20 +643,7 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
 
   if (blocks.length === 0) {
     if (showPlaceholder) {
-      return (
-        <details
-          className={`chat-detail__step chat-detail__working chat-detail__working--${item.status}`}
-          open
-        >
-          <summary>
-            {heading}
-            <ChevronRight className="chat-detail__summary-chevron" aria-hidden="true" />
-          </summary>
-          <div className="chat-detail__step-content">
-            <WorkingPlaceholder id={item.id} />
-          </div>
-        </details>
-      )
+      return <WorkingPlaceholder id={item.id} />
     }
 
     return (
