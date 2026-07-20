@@ -30,6 +30,7 @@ export type AppGitChangesResult = {
   repositoryRoot: string
   branchName: string | null
   baseRef: string | null
+  unpulledCount: number
   unpushedCount: number
   files: AppGitFileChange[]
 }

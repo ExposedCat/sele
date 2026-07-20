@@ -258,11 +258,18 @@ const getBranchBase = async (
   return null
 }
 
-const getUnpushedCount = async (cwd: string): Promise<number> => {
-  const count = await runGit(cwd, ['rev-list', '--count', '@{upstream}..HEAD'])
-  const parsedCount = Number(count)
+const getUpstreamCommitCounts = async (
+  cwd: string
+): Promise<{ unpulledCount: number; unpushedCount: number }> => {
+  const counts = await runGit(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])
+  const [unpushedRaw, unpulledRaw] = counts?.trim().split(/\s+/, 2) ?? []
+  const unpulledCount = Number(unpulledRaw)
+  const unpushedCount = Number(unpushedRaw)
 
-  return Number.isFinite(parsedCount) ? parsedCount : 0
+  return {
+    unpulledCount: Number.isFinite(unpulledCount) ? unpulledCount : 0,
+    unpushedCount: Number.isFinite(unpushedCount) ? unpushedCount : 0
+  }
 }
 
 const getChangeKind = (status: string): AppGitChangeKind => {
@@ -372,6 +379,7 @@ const getGitChanges = async (
   repositoryRoot: string
   branchName: string | null
   baseRef: string | null
+  unpulledCount: number
   unpushedCount: number
   files: AppGitFileChange[]
 }> => {
@@ -379,7 +387,7 @@ const getGitChanges = async (
   if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
 
   const branchName = await getCurrentBranchName(repositoryRoot)
-  const unpushedCount = await getUnpushedCount(repositoryRoot)
+  const { unpulledCount, unpushedCount } = await getUpstreamCommitCounts(repositoryRoot)
 
   if (source === 'uncommitted') {
     const status = await runGit(repositoryRoot, ['status', '--porcelain=v1', '-z'], true)
@@ -388,6 +396,7 @@ const getGitChanges = async (
       repositoryRoot,
       branchName,
       baseRef: null,
+      unpulledCount,
       unpushedCount,
       files: parsePorcelainChanges(status ?? '')
     }
@@ -399,6 +408,7 @@ const getGitChanges = async (
       repositoryRoot,
       branchName,
       baseRef: null,
+      unpulledCount,
       unpushedCount,
       files: []
     }
@@ -414,6 +424,7 @@ const getGitChanges = async (
     repositoryRoot,
     branchName,
     baseRef: branchBase.ref,
+    unpulledCount,
     unpushedCount,
     files: parseNameStatusChanges(diff ?? '')
   }
