@@ -103,7 +103,6 @@ import { providerApi } from './providerApi'
 import './App.css'
 
 type LoadState = 'loading' | 'ready' | 'error'
-type IncrementalLoadState = 'ready' | 'loading' | 'error'
 type SendState = 'idle' | 'sending' | 'error'
 type ApplyChatDetailOptions = {
   select?: boolean
@@ -1373,8 +1372,9 @@ export const App: React.FC = () => {
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedCwdGroups, setCollapsedCwdGroups] = useState<Record<string, boolean>>({})
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const [chatPageLoadState, setChatPageLoadState] = useState<IncrementalLoadState>('ready')
+  const [visibleChatCountsByGroup, setVisibleChatCountsByGroup] = useState<Record<string, number>>(
+    {}
+  )
   const [changeSource, setChangeSource] = useState<ChangeSource>('uncommitted')
   const [changesPaneView, setChangesPaneView] = useState<ChangesPaneView>('git')
   const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
@@ -1407,9 +1407,7 @@ export const App: React.FC = () => {
   const [panelsWidth, setPanelsWidth] = useState(0)
   const [windowState, setWindowState] = useState<AppWindowState>({ isMaximized: false })
   const panelsRef = useRef<HTMLDivElement>(null)
-  const sidebarBodyRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const chatLoadTriggerRef = useRef<HTMLDivElement>(null)
   const resizeHandleRef = useRef<HTMLDivElement>(null)
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -2322,33 +2320,41 @@ export const App: React.FC = () => {
     }
   }, [chatPageLoadState, nextCursor])
 
-  useEffect(() => {
-    if (!hasMoreChats || chatPageLoadState !== 'ready') return
-
-    const root = sidebarBodyRef.current
-    const trigger = chatLoadTriggerRef.current
-    if (!root || !trigger) return
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) void loadMoreChats()
-      },
-      {
-        root,
-        rootMargin: '96px 0px',
-        threshold: 0.1
-      }
-    )
-
-    observer.observe(trigger)
-    return () => observer.disconnect()
-  }, [chatPageLoadState, hasMoreChats, loadMoreChats])
-
   const handleToggleCwdGroup = (groupKey: string): void => {
     setCollapsedCwdGroups((currentGroups) => ({
       ...currentGroups,
       [groupKey]: !getCollapsedGroupState(groupKey, currentGroups)
     }))
+  }
+
+  const handleLoadMoreChatsInGroup = (group: ChatListGroupData): void => {
+    setVisibleChatCountsByGroup((currentCounts) => ({
+      ...currentCounts,
+      [group.key]: (currentCounts[group.key] ?? chatPageSize) + chatPageSize
+    }))
+  }
+
+  const handleShowLessChatsInGroup = (group: ChatListGroupData): void => {
+    setVisibleChatCountsByGroup((currentCounts) => {
+      const nextCounts = { ...currentCounts }
+      delete nextCounts[group.key]
+      return nextCounts
+    })
+  }
+
+  const handleLoadMoreChatsInGroup = (group: ChatListGroupData): void => {
+    setVisibleChatCountsByGroup((currentCounts) => ({
+      ...currentCounts,
+      [group.key]: (currentCounts[group.key] ?? chatPageSize) + chatPageSize
+    }))
+  }
+
+  const handleShowLessChatsInGroup = (group: ChatListGroupData): void => {
+    setVisibleChatCountsByGroup((currentCounts) => {
+      const nextCounts = { ...currentCounts }
+      delete nextCounts[group.key]
+      return nextCounts
+    })
   }
 
   const handleSelectChat = (chat: ProviderChat): void => {
@@ -2972,6 +2978,7 @@ export const App: React.FC = () => {
     : fileTreeLoadMatchesCurrentCwd
       ? fileTreeLoadState
       : 'loading'
+        onShowLessChats={handleShowLessChatsInGroup}
   const visibleFilesLoadState =
     filesLoadState === 'loading' && displayedFileTree ? 'ready' : filesLoadState
   const gitSyncMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
@@ -2987,6 +2994,7 @@ export const App: React.FC = () => {
     hasUnpushedChanges ? `${unpushedCount} commit${unpushedCount === 1 ? '' : 's'} to push` : null
   ]
     .filter(Boolean)
+        onShowLessChats={handleShowLessChatsInGroup}
     .join(', ')
   const changesGitMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
   const filesMetadata = changesCwd && fileTreeScope?.cwd === changesCwd ? fileTree : null

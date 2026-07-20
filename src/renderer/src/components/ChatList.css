@@ -10,13 +10,6 @@
   gap: 14px;
 }
 
-.chat-list-section__sentinel {
-  display: grid;
-  min-height: 34px;
-  place-items: center;
-  color: var(--quiet);
-}
-
 @media (max-width: 600px) {
   .chat-list {
     gap: 14px;

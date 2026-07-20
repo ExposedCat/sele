@@ -94,3 +94,7 @@
 .chat-list-group__items .chat-list {
   gap: 10px;
 }
+  flex-direction: column;
+  gap: 6px;
+  flex-direction: column;
+  gap: 6px;
