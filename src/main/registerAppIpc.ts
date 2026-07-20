@@ -18,6 +18,7 @@ import type {
   AppGitPatchChange,
   AppGitRecentCommitMessagesOptions,
   AppGitRecoverableFailure,
+  AppGitUncommittedPatchChangesOptions,
   AppWindowState
 } from '../shared/app'
 import { appIpcChannels } from '../shared/app'
@@ -308,6 +309,21 @@ const getGitDiffOptions = (value: unknown): AppGitDiffOptions => {
 
   return {
     cwd: getDefaultPath(options.cwd)
+  }
+}
+
+const getGitUncommittedPatchChangesOptions = (
+  value: unknown
+): AppGitUncommittedPatchChangesOptions => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Git patch filter options')
+  }
+
+  const options = value as { cwd?: unknown; patches?: unknown }
+
+  return {
+    cwd: getDefaultPath(options.cwd),
+    patches: getGitPatchChanges(options.patches, 'Invalid Git patch filter patches')
   }
 }
 
@@ -718,6 +734,30 @@ const writeContentToIndex = async (
   )
 }
 
+const getContentBlobHash = async (repositoryRoot: string, content: string): Promise<string> => {
+  const objectHash = await runGit(repositoryRoot, ['hash-object', '--stdin'], {
+    input: content,
+    required: true
+  })
+  if (!objectHash) throw new Error('Unable to hash patch content')
+
+  return objectHash
+}
+
+const getIndexBlobHash = async (
+  repositoryRoot: string,
+  indexPath: string,
+  path: string
+): Promise<string | null> => {
+  const output = await runGit(repositoryRoot, ['ls-files', '-s', '--', path], {
+    env: getTemporaryIndexEnv(indexPath),
+    required: true
+  })
+  const match = /^(\d+)\s+([0-9a-f]+)\s+\d+\t/.exec(output ?? '')
+
+  return match?.[2] ?? null
+}
+
 const removePathFromIndex = async (
   repositoryRoot: string,
   indexPath: string,
@@ -748,6 +788,90 @@ const applyPatchChangeToIndex = async (
 
   await applyUnifiedPatchToIndex(repositoryRoot, indexPath, getUnifiedPatch(change, path))
   return path
+}
+
+const patchChangesHead = async (
+  repositoryRoot: string,
+  tempDirectory: string,
+  patchIndex: number,
+  change: AppGitPatchChange
+): Promise<boolean> => {
+  const indexPath = join(tempDirectory, `patch-${patchIndex}.index`)
+
+  try {
+    await initializeTemporaryIndex(repositoryRoot, indexPath)
+    await applyPatchChangeToIndex(repositoryRoot, indexPath, change)
+
+    return (await getTemporaryIndexChangedPaths(repositoryRoot, indexPath)).length > 0
+  } catch {
+    return false
+  }
+}
+
+const worktreeSnapshotContainsPatchChange = async (
+  repositoryRoot: string,
+  worktreeIndexPath: string,
+  change: AppGitPatchChange
+): Promise<boolean> => {
+  const path = normalizePatchPath(repositoryRoot, change.path)
+
+  if (change.kind === 'create' && !isFullUnifiedDiff(change.diff)) {
+    return (
+      (await getIndexBlobHash(repositoryRoot, worktreeIndexPath, path)) ===
+      (await getContentBlobHash(repositoryRoot, change.diff))
+    )
+  }
+
+  if (change.kind === 'delete' && !isFullUnifiedDiff(change.diff)) {
+    return (await getIndexBlobHash(repositoryRoot, worktreeIndexPath, path)) == null
+  }
+
+  const reverseCheck = await runGit(
+    repositoryRoot,
+    ['apply', '--cached', '--whitespace=nowarn', '--recount', '-C0', '--reverse', '--check'],
+    {
+      env: getTemporaryIndexEnv(worktreeIndexPath),
+      input: getUnifiedPatch(change, path)
+    }
+  )
+
+  return reverseCheck != null
+}
+
+const getUncommittedGitPatchChanges = async (
+  cwd: string,
+  patches: AppGitPatchChange[]
+): Promise<{ patches: AppGitPatchChange[] }> => {
+  if (patches.length === 0) return { patches: [] }
+
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  const tempDirectory = await mkdtemp(join(tmpdir(), 'sele-git-index-'))
+  const worktreeIndexPath = join(tempDirectory, 'worktree.index')
+
+  try {
+    await initializeTemporaryIndex(repositoryRoot, worktreeIndexPath)
+    await runGit(repositoryRoot, ['add', '-A', '--', '.'], {
+      env: getTemporaryIndexEnv(worktreeIndexPath),
+      required: true
+    })
+
+    const uncommittedPatches: AppGitPatchChange[] = []
+
+    for (const [patchIndex, patch] of patches.entries()) {
+      if (!(await patchChangesHead(repositoryRoot, tempDirectory, patchIndex, patch))) continue
+      if (!(await worktreeSnapshotContainsPatchChange(repositoryRoot, worktreeIndexPath, patch))) {
+        continue
+      }
+
+      uncommittedPatches.push(patch)
+    }
+
+    return { patches: uncommittedPatches }
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 const getTemporaryIndexChangedPaths = async (
@@ -968,6 +1092,11 @@ export const registerAppIpc = (): void => {
   ipcMain.handle(appIpcChannels.getUncommittedGitDiff, async (_event, value: unknown) => {
     const options = getGitDiffOptions(value)
     return getUncommittedGitDiff(options.cwd ?? process.cwd())
+  })
+
+  ipcMain.handle(appIpcChannels.getUncommittedGitPatchChanges, async (_event, value: unknown) => {
+    const options = getGitUncommittedPatchChangesOptions(value)
+    return getUncommittedGitPatchChanges(options.cwd ?? process.cwd(), options.patches)
   })
 
   ipcMain.handle(appIpcChannels.commitGitChanges, async (_event, value: unknown) => {

@@ -299,6 +299,12 @@ const normalizeTokenUsageBreakdown = (value: unknown): ProviderTokenUsageBreakdo
   }
 }
 
+const hasDetailedTokenUsage = (usage: ProviderTokenUsageBreakdown): boolean =>
+  usage.inputTokens > 0 ||
+  usage.cachedInputTokens > 0 ||
+  usage.outputTokens > 0 ||
+  usage.reasoningOutputTokens > 0
+
 const getTokenCountContextTokens = (last: ProviderTokenUsageBreakdown): number =>
   last.inputTokens > 0 ? last.inputTokens : last.totalTokens
 
@@ -309,6 +315,7 @@ const normalizeChatContextUsage = (value: unknown): ProviderChatContextUsage | n
   const total = normalizeTokenUsageBreakdown(usage.total)
   const last = normalizeTokenUsageBreakdown(usage.last)
   if (!total || !last) return null
+  if (last.totalTokens > 0 && !hasDetailedTokenUsage(last)) return null
 
   const modelContextWindow = usage.modelContextWindow
   const reportedContextWindow =

@@ -18,6 +18,8 @@ const appApi: AppApi = {
     ipcRenderer.invoke(appIpcChannels.getRecentGitCommitMessages, options),
   getUncommittedGitDiff: (options) =>
     ipcRenderer.invoke(appIpcChannels.getUncommittedGitDiff, options),
+  getUncommittedGitPatchChanges: (options) =>
+    ipcRenderer.invoke(appIpcChannels.getUncommittedGitPatchChanges, options),
   commitGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.commitGitChanges, options),
   pullGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pullGitChanges, options),
   pushGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pushGitChanges, options),

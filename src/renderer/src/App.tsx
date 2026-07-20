@@ -136,6 +136,7 @@ type AnimatedIconComponent = ForwardRefExoticComponent<
   } & RefAttributes<AnimatedIconHandle>
 >
 type ChangeSource = 'chat' | 'lastTurn' | 'uncommitted'
+type PatchChangeSource = Extract<ChangeSource, 'chat' | 'lastTurn'>
 type GitChangeSource = Exclude<ChangeSource, 'chat' | 'lastTurn'>
 type ChangesPaneView = 'git' | 'files'
 type GitCommitPromptAction = AppGitCommitAction
@@ -216,6 +217,15 @@ type ChatResizeEdge = 'left' | 'right'
 type GitChangesScope = {
   cwd: string
   source: GitChangeSource
+}
+type PatchFilterScope = {
+  cwd: string
+  source: PatchChangeSource
+  signature: string
+}
+type UncommittedPatchFilter = {
+  scope: PatchFilterScope
+  patches: AppGitPatchChange[]
 }
 type ProjectOptionData = {
   cwd: string
@@ -1222,8 +1232,70 @@ const getCommitFiles = (files: ChangedFile[]): string[] =>
 const getCommitPatches = (files: ChangedFile[]): AppGitPatchChange[] =>
   files.flatMap((file) => file.patches ?? [])
 
-const isPatchChangeSource = (source: ChangeSource): boolean =>
+const isPatchChangeSource = (source: ChangeSource): source is PatchChangeSource =>
   source === 'chat' || source === 'lastTurn'
+
+const getPatchChangeKey = (patch: AppGitPatchChange): string =>
+  [patch.path, patch.kind, patch.diff].join('\0')
+
+const getPatchFilterSignature = (patches: AppGitPatchChange[]): string =>
+  patches.map(getPatchChangeKey).join('\0\0')
+
+const isPatchFilterScope = (
+  scope: PatchFilterScope | null,
+  cwd: string | null,
+  source: ChangeSource,
+  signature: string
+): boolean =>
+  Boolean(
+    scope &&
+    cwd &&
+    isPatchChangeSource(source) &&
+    scope.cwd === cwd &&
+    scope.source === source &&
+    scope.signature === signature
+  )
+
+const getPatchFileKind = (patches: AppGitPatchChange[]): AppGitPatchChange['kind'] =>
+  patches.reduce<AppGitPatchChange['kind']>(
+    (kind, patch, index) => (index === 0 ? patch.kind : mergePatchChangeKind(kind, patch.kind)),
+    patches[0]?.kind ?? 'edit'
+  )
+
+const filterChangedFilesByPatches = (
+  files: ChangedFile[],
+  patches: AppGitPatchChange[]
+): ChangedFile[] => {
+  const remainingPatchCounts = new Map<string, number>()
+
+  for (const patch of patches) {
+    const key = getPatchChangeKey(patch)
+    remainingPatchCounts.set(key, (remainingPatchCounts.get(key) ?? 0) + 1)
+  }
+
+  return files.flatMap((file): ChangedFile[] => {
+    const filePatches = file.patches ?? []
+    const keptPatches = filePatches.filter((patch) => {
+      const key = getPatchChangeKey(patch)
+      const remainingCount = remainingPatchCounts.get(key) ?? 0
+      if (remainingCount <= 0) return false
+
+      remainingPatchCounts.set(key, remainingCount - 1)
+      return true
+    })
+
+    if (keptPatches.length === 0) return []
+
+    return [
+      {
+        ...file,
+        kind: getPatchFileKind(keptPatches),
+        diff: keptPatches.at(-1)?.diff ?? file.diff,
+        patches: keptPatches
+      }
+    ]
+  })
+}
 
 const formatPatchForPrompt = (patch: AppGitPatchChange): string =>
   [`File: ${patch.path}`, `Kind: ${patch.kind}`, patch.diff.trimEnd()].filter(Boolean).join('\n')
@@ -1382,6 +1454,9 @@ export const App: React.FC = () => {
   const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
   const [gitChangeLoadScope, setGitChangeLoadScope] = useState<GitChangesScope | null>(null)
   const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
+  const [uncommittedPatchFilter, setUncommittedPatchFilter] =
+    useState<UncommittedPatchFilter | null>(null)
+  const [uncommittedPatchFilterState, setUncommittedPatchFilterState] = useState<LoadState>('ready')
   const [fileTree, setFileTree] = useState<AppFileTreeResult | null>(null)
   const [fileTreeScope, setFileTreeScope] = useState<FileTreeScope | null>(null)
   const [fileTreeLoadState, setFileTreeLoadState] = useState<LoadState>('ready')
@@ -1635,7 +1710,6 @@ export const App: React.FC = () => {
         if (!active) return
 
         setChats((currentChats) => mergeChats(currentChats, page.chats))
-        setNextCursor(page.nextCursor)
         setLoadState('ready')
       } catch {
         if (active) setLoadState('error')
@@ -1654,6 +1728,7 @@ export const App: React.FC = () => {
 
     const loadProjectHistory = async (): Promise<void> => {
       const projectsByCwd = new Map<string, ProjectOptionData>()
+      const loadedChats: ProviderChat[] = []
       let cursor: string | null = null
 
       try {
@@ -1665,6 +1740,7 @@ export const App: React.FC = () => {
 
           if (!active) return
 
+          loadedChats.push(...page.chats)
           page.chats.forEach((chat) => {
             const cwd = getChatProjectCwd(chat)
             if (!cwd) return
@@ -1678,7 +1754,10 @@ export const App: React.FC = () => {
           cursor = page.nextCursor
         } while (cursor)
 
-        if (active) setProjectHistory(Array.from(projectsByCwd.values()))
+        if (active) {
+          setProjectHistory(Array.from(projectsByCwd.values()))
+          setChats((currentChats) => mergeChats(currentChats, loadedChats))
+        }
       } catch {
         // The visible chat list still provides project options if this background load fails.
       }
@@ -2197,6 +2276,64 @@ export const App: React.FC = () => {
   }, [changeSource, changesCwd, gitChangeLoadRequest])
 
   useEffect(() => {
+    let active = true
+
+    if (!changesCwd || !isPatchChangeSource(changeSource)) {
+      queueMicrotask(() => {
+        if (active) setUncommittedPatchFilterState('ready')
+      })
+
+      return () => {
+        active = false
+      }
+    }
+
+    const sourceFiles =
+      changeSource === 'chat'
+        ? getChatChangedFiles(chatDetail)
+        : getLastTurnChangedFiles(chatDetail)
+    const patches = getCommitPatches(sourceFiles)
+    const scope: PatchFilterScope = {
+      cwd: changesCwd,
+      source: changeSource,
+      signature: getPatchFilterSignature(patches)
+    }
+
+    if (patches.length === 0) {
+      queueMicrotask(() => {
+        if (!active) return
+
+        setUncommittedPatchFilter({ scope, patches: [] })
+        setUncommittedPatchFilterState('ready')
+      })
+
+      return () => {
+        active = false
+      }
+    }
+
+    queueMicrotask(() => {
+      if (active) setUncommittedPatchFilterState('loading')
+    })
+
+    appApi
+      .getUncommittedGitPatchChanges({ cwd: changesCwd, patches })
+      .then((result) => {
+        if (!active) return
+
+        setUncommittedPatchFilter({ scope, patches: result.patches })
+        setUncommittedPatchFilterState('ready')
+      })
+      .catch(() => {
+        if (active) setUncommittedPatchFilterState('error')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [changeSource, changesCwd, chatDetail, gitChangeLoadRequest])
+
+  useEffect(() => {
     if (changesPaneView !== 'files' || !changesCwd) return
 
     let active = true
@@ -2253,7 +2390,6 @@ export const App: React.FC = () => {
   const pinnedChatGroup = chatGroups.find((group) => group.kind === 'pinned') ?? null
   const activeChatGroups = chatGroups.filter((group) => group.kind === 'cwd')
   const doneChatGroup = chatGroups.find((group) => group.kind === 'done') ?? null
-  const hasMoreChats = Boolean(nextCursor)
   const projectOptions = useMemo<DropdownOption<string>[]>(() => {
     const projectsByCwd = new Map<string, { cwd: string; updatedAt: number }>()
 
@@ -2301,60 +2437,11 @@ export const App: React.FC = () => {
   }, [chats, newSessionCwd, projectHistory])
   const newSessionProjectValue = newSessionCwd ?? newSessionProjectPlaceholderValue
 
-  const loadMoreChats = useCallback(async (): Promise<void> => {
-    if (chatPageLoadState === 'loading' || !nextCursor) return
-
-    setChatPageLoadState('loading')
-
-    try {
-      const page = await providerApi.getChats('codex', {
-        cursor: nextCursor,
-        limit: chatPageSize
-      })
-
-      setChats((currentChats) => mergeChats(currentChats, page.chats))
-      setNextCursor(page.nextCursor)
-      setChatPageLoadState('ready')
-    } catch {
-      setChatPageLoadState('error')
-    }
-  }, [chatPageLoadState, nextCursor])
-
   const handleToggleCwdGroup = (groupKey: string): void => {
     setCollapsedCwdGroups((currentGroups) => ({
       ...currentGroups,
       [groupKey]: !getCollapsedGroupState(groupKey, currentGroups)
     }))
-  }
-
-  const handleLoadMoreChatsInGroup = (group: ChatListGroupData): void => {
-    setVisibleChatCountsByGroup((currentCounts) => ({
-      ...currentCounts,
-      [group.key]: (currentCounts[group.key] ?? chatPageSize) + chatPageSize
-    }))
-  }
-
-  const handleShowLessChatsInGroup = (group: ChatListGroupData): void => {
-    setVisibleChatCountsByGroup((currentCounts) => {
-      const nextCounts = { ...currentCounts }
-      delete nextCounts[group.key]
-      return nextCounts
-    })
-  }
-
-  const handleLoadMoreChatsInGroup = (group: ChatListGroupData): void => {
-    setVisibleChatCountsByGroup((currentCounts) => ({
-      ...currentCounts,
-      [group.key]: (currentCounts[group.key] ?? chatPageSize) + chatPageSize
-    }))
-  }
-
-  const handleShowLessChatsInGroup = (group: ChatListGroupData): void => {
-    setVisibleChatCountsByGroup((currentCounts) => {
-      const nextCounts = { ...currentCounts }
-      delete nextCounts[group.key]
-      return nextCounts
-    })
   }
 
   const handleLoadMoreChatsInGroup = (group: ChatListGroupData): void => {
@@ -2881,6 +2968,7 @@ export const App: React.FC = () => {
   const renderChatGroup = (group: ChatListGroupData, contentId: string): React.ReactElement => {
     const groupOpen =
       searchTerms.length > 0 || !getCollapsedGroupState(group.key, collapsedCwdGroups)
+    const visibleChatCount = visibleChatCountsByGroup[group.key] ?? chatPageSize
 
     return (
       <ChatListGroup
@@ -2889,6 +2977,10 @@ export const App: React.FC = () => {
         key={group.key}
         open={groupOpen}
         selectedChatKey={selectedChat ? getChatKey(selectedChat) : null}
+        visibleChatCount={visibleChatCount}
+        chatPageSize={chatPageSize}
+        onLoadMoreChats={handleLoadMoreChatsInGroup}
+        onShowLessChats={handleShowLessChatsInGroup}
         onMarkChatDone={handleMarkChatDone}
         onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
         onNewChatInCwd={handleNewChatInCwd}
@@ -2938,6 +3030,40 @@ export const App: React.FC = () => {
   const chatPanelOpen = Boolean(selectedChat) || newChatOpen
   const lastTurnChangedFiles = useMemo(() => getLastTurnChangedFiles(chatDetail), [chatDetail])
   const chatChangedFiles = useMemo(() => getChatChangedFiles(chatDetail), [chatDetail])
+  const patchChangeSourceSelected = isPatchChangeSource(changeSource)
+  const patchSourceChangedFiles = useMemo(
+    () =>
+      changeSource === 'chat'
+        ? chatChangedFiles
+        : changeSource === 'lastTurn'
+          ? lastTurnChangedFiles
+          : [],
+    [changeSource, chatChangedFiles, lastTurnChangedFiles]
+  )
+  const patchSourcePatches = useMemo(
+    () => getCommitPatches(patchSourceChangedFiles),
+    [patchSourceChangedFiles]
+  )
+  const patchFilterSignature = useMemo(
+    () => getPatchFilterSignature(patchSourcePatches),
+    [patchSourcePatches]
+  )
+  const patchFilterMatches = isPatchFilterScope(
+    uncommittedPatchFilter?.scope ?? null,
+    changesCwd,
+    changeSource,
+    patchFilterSignature
+  )
+  const patchChangedFiles = useMemo(
+    () =>
+      patchFilterMatches
+        ? filterChangedFilesByPatches(
+            patchSourceChangedFiles,
+            uncommittedPatchFilter?.patches ?? []
+          )
+        : [],
+    [patchFilterMatches, patchSourceChangedFiles, uncommittedPatchFilter?.patches]
+  )
   const currentGitChangeSource: GitChangeSource | null =
     changeSource === 'uncommitted' ? 'uncommitted' : null
   const gitChangesMatchCurrentSource = isGitChangesScope(
@@ -2952,9 +3078,9 @@ export const App: React.FC = () => {
   )
   const rawChangedFiles =
     changeSource === 'chat'
-      ? chatChangedFiles
+      ? patchChangedFiles
       : changeSource === 'lastTurn'
-        ? lastTurnChangedFiles
+        ? patchChangedFiles
         : gitChangedFiles
   const changedFilesDisplayRoot =
     displayedGitChanges?.repositoryRoot ?? changesProjectCwd ?? changesCwd ?? null
@@ -2978,14 +3104,17 @@ export const App: React.FC = () => {
     gitChangeLoadScope,
     changesCwd,
     currentGitChangeSource
-        onShowLessChats={handleShowLessChatsInGroup}
   )
   const changesLoadState =
-    changeSource === 'chat' || changeSource === 'lastTurn' || !changesCwd
-      ? 'ready'
-      : gitChangeLoadMatchesCurrentSource
-        ? gitChangeLoadState
+    patchChangeSourceSelected && patchSourcePatches.length > 0
+      ? patchFilterMatches
+        ? uncommittedPatchFilterState
         : 'loading'
+      : patchChangeSourceSelected || !changesCwd
+        ? 'ready'
+        : gitChangeLoadMatchesCurrentSource
+          ? gitChangeLoadState
+          : 'loading'
   const visibleChangesLoadState =
     changesLoadState === 'loading' && displayedGitChanges ? 'ready' : changesLoadState
   const fileTreeLoadMatchesCurrentCwd = isFileTreeScope(fileTreeLoadScope, changesCwd)
@@ -2994,7 +3123,6 @@ export const App: React.FC = () => {
     : fileTreeLoadMatchesCurrentCwd
       ? fileTreeLoadState
       : 'loading'
-        onShowLessChats={handleShowLessChatsInGroup}
   const visibleFilesLoadState =
     filesLoadState === 'loading' && displayedFileTree ? 'ready' : filesLoadState
   const gitSyncMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
@@ -3010,7 +3138,6 @@ export const App: React.FC = () => {
     hasUnpushedChanges ? `${unpushedCount} commit${unpushedCount === 1 ? '' : 's'} to push` : null
   ]
     .filter(Boolean)
-        onShowLessChats={handleShowLessChatsInGroup}
     .join(', ')
   const changesGitMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
   const filesMetadata = changesCwd && fileTreeScope?.cwd === changesCwd ? fileTree : null
@@ -3545,7 +3672,7 @@ export const App: React.FC = () => {
                 </div>
               )}
             </header>
-            <div className="chat-sidebar__body" ref={sidebarBodyRef}>
+            <div className="chat-sidebar__body">
               {loadState === 'loading' && <p className="chat__status">Loading chats…</p>}
               {loadState === 'error' && <p className="chat__status">Unable to load chats.</p>}
               {loadState === 'ready' && chats.length === 0 && (
@@ -3559,19 +3686,6 @@ export const App: React.FC = () => {
                   {pinnedChatGroup && renderChatGroup(pinnedChatGroup, 'pinned-chats-list')}
                   {activeChatGroups.map((group, groupIndex) =>
                     renderChatGroup(group, `cwd-chats-list-${groupIndex}`)
-                  )}
-                  {hasMoreChats && chatPageLoadState !== 'error' && (
-                    <div className="chat-list-section__sentinel" ref={chatLoadTriggerRef}>
-                      <span className="sr-only">Load more chats</span>
-                    </div>
-                  )}
-                  {chatPageLoadState === 'error' && (
-                    <Button
-                      theme="secondary"
-                      fill
-                      callback={() => void loadMoreChats()}
-                      label="Retry loading chats"
-                    />
                   )}
                   {doneChatGroup && renderChatGroup(doneChatGroup, 'cwd-chats-list-done')}
                 </div>

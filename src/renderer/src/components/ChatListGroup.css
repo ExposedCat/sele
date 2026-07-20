@@ -94,9 +94,11 @@
 .chat-list-group__items .chat-list {
   gap: 10px;
 }
+
+.chat-list-group__more {
+  display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 6px;
-  flex-direction: column;
-  gap: 6px;
-  flex-direction: column;
-  gap: 6px;
+  padding-top: 2px;
+}

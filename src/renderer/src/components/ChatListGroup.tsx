@@ -1,4 +1,4 @@
-import { CheckCheck, PinOff, SquarePen } from 'lucide-react'
+import { CheckCheck, ChevronDown, ChevronUp, PinOff, SquarePen } from 'lucide-react'
 import type { ProviderApprovalDecision, ProviderChat } from '../../../shared/provider'
 import { Button } from './Button'
 import { ChatList } from './ChatList'
@@ -18,6 +18,10 @@ type ChatListGroupProps = {
   group: ChatListGroupData
   open: boolean
   selectedChatKey: string | null
+  visibleChatCount?: number
+  chatPageSize?: number
+  onLoadMoreChats?: (group: ChatListGroupData) => void
+  onShowLessChats?: (group: ChatListGroupData) => void
   onMarkChatDone: (chat: ProviderChat) => void
   onMarkCwdChatsDone: (group: ChatListGroupData) => void
   onNewChatInCwd: (group: ChatListGroupData) => void
@@ -34,6 +38,10 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
   group,
   open,
   selectedChatKey,
+  visibleChatCount = group.chats.length,
+  chatPageSize = 20,
+  onLoadMoreChats,
+  onShowLessChats,
   onMarkChatDone,
   onMarkCwdChatsDone,
   onNewChatInCwd,
@@ -44,6 +52,13 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
   onUnpinPinnedChats,
   resolvingApprovalId = null
 }) => {
+  const visibleChats = group.chats.slice(0, visibleChatCount)
+  const remainingChatCount = Math.max(0, group.chats.length - visibleChats.length)
+  const nextChatCount = Math.min(chatPageSize, remainingChatCount)
+  const canShowLessChats = visibleChatCount > chatPageSize
+  const showChatPaginationActions =
+    (remainingChatCount > 0 && onLoadMoreChats) || (canShowLessChats && onShowLessChats)
+
   return (
     <section
       className={`chat-list-group chat-list-group--${group.kind}${open ? ' chat-list-group--open' : ''}`}
@@ -97,7 +112,7 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
         <blockquote className="chat-list-group__items" id={contentId}>
           <ChatList
             ariaLabel={`${group.label} chats`}
-            chats={group.chats}
+            chats={visibleChats}
             selectedChatKey={selectedChatKey}
             showProjects={group.kind === 'pinned' || group.kind === 'done'}
             onMarkDone={onMarkChatDone}
@@ -106,6 +121,34 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
             onTogglePinned={onToggleChatPinned}
             resolvingApprovalId={resolvingApprovalId}
           />
+          {showChatPaginationActions && (
+            <div className="chat-list-group__more">
+              {canShowLessChats && onShowLessChats && (
+                <Button
+                  theme="secondary"
+                  size="small"
+                  fill
+                  aria-label={`Show fewer ${group.label} chats`}
+                  title="Show less"
+                  callback={() => onShowLessChats(group)}
+                  icon={<ChevronUp aria-hidden="true" />}
+                  label="Show less"
+                />
+              )}
+              {remainingChatCount > 0 && onLoadMoreChats && (
+                <Button
+                  theme="secondary"
+                  size="small"
+                  fill
+                  aria-label={`Load next ${nextChatCount} ${group.label} chats`}
+                  title={`Load next ${nextChatCount} chats`}
+                  callback={() => onLoadMoreChats(group)}
+                  icon={<ChevronDown aria-hidden="true" />}
+                  label={`Load next ${nextChatCount}`}
+                />
+              )}
+            </div>
+          )}
         </blockquote>
       )}
     </section>

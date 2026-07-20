@@ -83,6 +83,15 @@ export type AppGitDiffResult = {
   diff: string
 }
 
+export type AppGitUncommittedPatchChangesOptions = {
+  cwd?: string | null
+  patches: AppGitPatchChange[]
+}
+
+export type AppGitUncommittedPatchChangesResult = {
+  patches: AppGitPatchChange[]
+}
+
 export type AppGitCommitResult = {
   commitHash: string
   pushed: boolean
@@ -139,6 +148,9 @@ export type AppApi = {
     options?: AppGitRecentCommitMessagesOptions
   ) => Promise<AppGitRecentCommitMessagesResult>
   getUncommittedGitDiff: (options?: AppGitDiffOptions) => Promise<AppGitDiffResult>
+  getUncommittedGitPatchChanges: (
+    options: AppGitUncommittedPatchChangesOptions
+  ) => Promise<AppGitUncommittedPatchChangesResult>
   commitGitChanges: (options: AppGitCommitOptions) => Promise<AppGitCommitResult>
   pullGitChanges: (options?: AppGitPullOptions) => Promise<AppGitPullResult>
   pushGitChanges: (options?: AppGitPushOptions) => Promise<AppGitPushResult>
@@ -160,6 +172,7 @@ export const appIpcChannels = {
   getFileTree: 'app:get-file-tree',
   getRecentGitCommitMessages: 'app:get-recent-git-commit-messages',
   getUncommittedGitDiff: 'app:get-uncommitted-git-diff',
+  getUncommittedGitPatchChanges: 'app:get-uncommitted-git-patch-changes',
   commitGitChanges: 'app:commit-git-changes',
   pullGitChanges: 'app:pull-git-changes',
   pushGitChanges: 'app:push-git-changes',
