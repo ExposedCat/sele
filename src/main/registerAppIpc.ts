@@ -939,7 +939,15 @@ const commitGitChanges = async (
   if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
 
   if (patches && patches.length > 0) {
-    await commitGitPatchChanges(repositoryRoot, patches, message, action)
+    const { patches: uncommittedPatches } = await getUncommittedGitPatchChanges(
+      repositoryRoot,
+      patches
+    )
+    if (uncommittedPatches.length === 0) {
+      throw new Error('No selected patch changes are still uncommitted')
+    }
+
+    await commitGitPatchChanges(repositoryRoot, uncommittedPatches, message, action)
     const commitHash = await runGit(repositoryRoot, ['rev-parse', 'HEAD'], true)
     if (!commitHash) throw new Error('Unable to read commit hash')
 
