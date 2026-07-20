@@ -271,6 +271,27 @@
   line-height: 1.4;
 }
 
+.changes-sidebar__git-state {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  place-items: center;
+  padding: 28px;
+  color: color-mix(in srgb, var(--quiet) 52%, transparent);
+}
+
+.changes-sidebar__git-state-icon {
+  width: 72px;
+  height: 72px;
+  stroke-width: 1.35;
+}
+
+.changes-sidebar__git-state-icon > svg {
+  width: 72px;
+  height: 72px;
+  stroke-width: 1.35;
+}
+
 .changes-sidebar__empty-icon {
   width: 68px;
   height: 68px;

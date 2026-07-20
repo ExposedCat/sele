@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import {
   DownloadIcon as AnimatedDownloadIcon,
+  GitBranchIcon as AnimatedGitBranchIcon,
   GitCommitHorizontalIcon as AnimatedGitCommitHorizontalIcon,
   RefreshCwIcon as AnimatedRefreshCwIcon,
   SparklesIcon as AnimatedSparklesIcon,
@@ -369,7 +370,8 @@ const ChangesAnimatedIcon: React.FC<{
   Icon: AnimatedIconComponent
   active: boolean
   className?: string
-}> = ({ Icon, active, className }) => {
+  size?: number
+}> = ({ Icon, active, className, size = 20 }) => {
   const iconRef = useRef<AnimatedIconHandle | null>(null)
 
   useEffect(() => {
@@ -393,12 +395,31 @@ const ChangesAnimatedIcon: React.FC<{
     <Icon
       ref={iconRef}
       className={['changes-sidebar__animated-icon', className].filter(Boolean).join(' ')}
-      size={20}
+      size={size}
       animateOnHover={false}
       aria-hidden="true"
     />
   )
 }
+
+const ChangesSidebarGitState: React.FC<{ active: boolean; label: string }> = ({
+  active,
+  label
+}) => (
+  <div className="changes-sidebar__git-state" role="status">
+    {active ? (
+      <ChangesAnimatedIcon
+        Icon={AnimatedGitBranchIcon}
+        active
+        className="changes-sidebar__git-state-icon"
+        size={72}
+      />
+    ) : (
+      <GitBranch className="changes-sidebar__git-state-icon" aria-hidden="true" />
+    )}
+    <span className="sr-only">{label}</span>
+  </div>
+)
 
 const GitSyncCountsLabel: React.FC<{
   active: boolean
@@ -4043,13 +4064,13 @@ export const App: React.FC = () => {
                 {changesPaneView === 'git' ? (
                   <>
                     {visibleChangesLoadState === 'loading' && (
-                      <p className="changes-sidebar__status">Loading changes...</p>
+                      <ChangesSidebarGitState active label="Loading changes" />
                     )}
                     {visibleChangesLoadState === 'error' && (
                       <p className="changes-sidebar__status">Unable to load changes.</p>
                     )}
                     {visibleChangesLoadState === 'ready' && changedFiles.length === 0 && (
-                      <p className="changes-sidebar__status">{changesEmptyMessage}</p>
+                      <ChangesSidebarGitState active={false} label={changesEmptyMessage} />
                     )}
                     {visibleChangesLoadState === 'ready' && changedFiles.length > 0 && (
                       <ul className="changes-sidebar__tree" role="tree">
