@@ -847,6 +847,9 @@ const getUncommittedGitPatchChanges = async (
   const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
   if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
 
+  const status = await runGit(repositoryRoot, ['status', '--porcelain=v1', '-z'], true)
+  if (!status) return { patches: [] }
+
   const tempDirectory = await mkdtemp(join(tmpdir(), 'sele-git-index-'))
   const worktreeIndexPath = join(tempDirectory, 'worktree.index')
 
