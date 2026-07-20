@@ -2357,6 +2357,21 @@ export const App: React.FC = () => {
     })
   }
 
+  const handleLoadMoreChatsInGroup = (group: ChatListGroupData): void => {
+    setVisibleChatCountsByGroup((currentCounts) => ({
+      ...currentCounts,
+      [group.key]: (currentCounts[group.key] ?? chatPageSize) + chatPageSize
+    }))
+  }
+
+  const handleShowLessChatsInGroup = (group: ChatListGroupData): void => {
+    setVisibleChatCountsByGroup((currentCounts) => {
+      const nextCounts = { ...currentCounts }
+      delete nextCounts[group.key]
+      return nextCounts
+    })
+  }
+
   const handleSelectChat = (chat: ProviderChat): void => {
     const selectingCurrentChat =
       selectedChat?.providerId === chat.providerId && selectedChat.id === chat.id
@@ -2963,6 +2978,7 @@ export const App: React.FC = () => {
     gitChangeLoadScope,
     changesCwd,
     currentGitChangeSource
+        onShowLessChats={handleShowLessChatsInGroup}
   )
   const changesLoadState =
     changeSource === 'chat' || changeSource === 'lastTurn' || !changesCwd
