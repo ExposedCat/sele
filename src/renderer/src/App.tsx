@@ -1,4 +1,14 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type ForwardRefExoticComponent,
+  type HTMLAttributes,
+  type RefAttributes,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import {
   ArrowLeft,
   BellOff,
@@ -23,7 +33,14 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import { RefreshCwIcon as AnimatedRefreshCwIcon, type RefreshCwIconHandle } from 'lucide-animated'
+import {
+  DownloadIcon as AnimatedDownloadIcon,
+  GitCommitHorizontalIcon as AnimatedGitCommitHorizontalIcon,
+  RefreshCwIcon as AnimatedRefreshCwIcon,
+  SparklesIcon as AnimatedSparklesIcon,
+  UploadIcon as AnimatedUploadIcon,
+  type RefreshCwIconHandle
+} from 'lucide-animated'
 import {
   FileIcon as SymbolsFileIcon,
   FolderIcon as SymbolsFolderIcon
@@ -109,6 +126,16 @@ type ProviderUpdatePreference = {
   ignoredVersions: string[]
 }
 type ProviderUpdatePreferences = Partial<Record<ProviderId, ProviderUpdatePreference>>
+type AnimatedIconHandle = {
+  startAnimation: () => void
+  stopAnimation: () => void
+}
+type AnimatedIconComponent = ForwardRefExoticComponent<
+  HTMLAttributes<HTMLDivElement> & {
+    size?: number
+    animateOnHover?: boolean
+  } & RefAttributes<AnimatedIconHandle>
+>
 type ChangeSource = 'chat' | 'lastTurn' | 'uncommitted'
 type GitChangeSource = Exclude<ChangeSource, 'chat' | 'lastTurn'>
 type ChangesPaneView = 'git' | 'files'
@@ -329,10 +356,46 @@ const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
   )
 }
 
-const GitSyncCountsLabel: React.FC<{ unpulledCount: number; unpushedCount: number }> = ({
-  unpulledCount,
-  unpushedCount
-}) => {
+const ChangesAnimatedIcon: React.FC<{
+  Icon: AnimatedIconComponent
+  active: boolean
+  className?: string
+}> = ({ Icon, active, className }) => {
+  const iconRef = useRef<AnimatedIconHandle | null>(null)
+
+  useEffect(() => {
+    const icon = iconRef.current
+
+    if (!active) {
+      icon?.stopAnimation()
+      return undefined
+    }
+
+    icon?.startAnimation()
+    const interval = window.setInterval(() => icon?.startAnimation(), refreshIconReplayMs)
+
+    return () => {
+      window.clearInterval(interval)
+      icon?.stopAnimation()
+    }
+  }, [active])
+
+  return (
+    <Icon
+      ref={iconRef}
+      className={['changes-sidebar__animated-icon', className].filter(Boolean).join(' ')}
+      size={20}
+      animateOnHover={false}
+      aria-hidden="true"
+    />
+  )
+}
+
+const GitSyncCountsLabel: React.FC<{
+  active: boolean
+  unpulledCount: number
+  unpushedCount: number
+}> = ({ active, unpulledCount, unpushedCount }) => {
   const showPull = unpulledCount > 0
   const showPush = unpushedCount > 0
 
@@ -340,7 +403,15 @@ const GitSyncCountsLabel: React.FC<{ unpulledCount: number; unpushedCount: numbe
     <span className="changes-sidebar__sync-label">
       {showPull && (
         <span className="changes-sidebar__sync-label-segment">
-          <Download className="changes-sidebar__sync-label-icon" aria-hidden="true" />
+          {active ? (
+            <ChangesAnimatedIcon
+              Icon={AnimatedDownloadIcon}
+              active={active}
+              className="changes-sidebar__sync-label-icon"
+            />
+          ) : (
+            <Download className="changes-sidebar__sync-label-icon" aria-hidden="true" />
+          )}
           <span>Pull</span>
           <span className="changes-sidebar__sync-label-count">{unpulledCount}</span>
         </span>
@@ -348,7 +419,15 @@ const GitSyncCountsLabel: React.FC<{ unpulledCount: number; unpushedCount: numbe
       {showPull && showPush && <span className="changes-sidebar__sync-label-separator">·</span>}
       {showPush && (
         <span className="changes-sidebar__sync-label-segment">
-          <Upload className="changes-sidebar__sync-label-icon" aria-hidden="true" />
+          {active ? (
+            <ChangesAnimatedIcon
+              Icon={AnimatedUploadIcon}
+              active={active}
+              className="changes-sidebar__sync-label-icon"
+            />
+          ) : (
+            <Upload className="changes-sidebar__sync-label-icon" aria-hidden="true" />
+          )}
           <span>Push</span>
           <span className="changes-sidebar__sync-label-count">{unpushedCount}</span>
         </span>
@@ -3868,7 +3947,10 @@ export const App: React.FC = () => {
                     <Input
                       type="text"
                       value={commitInput}
-                      placeholder="Commit message"
+                      placeholder={
+                        commitNameState === 'sending' ? 'Generating message...' : 'Commit message'
+                      }
+                      disabled={commitNameState === 'sending'}
                       onChange={(event) => {
                         setCommitState('idle')
                         setCommitError(null)
@@ -3888,7 +3970,13 @@ export const App: React.FC = () => {
                     title={generateCommitNameTitle}
                     disabled={generateCommitNameDisabled}
                     callback={() => void handleGenerateCommitName()}
-                    icon={<Sparkles aria-hidden="true" />}
+                    icon={
+                      commitNameState === 'sending' ? (
+                        <ChangesAnimatedIcon Icon={AnimatedSparklesIcon} active />
+                      ) : (
+                        <Sparkles aria-hidden="true" />
+                      )
+                    }
                     label={<span>AI</span>}
                     theme="secondary"
                   />
@@ -3908,7 +3996,13 @@ export const App: React.FC = () => {
                     dropdownLabel="Commit actions"
                     dropdownMenuAlign="end"
                     dropdownPlacement="top"
-                    icon={<GitCommitHorizontal aria-hidden="true" />}
+                    icon={
+                      commitState === 'sending' ? (
+                        <ChangesAnimatedIcon Icon={AnimatedGitCommitHorizontalIcon} active />
+                      ) : (
+                        <GitCommitHorizontal aria-hidden="true" />
+                      )
+                    }
                     label={<span>{commitActionLabels.commit}</span>}
                     theme="primary"
                     fill
@@ -3926,6 +4020,7 @@ export const App: React.FC = () => {
                       dropdownPlacement="top"
                       label={
                         <GitSyncCountsLabel
+                          active={syncInProgress}
                           unpulledCount={unpulledCount}
                           unpushedCount={unpushedCount}
                         />

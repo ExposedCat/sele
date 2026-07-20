@@ -212,6 +212,18 @@
   place-items: center;
 }
 
+.changes-sidebar__animated-icon {
+  display: grid;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  place-items: center;
+}
+
+.changes-sidebar__animated-icon > svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
 .changes-sidebar__view-toggle {
   width: 100%;
 }
