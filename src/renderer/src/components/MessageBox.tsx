@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import {
   ArrowUp,
   BadgeCheck,
@@ -20,14 +20,18 @@ import type {
   ProviderActiveSendMode,
   ProviderApprovalMode,
   ProviderApprovalModeOption,
+  ProviderAccountUsage,
   ProviderModel,
   ProviderModelId,
   ProviderReasoningEffort,
   ProviderSandboxMode,
-  ProviderSandboxModeOption
+  ProviderSandboxModeOption,
+  ProviderUsageOptions
 } from '../../../shared/provider'
 import { Button } from './Button'
+import { DisclosureToggle } from './DisclosureToggle'
 import { Dropdown, type DropdownOption } from './Dropdown'
+import { SegmentedControl } from './SegmentedControl'
 import './MessageBox.css'
 
 type MessageBoxProps = {
@@ -45,18 +49,37 @@ type MessageBoxProps = {
   reasoningEffort: ProviderReasoningEffort
   sandboxMode: ProviderSandboxMode
   sandboxModes: ProviderSandboxModeOption[]
+  accountUsage: ProviderAccountUsage | null
+  accountUsageError: string | null
+  accountUsageState: 'idle' | 'loading' | 'ready' | 'error'
+  contextUsage: MessageBoxContextUsage
   onApprovalModeChange: (approvalMode: ProviderApprovalMode) => void
   onCancelEdit?: () => void
   onModelChange: (model: ProviderModelId) => void
   onReasoningEffortChange: (reasoningEffort: ProviderReasoningEffort) => void
   onSandboxModeChange: (sandboxMode: ProviderSandboxMode) => void
   onStop?: () => Promise<void> | void
+  onUsageRefresh?: (options?: ProviderUsageOptions) => Promise<void> | void
   onSend: (message: string, activeMode?: ProviderActiveSendMode) => Promise<void> | void
 }
+
+type MessageBoxContextUsage = {
+  source: 'exact' | 'estimated' | 'unavailable'
+  usedTokens: number | null
+  maxTokens: number | null
+}
+
+type UsagePopoverView = 'usage' | 'statistics'
+type AccountRateLimit = ProviderAccountUsage['rateLimits'][number]
 
 const minTextareaHeight = 44
 const maxTextareaHeight = 180
 const selectedControlIconClassName = 'message-box__selected-control-icon'
+const numberFormatter = new Intl.NumberFormat(undefined)
+const compactNumberFormatter = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 1,
+  notation: 'compact'
+})
 
 type ScrollSnapshot = {
   element: HTMLElement
@@ -115,7 +138,7 @@ const reasoningEffortLabels = {
 const approvalModeIcons = {
   'ask-user': <ShieldQuestionMark aria-hidden="true" />,
   'auto-review': <Sparkles aria-hidden="true" />,
-  never: <BadgeCheck className={selectedControlIconClassName} aria-hidden="true" />
+  never: <BadgeCheck aria-hidden="true" />
 } satisfies Record<ProviderApprovalMode, ReactNode>
 
 const sandboxModeIcons = {
@@ -170,6 +193,95 @@ const formatOptionLabel = (value: string): string =>
     .map((word) => word.charAt(0).toLocaleUpperCase() + word.slice(1))
     .join(' ') || value
 
+const getNumberValue = (value: number | string | null | undefined): number | null => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
+
+  const numericValue = Number(value)
+  return Number.isSafeInteger(numericValue) ? numericValue : null
+}
+
+const formatTokenCount = (value: number | string | null | undefined): string => {
+  const numericValue = getNumberValue(value)
+  if (numericValue != null) {
+    if (numericValue >= 10_000) return compactNumberFormatter.format(numericValue)
+    return numberFormatter.format(numericValue)
+  }
+
+  return typeof value === 'string' && value
+    ? value.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+    : 'Unknown'
+}
+
+const formatPercent = (value: number): string => `${Math.round(value)}%`
+
+const clampPercent = (value: number): number => Math.min(Math.max(value, 0), 100)
+
+const getContextPercent = (contextUsage: MessageBoxContextUsage): number | null => {
+  if (contextUsage.usedTokens == null || contextUsage.maxTokens == null) return null
+  if (contextUsage.maxTokens <= 0) return null
+
+  return clampPercent((contextUsage.usedTokens / contextUsage.maxTokens) * 100)
+}
+
+const isMainRateLimit = (limit: AccountRateLimit): boolean =>
+  limit.id == null || limit.id === 'codex' || limit.label.toLocaleLowerCase() === 'codex'
+
+const formatWindowLabel = (windowMinutes: number | null): string => {
+  if (windowMinutes == null) return 'current window'
+  if (windowMinutes === 60) return 'hourly'
+  if (windowMinutes === 1_440) return 'daily'
+  if (windowMinutes === 10_080) return 'weekly'
+
+  if (windowMinutes % 10_080 === 0) {
+    const weeks = windowMinutes / 10_080
+    return weeks === 1 ? 'weekly' : `${weeks} weeks`
+  }
+
+  if (windowMinutes % 1_440 === 0) {
+    const days = windowMinutes / 1_440
+    return days === 1 ? 'daily' : `${days} days`
+  }
+
+  if (windowMinutes % 60 === 0) {
+    const hours = windowMinutes / 60
+    return hours === 1 ? 'hourly' : `${hours} hours`
+  }
+
+  return `${windowMinutes} min`
+}
+
+const formatResetTime = (resetsAt: number | null): string | null => {
+  if (!resetsAt) return null
+
+  const timestamp = resetsAt > 1_000_000_000_000 ? resetsAt : resetsAt * 1_000
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(timestamp))
+}
+
+const formatDurationSeconds = (value: string | null | undefined): string => {
+  const seconds = getNumberValue(value)
+  if (seconds == null) return 'Unknown'
+  if (seconds < 60) return `${numberFormatter.format(seconds)} sec`
+
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${numberFormatter.format(minutes)} min`
+
+  const hours = Math.round(minutes / 60)
+  return `${numberFormatter.format(hours)} hr`
+}
+
+const formatDayCount = (value: string | null | undefined): string => {
+  const days = getNumberValue(value)
+  if (days == null) return 'Unknown'
+
+  return days === 1 ? '1 day' : `${numberFormatter.format(days)} days`
+}
+
 export const MessageBox: React.FC<MessageBoxProps> = ({
   approvalMode,
   approvalModes,
@@ -179,6 +291,10 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   disabled = false,
   editSession = null,
   error = null,
+  accountUsage,
+  accountUsageError,
+  accountUsageState,
+  contextUsage,
   model,
   models,
   pending = false,
@@ -191,15 +307,23 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   onReasoningEffortChange,
   onSandboxModeChange,
   onStop,
+  onUsageRefresh,
   onSend
 }) => {
+  const usagePopoverId = useId().replace(/:/g, '')
   const [message, setMessage] = useState('')
+  const [usageOpen, setUsageOpen] = useState(false)
+  const [usageView, setUsageView] = useState<UsagePopoverView>('usage')
+  const [otherLimitsOpen, setOtherLimitsOpen] = useState(false)
   const editSessionIdRef = useRef<string | null>(null)
   const messageRef = useRef(message)
   const messageBeforeEditRef = useRef<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const usageControlRef = useRef<HTMLDivElement>(null)
   const editing = Boolean(editSession)
-  const selectedApprovalMode = approvalModes.find((mode) => mode.id === approvalMode)
+  const fullAccessSelected = sandboxMode === 'danger-full-access'
+  const effectiveApprovalMode = fullAccessSelected ? 'never' : approvalMode
+  const selectedApprovalMode = approvalModes.find((mode) => mode.id === effectiveApprovalMode)
   const approvalModeOptions = approvalModes.map((mode): DropdownOption<ProviderApprovalMode> => ({
     value: mode.id,
     label: mode.label,
@@ -208,15 +332,15 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
     icon: approvalModeIcons[mode.id]
   }))
   const displayedApprovalModeOptions = approvalModeOptions.some(
-    (option) => option.value === approvalMode
+    (option) => option.value === effectiveApprovalMode
   )
     ? approvalModeOptions
     : [
         ...approvalModeOptions,
         {
-          value: approvalMode,
-          label: formatOptionLabel(approvalMode),
-          icon: approvalModeIcons[approvalMode]
+          value: effectiveApprovalMode,
+          label: formatOptionLabel(effectiveApprovalMode),
+          icon: approvalModeIcons[effectiveApprovalMode]
         }
       ]
   const selectedSandboxMode = sandboxModes.find((mode) => mode.id === sandboxMode)
@@ -288,7 +412,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
     : formatModelLabel(selectedModel?.label ?? model)
   const selectedApprovalModeTitle = selectedApprovalMode?.description
     ? `${selectedApprovalMode.label}: ${selectedApprovalMode.description}`
-    : (selectedApprovalMode?.label ?? formatOptionLabel(approvalMode))
+    : (selectedApprovalMode?.label ?? formatOptionLabel(effectiveApprovalMode))
   const selectedSandboxModeTitle = selectedSandboxMode?.description
     ? `${selectedSandboxMode.label}: ${selectedSandboxMode.description}`
     : (selectedSandboxMode?.label ?? formatOptionLabel(sandboxMode))
@@ -300,6 +424,29 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   useEffect(() => {
     messageRef.current = message
   }, [message])
+
+  useEffect(() => {
+    if (!usageOpen) return
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (target instanceof Node && usageControlRef.current?.contains(target)) return
+
+      setUsageOpen(false)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setUsageOpen(false)
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [usageOpen])
 
   useEffect(() => {
     if (!editSession) {
@@ -405,7 +552,8 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
       : editing
         ? 'Save edit'
         : 'Send message'
-  const selectorsDisabled = !active && (pending || editing)
+  const selectorsDisabled = !active && pending
+  const approvalSelectorDisabled = selectorsDisabled || fullAccessSelected
   const activeDropdownActions = activeWithMessage
     ? [
         ...(activePrimaryMode === 'steer'
@@ -428,6 +576,68 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
         }
       ]
     : undefined
+  const contextPercent = getContextPercent(contextUsage)
+  const contextPercentLabel = contextPercent == null ? null : formatPercent(contextPercent)
+  const usageButtonLabel = contextPercentLabel
+    ? `Chat context ${contextPercentLabel} used`
+    : contextUsage.usedTokens
+      ? `Chat context ${formatTokenCount(contextUsage.usedTokens)} used`
+      : 'No chat context used'
+  const usageButtonStyle = {
+    '--message-box-usage-degrees': `${(contextPercent ?? 0) * 3.6}deg`
+  } as CSSProperties
+  const accountUsageErrors = accountUsage?.errors ?? []
+  const statisticsLoading =
+    usageView === 'statistics' && accountUsageState === 'loading' && !accountUsage?.statisticsLoaded
+  const statisticsLoadError =
+    usageView === 'statistics' && accountUsageState === 'error' && !accountUsage?.statisticsLoaded
+  const rateLimits = accountUsage?.rateLimits ?? []
+  const mainRateLimits = rateLimits.filter(isMainRateLimit)
+  const visibleRateLimits = mainRateLimits.length > 0 ? mainRateLimits : rateLimits.slice(0, 1)
+  const detailedRateLimits =
+    mainRateLimits.length > 0
+      ? rateLimits.filter((limit) => !isMainRateLimit(limit))
+      : rateLimits.slice(1)
+
+  const handleUsageToggle = (): void => {
+    const nextOpen = !usageOpen
+    setUsageOpen(nextOpen)
+    if (nextOpen) void onUsageRefresh?.({ includeStatistics: usageView === 'statistics' })
+  }
+
+  const handleUsageViewChange = (nextView: UsagePopoverView): void => {
+    setUsageView(nextView)
+    if (nextView === 'statistics' && !accountUsage?.statisticsLoaded) {
+      void onUsageRefresh?.({ includeStatistics: true })
+    }
+  }
+
+  const renderRateLimit = (limit: AccountRateLimit, key: string): ReactNode => {
+    const usedPercent = clampPercent(limit.usedPercent)
+    const resetTime = formatResetTime(limit.resetsAt)
+    const windowLabel = formatWindowLabel(limit.windowMinutes)
+    const limitLabel = `${limit.label} ${windowLabel}${
+      limit.kind === 'secondary' ? ' secondary' : ''
+    }`
+
+    return (
+      <div className="message-box__limit" key={key}>
+        <div className="message-box__usage-row">
+          <span>{limitLabel}</span>
+          <strong>{formatPercent(usedPercent)}</strong>
+        </div>
+        <div className="message-box__usage-meter" aria-hidden="true">
+          <span style={{ width: `${usedPercent}%` }} />
+        </div>
+        {resetTime && (
+          <div className="message-box__usage-row message-box__usage-row--muted">
+            <span>Resets</span>
+            <strong>{resetTime}</strong>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <form className="message-box" aria-busy={pending} onSubmit={handleSubmit}>
@@ -439,11 +649,11 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
       <label className="sr-only" htmlFor="message-input">
         Message
       </label>
-      <label className="sr-only" htmlFor="approval-mode">
-        Approval mode
-      </label>
       <label className="sr-only" htmlFor="sandbox-mode">
         Sandbox mode
+      </label>
+      <label className="sr-only" htmlFor="approval-mode">
+        Approval mode
       </label>
       <label className="sr-only" htmlFor="model-mode">
         Model
@@ -464,18 +674,6 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
         />
         <div className="message-box__controls">
           <div className="message-box__selectors">
-            <span className="message-box__select message-box__approval">
-              <Dropdown
-                id="approval-mode"
-                disabled={selectorsDisabled}
-                icon={approvalModeIcons[approvalMode]}
-                options={displayedApprovalModeOptions}
-                placement="top"
-                value={approvalMode}
-                title={selectedApprovalModeTitle}
-                onChange={onApprovalModeChange}
-              />
-            </span>
             <span className="message-box__select message-box__sandbox">
               <Dropdown
                 id="sandbox-mode"
@@ -486,6 +684,22 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 value={sandboxMode}
                 title={selectedSandboxModeTitle}
                 onChange={onSandboxModeChange}
+              />
+            </span>
+            <span className="message-box__select message-box__approval">
+              <Dropdown
+                id="approval-mode"
+                disabled={approvalSelectorDisabled}
+                icon={approvalModeIcons[effectiveApprovalMode]}
+                options={displayedApprovalModeOptions}
+                placement="top"
+                value={effectiveApprovalMode}
+                title={
+                  fullAccessSelected
+                    ? 'Full access runs without approval prompts.'
+                    : selectedApprovalModeTitle
+                }
+                onChange={onApprovalModeChange}
               />
             </span>
             <span className="message-box__select message-box__model">
@@ -522,6 +736,175 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 theme="secondary"
               />
             )}
+            <div className="message-box__usage-control" ref={usageControlRef}>
+              <button
+                type="button"
+                className={`message-box__usage-button${
+                  contextPercent == null ? ' message-box__usage-button--unknown' : ''
+                }`}
+                style={usageButtonStyle}
+                aria-label={usageButtonLabel}
+                aria-controls={`message-usage-${usagePopoverId}`}
+                aria-expanded={usageOpen}
+                title={usageButtonLabel}
+                onClick={handleUsageToggle}
+              >
+                <span className="message-box__usage-ring" aria-hidden="true" />
+              </button>
+              {usageOpen && (
+                <div
+                  className="message-box__usage-popover"
+                  id={`message-usage-${usagePopoverId}`}
+                  role="dialog"
+                  aria-label="Usage"
+                >
+                  <SegmentedControl
+                    aria-label="Usage views"
+                    className="message-box__usage-tabs"
+                    options={[
+                      { value: 'usage', label: 'Usage' },
+                      { value: 'statistics', label: 'Statistics' }
+                    ]}
+                    size="small"
+                    value={usageView}
+                    onChange={handleUsageViewChange}
+                  />
+
+                  {usageView === 'usage' ? (
+                    <div className="message-box__usage-page" role="tabpanel">
+                      <section className="message-box__usage-section">
+                        <div className="message-box__usage-row">
+                          <span>Context</span>
+                          <strong>
+                            {contextUsage.usedTokens == null || contextUsage.usedTokens === 0
+                              ? '0'
+                              : contextUsage.maxTokens
+                                ? `${formatTokenCount(
+                                    contextUsage.usedTokens
+                                  )} / ${formatTokenCount(contextUsage.maxTokens)}`
+                                : `${formatTokenCount(contextUsage.usedTokens)} ${
+                                    contextUsage.source === 'estimated' ? 'estimated' : 'used'
+                                  }`}
+                          </strong>
+                        </div>
+                        {contextPercentLabel && (
+                          <div className="message-box__usage-meter" aria-hidden="true">
+                            <span style={{ width: contextPercentLabel }} />
+                          </div>
+                        )}
+                      </section>
+
+                      <section className="message-box__usage-section">
+                        {accountUsageState === 'loading' && !accountUsage && (
+                          <p className="message-box__usage-status">Loading usage...</p>
+                        )}
+                        {accountUsageState === 'error' && !accountUsage && (
+                          <p className="message-box__usage-status">
+                            {accountUsageError ?? 'Usage unavailable.'}
+                          </p>
+                        )}
+                        {visibleRateLimits.map((limit, index) =>
+                          renderRateLimit(
+                            limit,
+                            `${limit.id ?? limit.label}:${limit.kind}:${index}`
+                          )
+                        )}
+                        {detailedRateLimits.length > 0 && (
+                          <div className="message-box__limits-details">
+                            <DisclosureToggle
+                              className="message-box__limits-toggle"
+                              open={otherLimitsOpen}
+                              aria-controls={`message-other-limits-${usagePopoverId}`}
+                              onClick={() => setOtherLimitsOpen((currentOpen) => !currentOpen)}
+                            >
+                              Other limits
+                            </DisclosureToggle>
+                            {otherLimitsOpen && (
+                              <div
+                                className="message-box__limits-details-body"
+                                id={`message-other-limits-${usagePopoverId}`}
+                              >
+                                {detailedRateLimits.map((limit, index) =>
+                                  renderRateLimit(
+                                    limit,
+                                    `detail:${limit.id ?? limit.label}:${limit.kind}:${index}`
+                                  )
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {accountUsage &&
+                          accountUsage.rateLimits.length === 0 &&
+                          accountUsageErrors.length === 0 && (
+                            <p className="message-box__usage-status">Usage unavailable.</p>
+                          )}
+                        {accountUsageErrors.map((usageError, index) => (
+                          <p className="message-box__usage-status" key={`${usageError}:${index}`}>
+                            {usageError}
+                          </p>
+                        ))}
+                      </section>
+                    </div>
+                  ) : (
+                    <div className="message-box__usage-page" role="tabpanel">
+                      <section className="message-box__usage-section">
+                        {statisticsLoading && (
+                          <p className="message-box__usage-status">Loading statistics...</p>
+                        )}
+                        {statisticsLoadError && (
+                          <p className="message-box__usage-status">
+                            {accountUsageError ?? 'Usage unavailable.'}
+                          </p>
+                        )}
+                        {accountUsage?.statisticsLoaded && accountUsage.summary && (
+                          <>
+                            <div className="message-box__usage-row">
+                              <span>Lifetime tokens</span>
+                              <strong>
+                                {formatTokenCount(accountUsage.summary.lifetimeTokens)}
+                              </strong>
+                            </div>
+                            <div className="message-box__usage-row">
+                              <span>Peak day</span>
+                              <strong>
+                                {formatTokenCount(accountUsage.summary.peakDailyTokens)}
+                              </strong>
+                            </div>
+                            <div className="message-box__usage-row">
+                              <span>Longest turn</span>
+                              <strong>
+                                {formatDurationSeconds(accountUsage.summary.longestRunningTurnSec)}
+                              </strong>
+                            </div>
+                            <div className="message-box__usage-row">
+                              <span>Current streak</span>
+                              <strong>
+                                {formatDayCount(accountUsage.summary.currentStreakDays)}
+                              </strong>
+                            </div>
+                            <div className="message-box__usage-row">
+                              <span>Longest streak</span>
+                              <strong>
+                                {formatDayCount(accountUsage.summary.longestStreakDays)}
+                              </strong>
+                            </div>
+                          </>
+                        )}
+                        {accountUsage?.statisticsLoaded && !accountUsage.summary && (
+                          <p className="message-box__usage-status">Statistics unavailable.</p>
+                        )}
+                        {accountUsageErrors.map((usageError, index) => (
+                          <p className="message-box__usage-status" key={`${usageError}:${index}`}>
+                            {usageError}
+                          </p>
+                        ))}
+                      </section>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <Button
               aria-label={buttonLabel}
               title={buttonLabel}

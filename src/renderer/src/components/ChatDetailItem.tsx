@@ -163,11 +163,12 @@ const activeLabelReplacements: Array<[RegExp, string]> = [
   [/^Created\b/, 'Creating'],
   [/^Deleted\b/, 'Deleting'],
   [/^Applied\b/, 'Applying'],
-  [/^Updated\b/, 'Updating']
+  [/^Updated\b/, 'Updating'],
+  [/^Generated\b/, 'Generating']
 ]
 
 const finishedLabelPrefixes =
-  /^(Read|Searched|Checked|Viewed|Ran|Used|Changed|Created|Deleted|Applied|Updated)\b/
+  /^(Read|Searched|Checked|Viewed|Ran|Used|Changed|Created|Deleted|Applied|Updated|Generated)\b/
 
 const getActiveToolLabel = (label: string, activity: ProviderToolActivity): string => {
   for (const [pattern, replacement] of activeLabelReplacements) {
@@ -726,6 +727,14 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
     const timeout = window.setTimeout(() => setCopied(false), 1_200)
     return () => window.clearTimeout(timeout)
   }, [copied])
+
+  if (item.type === 'contextCompaction') {
+    return (
+      <div className="chat-detail__context-compaction">
+        <span>Context Compacted Automatically</span>
+      </div>
+    )
+  }
 
   if (item.type === 'message' || item.type === 'pendingMessage') {
     const pending = item.type === 'pendingMessage'

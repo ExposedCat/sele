@@ -4,13 +4,15 @@ import type {
   ProviderChatDetail,
   ProviderChatMetadata,
   ProviderChatUpdatedEvent,
-  ProviderId
+  ProviderId,
+  ProviderUsageOptions
 } from '../../shared/provider'
 import {
   getChatMetadata,
   getChatMetadataByIds,
   setChatDone,
   setChatPinned,
+  setChatSeen,
   setChatsDone
 } from '../database/chat'
 import { CodexProviderAdapter } from './codex/CodexProviderAdapter'
@@ -34,7 +36,8 @@ const applyMetadataToChat = (
 ): ProviderChat => ({
   ...chat,
   pinned: metadata?.pinned ?? false,
-  done: metadata?.done ?? false
+  done: metadata?.done ?? false,
+  seenUpdatedAt: metadata?.seenUpdatedAt ?? null
 })
 
 const applyMetadataToChats = async (chats: ProviderChat[]): Promise<ProviderChat[]> => {
@@ -64,7 +67,8 @@ const applyMetadataToDetail = async (detail: ProviderChatDetail): Promise<Provid
     projectCwd: cwdMetadata.projectCwd,
     branchName: cwdMetadata.branchName,
     pinned: metadata.pinned,
-    done: metadata.done
+    done: metadata.done,
+    seenUpdatedAt: metadata.seenUpdatedAt
   }
 }
 
@@ -118,6 +122,7 @@ export const providerApi: ProviderApi = {
   getApprovalModes: (providerId) => adapters[providerId].getApprovalModes(),
   getSandboxModes: (providerId) => adapters[providerId].getSandboxModes(),
   getModels: (providerId) => adapters[providerId].getModels(),
+  getUsage: (providerId, options?: ProviderUsageOptions) => adapters[providerId].getUsage(options),
   getChats: async (providerId, options) => {
     const page = await adapters[providerId].getChats(options)
     return {
@@ -127,6 +132,8 @@ export const providerApi: ProviderApi = {
   },
   getChat: async (providerId, chatId) =>
     applyMetadataToDetail(await adapters[providerId].getChat(chatId)),
+  generateOneShot: (providerId, message, options) =>
+    adapters[providerId].generateOneShot(message, options),
   startChat: async (providerId, message, options) =>
     applyMetadataToDetail(await adapters[providerId].startChat(message, options)),
   continueChat: (providerId, chatId, message, options) =>
@@ -162,6 +169,7 @@ export const providerApi: ProviderApi = {
   markChatDone: (_providerId, chatId) => setChatDone(chatId, true),
   markCwdChatsDone: async (providerId, cwd) =>
     setChatsDone(await collectProviderChatIdsByCwd(providerId, cwd), true),
+  markChatSeen: (_providerId, chatId, seenUpdatedAt) => setChatSeen(chatId, seenUpdatedAt),
   setChatPinned: (_providerId, chatId, pinned) => setChatPinned(chatId, pinned),
   onChatUpdated: (listener) => {
     chatUpdatedListeners.add(listener)

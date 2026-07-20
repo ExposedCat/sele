@@ -1,7 +1,8 @@
-import { CheckCheck, ChevronRight, PinOff, SquarePen } from 'lucide-react'
-import type { ProviderChat } from '../../../shared/provider'
+import { CheckCheck, PinOff, SquarePen } from 'lucide-react'
+import type { ProviderApprovalDecision, ProviderChat } from '../../../shared/provider'
 import { Button } from './Button'
 import { ChatList } from './ChatList'
+import { DisclosureToggle } from './DisclosureToggle'
 import './ChatListGroup.css'
 
 export type ChatListGroupData = {
@@ -20,10 +21,12 @@ type ChatListGroupProps = {
   onMarkChatDone: (chat: ProviderChat) => void
   onMarkCwdChatsDone: (group: ChatListGroupData) => void
   onNewChatInCwd: (group: ChatListGroupData) => void
+  onResolveApproval: (chat: ProviderChat, decision: ProviderApprovalDecision) => void
   onSelectChat: (chat: ProviderChat) => void
   onToggle: (groupKey: string) => void
   onToggleChatPinned: (chat: ProviderChat) => void
   onUnpinPinnedChats: (group: ChatListGroupData) => void
+  resolvingApprovalId?: string | null
 }
 
 export const ChatListGroup: React.FC<ChatListGroupProps> = ({
@@ -34,10 +37,12 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
   onMarkChatDone,
   onMarkCwdChatsDone,
   onNewChatInCwd,
+  onResolveApproval,
   onSelectChat,
   onToggle,
   onToggleChatPinned,
-  onUnpinPinnedChats
+  onUnpinPinnedChats,
+  resolvingApprovalId = null
 }) => {
   return (
     <section
@@ -45,17 +50,16 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
       aria-label={`${group.label} chats`}
     >
       <div className="chat-list-group__header">
-        <button
+        <DisclosureToggle
           className="chat-list-group__toggle"
-          type="button"
+          chevronClassName="chat-list-group__chevron"
           aria-controls={contentId}
-          aria-expanded={open}
+          open={open}
           title={group.cwd ?? group.label}
           onClick={() => onToggle(group.key)}
         >
-          <ChevronRight className="chat-list-group__chevron" aria-hidden="true" />
           <span className="chat-list-group__title">{group.label}</span>
-        </button>
+        </DisclosureToggle>
         {group.kind === 'cwd' && (
           <span className="chat-list-group__action">
             <Button
@@ -97,8 +101,10 @@ export const ChatListGroup: React.FC<ChatListGroupProps> = ({
             selectedChatKey={selectedChatKey}
             showProjects={group.kind === 'pinned' || group.kind === 'done'}
             onMarkDone={onMarkChatDone}
+            onResolveApproval={onResolveApproval}
             onSelect={onSelectChat}
             onTogglePinned={onToggleChatPinned}
+            resolvingApprovalId={resolvingApprovalId}
           />
         </blockquote>
       )}

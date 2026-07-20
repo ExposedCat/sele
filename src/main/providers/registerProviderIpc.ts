@@ -5,7 +5,8 @@ import type {
   ProviderActiveSendMode,
   ProviderChatListOptions,
   ProviderId,
-  ProviderTurnOptions
+  ProviderTurnOptions,
+  ProviderUsageOptions
 } from '../../shared/provider'
 import {
   isProviderApprovalPolicy,
@@ -45,6 +46,14 @@ const requireBoolean = (value: unknown): boolean => {
   return value
 }
 
+const requireTimestamp = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error('Invalid timestamp')
+  }
+
+  return Math.floor(value)
+}
+
 const requireApprovalDecision = (value: unknown): ProviderApprovalDecision => {
   if (value !== 'allow' && value !== 'deny') throw new Error('Invalid approval decision')
   return value
@@ -76,6 +85,21 @@ const requireChatListOptions = (value: unknown): ProviderChatListOptions | undef
   return {
     cursor: cursor ?? null,
     limit: limit ?? null
+  }
+}
+
+const requireUsageOptions = (value: unknown): ProviderUsageOptions | undefined => {
+  if (value == null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid usage options')
+
+  const options = value as { includeStatistics?: unknown }
+  const includeStatistics = options.includeStatistics
+  if (includeStatistics != null && typeof includeStatistics !== 'boolean') {
+    throw new Error('Invalid usage statistics option')
+  }
+
+  return {
+    includeStatistics: includeStatistics ?? false
   }
 }
 
@@ -159,12 +183,26 @@ export const registerProviderIpc = (): void => {
     providerApi.getModels(requireProviderId(providerId))
   )
 
+  ipcMain.handle(providerIpcChannels.getUsage, (_, providerId: unknown, options: unknown) =>
+    providerApi.getUsage(requireProviderId(providerId), requireUsageOptions(options))
+  )
+
   ipcMain.handle(providerIpcChannels.getChats, (_, providerId: unknown, options: unknown) =>
     providerApi.getChats(requireProviderId(providerId), requireChatListOptions(options))
   )
 
   ipcMain.handle(providerIpcChannels.getChat, (_, providerId: unknown, chatId: unknown) =>
     providerApi.getChat(requireProviderId(providerId), requireChatId(chatId))
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.generateOneShot,
+    (_, providerId: unknown, message: unknown, options: unknown) =>
+      providerApi.generateOneShot(
+        requireProviderId(providerId),
+        requireMessage(message),
+        requireTurnOptions(options)
+      )
   )
 
   ipcMain.handle(
@@ -278,6 +316,16 @@ export const registerProviderIpc = (): void => {
 
   ipcMain.handle(providerIpcChannels.markCwdChatsDone, (_, providerId: unknown, cwd: unknown) =>
     providerApi.markCwdChatsDone(requireProviderId(providerId), requireOptionalCwd(cwd))
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.markChatSeen,
+    (_, providerId: unknown, chatId: unknown, seenUpdatedAt: unknown) =>
+      providerApi.markChatSeen(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        requireTimestamp(seenUpdatedAt)
+      )
   )
 
   ipcMain.handle(

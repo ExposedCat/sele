@@ -1,5 +1,15 @@
-import { Check, Folder, GitBranch, LoaderCircle, Pin, PinOff } from 'lucide-react'
-import type { ProviderChat } from '../../../shared/provider'
+import {
+  Check,
+  Folder,
+  GitBranch,
+  LoaderCircle,
+  Pin,
+  PinOff,
+  ShieldQuestionMark,
+  Target,
+  X
+} from 'lucide-react'
+import type { ProviderApprovalDecision, ProviderChat } from '../../../shared/provider'
 import { Button } from './Button'
 import './ChatListItem.css'
 
@@ -9,7 +19,9 @@ type ChatListItemProps = {
   showProject: boolean
   onClick: () => void
   onMarkDone: () => void
+  onResolveApproval: (decision: ProviderApprovalDecision) => void
   onTogglePinned: () => void
+  approvalDecisionInFlight?: ProviderApprovalDecision | null
 }
 
 const statusLabels = {
@@ -18,12 +30,9 @@ const statusLabels = {
   waitingOnApproval: 'Waiting for approval',
   waitingOnUserInput: 'Waiting for your input'
 } as const
+const finishedUnseenLabel = 'Finished since last viewed'
 
-const workingStatuses = new Set<NonNullable<ProviderChat['status']>>([
-  'active',
-  'waitingOnApproval',
-  'waitingOnUserInput'
-])
+const workingStatuses = new Set<NonNullable<ProviderChat['status']>>(['active'])
 
 const getLastPathPart = (path: string): string => {
   const parts = path.split(/[\\/]/).filter(Boolean)
@@ -35,13 +44,25 @@ const getChatProjectName = (cwd: string | null): string => {
   return normalizedCwd ? getLastPathPart(normalizedCwd) : 'Unknown cwd'
 }
 
+const getApprovalTarget = (approval: NonNullable<ProviderChat['pendingApproval']>): string => {
+  if (approval.command) return approval.command
+  if (approval.reason) return approval.reason
+  if (approval.cwd) return approval.cwd
+
+  return approval.type === 'fileChange'
+    ? 'File changes require approval'
+    : 'Command requires approval'
+}
+
 export const ChatListItem: React.FC<ChatListItemProps> = ({
   chat,
   selected,
   showProject,
   onClick,
   onMarkDone,
-  onTogglePinned
+  onResolveApproval,
+  onTogglePinned,
+  approvalDecisionInFlight = null
 }) => {
   const createdAt = new Date(chat.createdAt)
   const contextName = chat.branchName ?? getChatProjectName(chat.cwd)
@@ -54,11 +75,19 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
       ? `${chat.branchName ?? 'Git worktree'}: ${chat.cwd}`
       : (chat.cwd ?? contextName)
   const workingStatus = chat.status && workingStatuses.has(chat.status) ? chat.status : null
-  const trailingStatus = chat.status && !workingStatus ? chat.status : null
+  const approvalStatus = chat.status === 'waitingOnApproval' ? chat.status : null
+  const trailingStatus = chat.status && !workingStatus && !approvalStatus ? chat.status : null
+  const pendingApproval = chat.pendingApproval
+  const approvalTarget = pendingApproval ? getApprovalTarget(pendingApproval) : null
+  const finishedUnseen =
+    !selected &&
+    !chat.done &&
+    chat.status === null &&
+    chat.updatedAt > (chat.seenUpdatedAt ?? chat.updatedAt)
 
   return (
     <article
-      className={`chat-list-item${chat.pinned ? ' chat-list-item--pinned' : ''}${selected ? ' chat-list-item--selected' : ''}`}
+      className={`chat-list-item${pendingApproval ? ' chat-list-item--approval' : ''}${chat.pinned ? ' chat-list-item--pinned' : ''}${selected ? ' chat-list-item--selected' : ''}`}
     >
       <button
         className="chat-list-item__main"
@@ -67,7 +96,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
         onClick={onClick}
       >
         <span className="chat-list-item__header">
-          {workingStatus && (
+          {workingStatus ? (
             <span
               className="chat-list-item__status-container chat-list-item__status-container--leading"
               title={statusLabels[workingStatus]}
@@ -77,6 +106,29 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
                 aria-label={statusLabels[workingStatus]}
               />
             </span>
+          ) : approvalStatus ? (
+            <span
+              className="chat-list-item__status-container chat-list-item__status-container--leading"
+              title={statusLabels[approvalStatus]}
+            >
+              <ShieldQuestionMark
+                className="chat-list-item__approval-icon"
+                aria-label={statusLabels[approvalStatus]}
+              />
+            </span>
+          ) : (
+            finishedUnseen && (
+              <span
+                className="chat-list-item__status-container chat-list-item__status-container--leading"
+                title={finishedUnseenLabel}
+              >
+                <span
+                  className="chat-list-item__status chat-list-item__status--finished-unseen"
+                  role="img"
+                  aria-label={finishedUnseenLabel}
+                />
+              </span>
+            )
           )}
           <span className="chat-list-item__title">{chat.title}</span>
           {trailingStatus && (
@@ -94,24 +146,58 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
             </span>
           )}
         </span>
-        <span className="chat-list-item__body">
-          <span
-            className={`chat-list-item__context${visibleProjectName ? ' chat-list-item__context--with-project' : ''}`}
-            title={contextTitle}
-          >
-            {visibleProjectName && (
-              <>
-                <span className="chat-list-item__project-category">{visibleProjectName}</span>
-                <span className="chat-list-item__separator">·</span>
-              </>
-            )}
-            <ProjectIcon className="chat-list-item__folder" aria-hidden="true" />
-            <span className="chat-list-item__project">{contextName}</span>
-            <span className="chat-list-item__separator">·</span>
-            <time dateTime={createdAt.toISOString()}>{createdAt.toLocaleDateString()}</time>
+        {!pendingApproval && (
+          <span className="chat-list-item__body">
+            <span
+              className={`chat-list-item__context${visibleProjectName ? ' chat-list-item__context--with-project' : ''}`}
+              title={contextTitle}
+            >
+              {visibleProjectName && (
+                <>
+                  <span className="chat-list-item__project-category">{visibleProjectName}</span>
+                  <span className="chat-list-item__separator">·</span>
+                </>
+              )}
+              <ProjectIcon className="chat-list-item__folder" aria-hidden="true" />
+              <span className="chat-list-item__project">{contextName}</span>
+              <span className="chat-list-item__separator">·</span>
+              <time dateTime={createdAt.toISOString()}>{createdAt.toLocaleDateString()}</time>
+            </span>
           </span>
-        </span>
+        )}
       </button>
+      {pendingApproval && approvalTarget && (
+        <div className="chat-list-item__approval-row">
+          <span className="chat-list-item__approval-target" title={approvalTarget}>
+            <Target className="chat-list-item__approval-target-icon" aria-hidden="true" />
+            <span className="chat-list-item__approval-target-text">{approvalTarget}</span>
+          </span>
+          <span
+            className="chat-list-item__approval-actions"
+            role="group"
+            aria-label="Approval actions"
+          >
+            <Button
+              aria-label={`Reject approval for ${chat.title}`}
+              callback={() => onResolveApproval('deny')}
+              disabled={Boolean(approvalDecisionInFlight)}
+              icon={<X aria-hidden="true" />}
+              size="small"
+              theme="secondary"
+              title="Reject"
+            />
+            <Button
+              aria-label={`Approve approval for ${chat.title}`}
+              callback={() => onResolveApproval('allow')}
+              disabled={Boolean(approvalDecisionInFlight)}
+              icon={<Check aria-hidden="true" />}
+              size="small"
+              theme="primary"
+              title="Approve"
+            />
+          </span>
+        </div>
+      )}
       <span className="chat-list-item__actions">
         {!chat.done && (
           <Button

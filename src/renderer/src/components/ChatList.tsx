@@ -1,4 +1,4 @@
-import type { ProviderChat } from '../../../shared/provider'
+import type { ProviderApprovalDecision, ProviderChat } from '../../../shared/provider'
 import { ChatListItem } from './ChatListItem'
 import './ChatList.css'
 
@@ -8,8 +8,10 @@ type ChatListProps = {
   selectedChatKey: string | null
   showProjects?: boolean
   onMarkDone: (chat: ProviderChat) => void
+  onResolveApproval: (chat: ProviderChat, decision: ProviderApprovalDecision) => void
   onSelect: (chat: ProviderChat) => void
   onTogglePinned: (chat: ProviderChat) => void
+  resolvingApprovalId?: string | null
 }
 
 const getChatKey = (chat: Pick<ProviderChat, 'providerId' | 'id'>): string =>
@@ -21,8 +23,10 @@ export const ChatList: React.FC<ChatListProps> = ({
   selectedChatKey,
   showProjects = false,
   onMarkDone,
+  onResolveApproval,
   onSelect,
-  onTogglePinned
+  onTogglePinned,
+  resolvingApprovalId = null
 }) => (
   <section className="chat-list" aria-label={ariaLabel}>
     {chats.map((chat) => {
@@ -34,8 +38,12 @@ export const ChatList: React.FC<ChatListProps> = ({
           chat={chat}
           selected={chatKey === selectedChatKey}
           showProject={showProjects}
+          approvalDecisionInFlight={
+            chat.pendingApproval && chat.pendingApproval.id === resolvingApprovalId ? 'allow' : null
+          }
           onMarkDone={() => onMarkDone(chat)}
           onClick={() => onSelect(chat)}
+          onResolveApproval={(decision) => onResolveApproval(chat, decision)}
           onTogglePinned={() => onTogglePinned(chat)}
         />
       )

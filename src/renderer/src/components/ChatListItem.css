@@ -29,6 +29,10 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.chat-list-item--approval .chat-list-item__main {
+  padding-bottom: 8px;
+}
+
 .chat-list-item__main:focus-visible {
   outline: 3px solid var(--focus-ring);
   outline-offset: -3px;
@@ -92,6 +96,14 @@
   animation: chat-list-item-spin 900ms linear infinite;
 }
 
+.chat-list-item__approval-icon {
+  width: 17px;
+  height: 17px;
+  color: var(--menu-option-check-color);
+  animation: chat-list-item-approval-pulse 1200ms ease-in-out infinite;
+  transform-origin: center;
+}
+
 .chat-list-item__status {
   width: 9px;
   height: 9px;
@@ -104,9 +116,34 @@
   background: var(--error);
 }
 
+.chat-list-item__status--waitingOnApproval {
+  background: var(--menu-option-check-color);
+}
+
+.chat-list-item__status--waitingOnUserInput {
+  background: var(--info);
+}
+
+.chat-list-item__status--finished-unseen {
+  background: var(--menu-option-check-color);
+}
+
 @keyframes chat-list-item-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes chat-list-item-approval-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.14);
   }
 }
 
@@ -157,6 +194,61 @@
 .chat-list-item__separator,
 .chat-list-item time {
   flex: none;
+}
+
+.chat-list-item__approval-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 12px 14px;
+}
+
+.chat-list-item__approval-target {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.chat-list-item__approval-target-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--menu-option-check-color);
+}
+
+.chat-list-item__approval-target-text {
+  min-width: 0;
+  overflow: hidden;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-list-item__approval-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-list-item__approval-actions .ui-button--small.ui-button--icon-only {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 7px;
+}
+
+.chat-list-item__approval-actions .ui-button__icon,
+.chat-list-item__approval-actions .ui-button__icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .chat-list-item__actions {

@@ -1,15 +1,22 @@
 import { execFile } from 'node:child_process'
-import { isAbsolute } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
 import type {
   AppColorScheme,
+  AppFileTreeFile,
+  AppFileTreeOptions,
   AppGitCommitAction,
   AppGitCommitOptions,
+  AppGitDiffOptions,
   AppGitChangeKind,
   AppGitChangesOptions,
   AppGitFileChange,
   AppGitChangeSource,
   AppGitPullStrategy,
+  AppGitPatchChange,
+  AppGitRecentCommitMessagesOptions,
   AppGitRecoverableFailure,
   AppWindowState
 } from '../shared/app'
@@ -43,21 +50,35 @@ type BranchBase = {
   commit: string
 }
 
-const runGit = (cwd: string, args: string[], required = false): Promise<string | null> =>
+type RunGitOptions = {
+  env?: NodeJS.ProcessEnv
+  input?: string
+  required?: boolean
+}
+
+const getRunGitOptions = (options: boolean | RunGitOptions): RunGitOptions =>
+  typeof options === 'boolean' ? { required: options } : options
+
+const runGit = (
+  cwd: string,
+  args: string[],
+  options: boolean | RunGitOptions = false
+): Promise<string | null> =>
   new Promise((resolve, reject) => {
-    execFile(
+    const runOptions = getRunGitOptions(options)
+    const child = execFile(
       'git',
       args,
       {
         cwd,
         encoding: 'utf8',
-        env: { ...process.env, GIT_MERGE_AUTOEDIT: 'no' },
+        env: { ...process.env, GIT_MERGE_AUTOEDIT: 'no', ...runOptions.env },
         maxBuffer: 10 * 1024 * 1024,
         timeout: 10_000
       },
       (error, stdout, stderr) => {
         if (error) {
-          if (required) {
+          if (runOptions.required) {
             const message = stderr.trim() || error.message
             reject(new Error(message))
           } else resolve(null)
@@ -67,6 +88,10 @@ const runGit = (cwd: string, args: string[], required = false): Promise<string |
         resolve(stdout.trimEnd())
       }
     )
+
+    if (runOptions.input != null) {
+      child.stdin?.end(runOptions.input)
+    }
   })
 
 const getGitErrorMessage = (error: unknown): string =>
@@ -146,12 +171,61 @@ const getGitChangesOptions = (value: unknown): AppGitChangesOptions => {
   }
 }
 
+const getFileTreeOptions = (value: unknown): AppFileTreeOptions => {
+  if (value == null) return {}
+  if (typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Invalid file tree options')
+
+  const options = value as { cwd?: unknown }
+
+  return {
+    cwd: getDefaultPath(options.cwd)
+  }
+}
+
+const isGitPatchChangeKind = (value: unknown): value is AppGitPatchChange['kind'] =>
+  value === 'edit' || value === 'create' || value === 'delete'
+
+const getGitPatchChanges = (value: unknown, errorMessage: string): AppGitPatchChange[] => {
+  if (!Array.isArray(value)) throw new Error(errorMessage)
+
+  return value.map((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(errorMessage)
+    }
+
+    const patch = candidate as Partial<AppGitPatchChange>
+    if (
+      typeof patch.path !== 'string' ||
+      patch.path.length === 0 ||
+      patch.path.includes('\0') ||
+      patch.path.includes('\n') ||
+      !isGitPatchChangeKind(patch.kind) ||
+      typeof patch.diff !== 'string'
+    ) {
+      throw new Error(errorMessage)
+    }
+
+    return {
+      path: patch.path,
+      kind: patch.kind,
+      diff: patch.diff
+    }
+  })
+}
+
 const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Invalid Git commit options')
   }
 
-  const options = value as { action?: unknown; cwd?: unknown; files?: unknown; message?: unknown }
+  const options = value as {
+    action?: unknown
+    cwd?: unknown
+    files?: unknown
+    message?: unknown
+    patches?: unknown
+  }
   const action = options.action === 'amend' ? options.action : 'commit'
   const message = typeof options.message === 'string' ? options.message.trim() : ''
 
@@ -163,11 +237,16 @@ const getGitCommitOptions = (value: unknown): AppGitCommitOptions => {
       options.files.filter((file): file is string => typeof file === 'string').map((file) => file)
     )
   ]
+  const patches =
+    options.patches == null
+      ? undefined
+      : getGitPatchChanges(options.patches, 'Invalid Git commit patches')
 
   return {
     action,
     cwd: getDefaultPath(options.cwd),
     files,
+    patches,
     message
   }
 }
@@ -194,6 +273,41 @@ const getGitSyncOptions = (
     cwd: getDefaultPath(options.cwd),
     rememberStrategy: Boolean(rememberStrategy),
     strategy: isGitPullStrategy(strategy) ? strategy : undefined
+  }
+}
+
+const getGitRecentCommitMessagesOptions = (value: unknown): AppGitRecentCommitMessagesOptions => {
+  if (value == null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Git commit history options')
+  }
+
+  const options = value as { cwd?: unknown; limit?: unknown }
+  const limit = options.limit
+
+  if (
+    limit != null &&
+    (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 20)
+  ) {
+    throw new Error('Invalid Git commit history limit')
+  }
+
+  return {
+    cwd: getDefaultPath(options.cwd),
+    limit: limit ?? null
+  }
+}
+
+const getGitDiffOptions = (value: unknown): AppGitDiffOptions => {
+  if (value == null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Git diff options')
+  }
+
+  const options = value as { cwd?: unknown }
+
+  return {
+    cwd: getDefaultPath(options.cwd)
   }
 }
 
@@ -372,6 +486,9 @@ const parsePorcelainChanges = (output: string): AppGitFileChange[] => {
   return changes
 }
 
+const parseGitPathList = (output: string): string[] =>
+  output.split('\0').filter((path) => path.length > 0)
+
 const getGitChanges = async (
   cwd: string,
   source: AppGitChangeSource
@@ -430,14 +547,280 @@ const getGitChanges = async (
   }
 }
 
+const getFileTree = async (
+  cwd: string
+): Promise<{
+  repositoryRoot: string
+  branchName: string | null
+  files: AppFileTreeFile[]
+}> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  const [branchName, fileOutput, statusOutput] = await Promise.all([
+    getCurrentBranchName(repositoryRoot),
+    runGit(repositoryRoot, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], true),
+    runGit(repositoryRoot, ['status', '--porcelain=v1', '--untracked-files=all', '-z'], true)
+  ])
+  const changesByPath = new Map(
+    parsePorcelainChanges(statusOutput ?? '').map((file) => [file.path, file])
+  )
+  const filesByPath = new Map<string, AppFileTreeFile>()
+
+  for (const path of parseGitPathList(fileOutput ?? '')) {
+    const change = changesByPath.get(path)
+    filesByPath.set(path, change ? { ...change } : { path })
+  }
+
+  for (const change of changesByPath.values()) {
+    if (!filesByPath.has(change.path)) filesByPath.set(change.path, { ...change })
+  }
+
+  return {
+    repositoryRoot,
+    branchName,
+    files: Array.from(filesByPath.values()).sort((firstFile, secondFile) =>
+      firstFile.path.localeCompare(secondFile.path)
+    )
+  }
+}
+
+const getRecentGitCommitMessages = async (
+  cwd: string,
+  limit = 3
+): Promise<{ messages: string[] }> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  const output = await runGit(repositoryRoot, ['log', `--max-count=${limit}`, '--format=%s'])
+
+  return {
+    messages:
+      output
+        ?.split('\n')
+        .map((message) => message.trim())
+        .filter(Boolean) ?? []
+  }
+}
+
+const normalizePatchPath = (repositoryRoot: string, path: string): string => {
+  const absolutePath = isAbsolute(path) ? path : resolve(repositoryRoot, path)
+  const relativePath = relative(repositoryRoot, absolutePath).replace(/\\/g, '/')
+
+  if (
+    !relativePath ||
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    isAbsolute(relativePath)
+  ) {
+    throw new Error(`Patch path is outside the repository: ${path}`)
+  }
+
+  return relativePath
+}
+
+const ensureTrailingNewline = (value: string): string =>
+  value.endsWith('\n') ? value : `${value}\n`
+
+const isFullUnifiedDiff = (diff: string): boolean => {
+  const trimmedDiff = diff.trimStart()
+  return trimmedDiff.startsWith('diff --git ') || trimmedDiff.startsWith('--- ')
+}
+
+const getUnifiedPatch = (change: AppGitPatchChange, path: string): string => {
+  if (isFullUnifiedDiff(change.diff)) return ensureTrailingNewline(change.diff)
+
+  const oldPath = change.kind === 'create' ? '/dev/null' : `a/${path}`
+  const newPath = change.kind === 'delete' ? '/dev/null' : `b/${path}`
+
+  return `diff --git a/${path} b/${path}\n--- ${oldPath}\n+++ ${newPath}\n${ensureTrailingNewline(change.diff)}`
+}
+
+const getTemporaryIndexEnv = (indexPath: string): NodeJS.ProcessEnv => ({
+  GIT_INDEX_FILE: indexPath
+})
+
+const initializeTemporaryIndex = async (
+  repositoryRoot: string,
+  indexPath: string
+): Promise<void> => {
+  const env = getTemporaryIndexEnv(indexPath)
+  const head = await runGit(repositoryRoot, ['rev-parse', '--verify', 'HEAD'])
+
+  await runGit(repositoryRoot, head ? ['read-tree', 'HEAD'] : ['read-tree', '--empty'], {
+    env,
+    required: true
+  })
+}
+
+const getUncommittedGitDiff = async (cwd: string): Promise<{ diff: string }> => {
+  const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
+  if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  const tempDirectory = await mkdtemp(join(tmpdir(), 'sele-git-index-'))
+  const indexPath = join(tempDirectory, 'index')
+  const env = getTemporaryIndexEnv(indexPath)
+
+  try {
+    await initializeTemporaryIndex(repositoryRoot, indexPath)
+    await runGit(repositoryRoot, ['add', '-A', '--', '.'], { env, required: true })
+
+    const diff = await runGit(
+      repositoryRoot,
+      ['diff', '--cached', '--binary', '--full-index', '--find-renames'],
+      { env, required: true }
+    )
+
+    return { diff: diff ?? '' }
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+const applyUnifiedPatchToIndex = async (
+  repositoryRoot: string,
+  indexPath: string,
+  patch: string
+): Promise<void> => {
+  const env = getTemporaryIndexEnv(indexPath)
+  const applyArgs = ['apply', '--cached', '--whitespace=nowarn', '--recount', '-C0']
+
+  try {
+    await runGit(repositoryRoot, applyArgs, { env, input: patch, required: true })
+  } catch (error) {
+    const reverseCheck = await runGit(repositoryRoot, [...applyArgs, '--reverse', '--check'], {
+      env,
+      input: patch
+    })
+
+    if (reverseCheck != null) return
+
+    throw error
+  }
+}
+
+const writeContentToIndex = async (
+  repositoryRoot: string,
+  indexPath: string,
+  path: string,
+  content: string
+): Promise<void> => {
+  const objectHash = await runGit(repositoryRoot, ['hash-object', '-w', '--stdin'], {
+    input: content,
+    required: true
+  })
+  if (!objectHash) throw new Error(`Unable to write patch content for ${path}`)
+
+  await runGit(
+    repositoryRoot,
+    ['update-index', '--add', '--cacheinfo', `100644,${objectHash},${path}`],
+    { env: getTemporaryIndexEnv(indexPath), required: true }
+  )
+}
+
+const removePathFromIndex = async (
+  repositoryRoot: string,
+  indexPath: string,
+  path: string
+): Promise<void> => {
+  await runGit(repositoryRoot, ['update-index', '--force-remove', '--', path], {
+    env: getTemporaryIndexEnv(indexPath),
+    required: true
+  })
+}
+
+const applyPatchChangeToIndex = async (
+  repositoryRoot: string,
+  indexPath: string,
+  change: AppGitPatchChange
+): Promise<string> => {
+  const path = normalizePatchPath(repositoryRoot, change.path)
+
+  if (change.kind === 'create' && !isFullUnifiedDiff(change.diff)) {
+    await writeContentToIndex(repositoryRoot, indexPath, path, change.diff)
+    return path
+  }
+
+  if (change.kind === 'delete' && !isFullUnifiedDiff(change.diff)) {
+    await removePathFromIndex(repositoryRoot, indexPath, path)
+    return path
+  }
+
+  await applyUnifiedPatchToIndex(repositoryRoot, indexPath, getUnifiedPatch(change, path))
+  return path
+}
+
+const getTemporaryIndexChangedPaths = async (
+  repositoryRoot: string,
+  indexPath: string
+): Promise<string[]> => {
+  const output = await runGit(repositoryRoot, ['diff', '--cached', '--name-only', '-z'], {
+    env: getTemporaryIndexEnv(indexPath),
+    required: true
+  })
+
+  return parseGitPathList(output ?? '')
+}
+
+const commitGitPatchChanges = async (
+  repositoryRoot: string,
+  patches: AppGitPatchChange[],
+  message: string | null | undefined,
+  action: AppGitCommitAction
+): Promise<void> => {
+  if (patches.length === 0) throw new Error('Patch changes are required')
+
+  const tempDirectory = await mkdtemp(join(tmpdir(), 'sele-git-index-'))
+  const indexPath = join(tempDirectory, 'index')
+
+  try {
+    await initializeTemporaryIndex(repositoryRoot, indexPath)
+
+    for (const patch of patches) {
+      await applyPatchChangeToIndex(repositoryRoot, indexPath, patch)
+    }
+
+    const changedPaths = await getTemporaryIndexChangedPaths(repositoryRoot, indexPath)
+    if (changedPaths.length === 0) throw new Error('No patch changes to commit')
+
+    if (action === 'amend') {
+      await runGit(repositoryRoot, ['commit', '--amend', '--no-edit'], {
+        env: getTemporaryIndexEnv(indexPath),
+        required: true
+      })
+    } else {
+      const commitMessage = message?.trim()
+      if (!commitMessage) throw new Error('Commit message is required')
+
+      await runGit(repositoryRoot, ['commit', '-m', commitMessage], {
+        env: getTemporaryIndexEnv(indexPath),
+        required: true
+      })
+    }
+
+    await runGit(repositoryRoot, ['reset', '-q', 'HEAD', '--', ...changedPaths], true)
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 const commitGitChanges = async (
   cwd: string,
   files: string[],
   message: string | null | undefined,
-  action: AppGitCommitAction
+  action: AppGitCommitAction,
+  patches?: AppGitPatchChange[]
 ): Promise<{ commitHash: string; pushed: boolean }> => {
   const repositoryRoot = await runGit(cwd, ['rev-parse', '--show-toplevel'], true)
   if (!repositoryRoot) throw new Error('Folder is not inside a Git repository')
+
+  if (patches && patches.length > 0) {
+    await commitGitPatchChanges(repositoryRoot, patches, message, action)
+    const commitHash = await runGit(repositoryRoot, ['rev-parse', 'HEAD'], true)
+    if (!commitHash) throw new Error('Unable to read commit hash')
+
+    return { commitHash, pushed: false }
+  }
 
   await runGit(repositoryRoot, ['add', '-A', '--', ...files], true)
 
@@ -572,13 +955,29 @@ export const registerAppIpc = (): void => {
     return getGitChanges(options.cwd ?? process.cwd(), options.source)
   })
 
+  ipcMain.handle(appIpcChannels.getFileTree, async (_event, value: unknown) => {
+    const options = getFileTreeOptions(value)
+    return getFileTree(options.cwd ?? process.cwd())
+  })
+
+  ipcMain.handle(appIpcChannels.getRecentGitCommitMessages, async (_event, value: unknown) => {
+    const options = getGitRecentCommitMessagesOptions(value)
+    return getRecentGitCommitMessages(options.cwd ?? process.cwd(), options.limit ?? 3)
+  })
+
+  ipcMain.handle(appIpcChannels.getUncommittedGitDiff, async (_event, value: unknown) => {
+    const options = getGitDiffOptions(value)
+    return getUncommittedGitDiff(options.cwd ?? process.cwd())
+  })
+
   ipcMain.handle(appIpcChannels.commitGitChanges, async (_event, value: unknown) => {
     const options = getGitCommitOptions(value)
     return commitGitChanges(
       options.cwd ?? process.cwd(),
       options.files,
       options.message,
-      options.action ?? 'commit'
+      options.action ?? 'commit',
+      options.patches
     )
   })
 

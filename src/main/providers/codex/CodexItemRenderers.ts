@@ -17,6 +17,7 @@ export type CodexUserInput =
 export type CodexThreadItem = {
   type: string
   id: string
+  clientId?: string | null
   content?: CodexUserInput[]
   text?: string
   phase?: 'commentary' | 'final_answer' | null
@@ -859,32 +860,75 @@ const renderTool = (
   raw: item.rawToolData ?? [item]
 })
 
-const openAiDocsSearchTools = new Set([
-  'search_openai_docs',
-  'mcp__openaiDeveloperDocs__search_openai_docs'
+type ToolPresentation = {
+  activity: ProviderToolActivity
+  label: string
+}
+
+const openAiDeveloperDocsToolNames = new Set(['search_openai_docs', 'fetch_openai_doc'])
+
+const isOpenAiDeveloperDocsToolName = (name: string | null | undefined): boolean =>
+  Boolean(
+    name &&
+    (openAiDeveloperDocsToolNames.has(name) ||
+      name.startsWith('openaiDeveloperDocs/') ||
+      name.startsWith('mcp__openaiDeveloperDocs__'))
+  )
+
+const exactToolPresentations = new Map<string, ToolPresentation>([
+  ['webSearch', { activity: 'search', label: 'Searched the web' }],
+  ['web_search', { activity: 'search', label: 'Searched the web' }],
+  ['imageView', { activity: 'other', label: 'Viewed image' }],
+  ['view_image', { activity: 'other', label: 'Viewed image' }],
+  ['imageGeneration', { activity: 'other', label: 'Generated image' }],
+  ['image_gen__imagegen', { activity: 'other', label: 'Generated image' }]
 ])
 
-const openAiDocsFetchTools = new Set([
-  'fetch_openai_doc',
-  'mcp__openaiDeveloperDocs__fetch_openai_doc'
-])
+const getToolNameCandidates = (item: CodexThreadItem): string[] => {
+  const names = [
+    item.customToolName,
+    item.server && item.tool ? `${item.server}/${item.tool}` : null,
+    item.namespace && item.tool ? `${item.namespace}/${item.tool}` : null,
+    item.tool,
+    item.type
+  ]
+
+  return [...new Set(names.filter((name): name is string => Boolean(name)))]
+}
+
+const getMappedToolPresentation = (item: CodexThreadItem): ToolPresentation | null => {
+  const names = getToolNameCandidates(item)
+
+  if (
+    item.server === 'openaiDeveloperDocs' ||
+    item.namespace === 'openaiDeveloperDocs' ||
+    names.some(isOpenAiDeveloperDocsToolName)
+  ) {
+    return { activity: 'other', label: 'Checked OpenAI docs' }
+  }
+
+  for (const name of names) {
+    const presentation = exactToolPresentations.get(name)
+    if (presentation) return presentation
+  }
+
+  return null
+}
+
+const renderMappedTool = (
+  item: CodexThreadItem,
+  toolId = getToolId(item)
+): WorkingItemRenderResult | null => {
+  const presentation = getMappedToolPresentation(item)
+  if (!presentation) return null
+
+  return renderTool(item, presentation.activity, presentation.label, null, null, [], toolId)
+}
 
 const getCustomToolArgument = (item: CodexThreadItem, key: string): string | null =>
   item.customToolName && item.customToolInput
     ? getToolStringArgument(item.customToolInput, item.customToolName, key)
     : null
-
-const formatOpenAiDocTarget = (url: string | null, anchor: string | null): string => {
-  if (!url) return 'OpenAI doc'
-
-  try {
-    const parsedUrl = new URL(url)
-    const page = parsedUrl.pathname.split('/').filter(Boolean).at(-1) ?? parsedUrl.hostname
-    return `${page}${anchor ? `#${anchor}` : parsedUrl.hash}`
-  } catch {
-    return `${getFileName(url)}${anchor ? `#${anchor}` : ''}`
-  }
-}
 
 const renderKnownCustomTool = (item: CodexThreadItem): WorkingItemRenderResult | null => {
   const name = item.customToolName
@@ -928,35 +972,7 @@ const renderKnownCustomTool = (item: CodexThreadItem): WorkingItemRenderResult |
     )
   }
 
-  if (openAiDocsSearchTools.has(name)) {
-    const query = getCustomToolArgument(item, 'query')
-    return renderTool(
-      item,
-      'search',
-      query ? `Searched OpenAI docs for ${truncate(query, 80)}` : 'Searched OpenAI docs',
-      item.customToolInput ?? null,
-      getToolStdout(item.customToolOutput),
-      [],
-      name
-    )
-  }
-
-  if (openAiDocsFetchTools.has(name)) {
-    const url = getCustomToolArgument(item, 'url')
-    const anchor = getCustomToolArgument(item, 'anchor')
-    return renderTool(
-      item,
-      'other',
-      `Read ${formatOpenAiDocTarget(url, anchor)} from OpenAI docs`,
-      null,
-      null,
-      [],
-      name,
-      getToolStdout(item.customToolOutput) ?? getRawToolOutput(item)
-    )
-  }
-
-  return null
+  return renderMappedTool(item, name)
 }
 
 const renderNestedToolCommand = (item: CodexThreadItem): WorkingItemRenderResult[] | null => {
@@ -1088,7 +1104,7 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
     render: (item) => {
       if (!item.tool) return null
       const name = item.server ? `${item.server}/${item.tool}` : item.tool
-      return renderTool(item, 'other', name, null, null, [], name)
+      return renderMappedTool(item, name) ?? renderTool(item, 'other', name, null, null, [], name)
     }
   },
   {
@@ -1096,27 +1112,20 @@ const workingItemRenderMatchers: WorkingItemRenderMatcher[] = [
     render: (item) => {
       if (!item.tool) return null
       const name = item.namespace ? `${item.namespace}/${item.tool}` : item.tool
-      return renderTool(item, 'other', name, null, null, [], name)
+      return renderMappedTool(item, name) ?? renderTool(item, 'other', name, null, null, [], name)
     }
   },
   {
     matches: (item) => item.type === 'collabAgentToolCall',
     render: (item) =>
-      item.tool ? renderTool(item, 'other', item.tool, null, null, [], item.tool) : null
+      item.tool
+        ? (renderMappedTool(item, item.tool) ??
+          renderTool(item, 'other', item.tool, null, null, [], item.tool))
+        : null
   },
   {
-    matches: (item) => item.type === 'webSearch',
-    render: (item) =>
-      item.query ? renderTool(item, 'other', 'webSearch', null, null, [], 'webSearch') : null
-  },
-  {
-    matches: (item) => item.type === 'imageView',
-    render: (item) => renderTool(item, 'other', 'imageView', null, null, [], 'imageView')
-  },
-  {
-    matches: (item) => item.type === 'imageGeneration',
-    render: (item) =>
-      renderTool(item, 'other', 'imageGeneration', null, null, [], 'imageGeneration')
+    matches: (item) => getMappedToolPresentation(item) !== null,
+    render: (item) => renderMappedTool(item)
   }
 ]
 
@@ -1202,6 +1211,19 @@ const hasUserMessageContent = (item: CodexThreadItem): boolean =>
   item.type === 'userMessage' &&
   Boolean(item.content?.map(getUserInputText).filter(Boolean).join('\n').trim())
 
+const isContextCompactionItem = (item: CodexThreadItem): boolean =>
+  item.type === 'contextCompaction' ||
+  item.type === 'context_compaction' ||
+  item.type === 'context_compacted'
+
+const isFinishedContextCompactionItem = (item: CodexThreadItem): boolean =>
+  isContextCompactionItem(item) && item.status !== 'running'
+
+const isFinishedTurn = (turn: CodexTurn): boolean =>
+  turn.status == null
+    ? typeof turn.completedAt === 'number'
+    : turn.status !== 'inProgress' && turn.status !== 'queued'
+
 const createAssistantMessage = (
   turn: CodexTurn,
   item: CodexThreadItem,
@@ -1229,6 +1251,7 @@ export const getChatItems = (
     let finalMessage: ProviderMessage | null = null
     const workingItems: ProviderWorkingItem[] = []
     let hasSeenInitialUserMessage = false
+    let contextCompactionItemId: string | null = null
     let workingStepCount = 0
     const pushWorkingStep = (status: ProviderWorkingStep['status']): void => {
       if (
@@ -1251,6 +1274,17 @@ export const getChatItems = (
     }
 
     for (const [itemIndex, item] of turn.items.entries()) {
+      if (isContextCompactionItem(item)) {
+        if (
+          isFinishedTurn(turn) &&
+          isFinishedContextCompactionItem(item) &&
+          !contextCompactionItemId
+        ) {
+          contextCompactionItemId = `${turn.id}:${item.id}`
+        }
+        continue
+      }
+
       if (item.type === 'userMessage' && item.content) {
         const content = item.content.map(getUserInputText).filter(Boolean).join('\n').trim()
         if (content) {
@@ -1308,6 +1342,12 @@ export const getChatItems = (
     const workingStepStatus = getWorkingStepStatus(workingStatus, finalMessage)
     pushWorkingStep(workingStepStatus)
     if (finalMessage) chatItems.push(finalMessage)
+    if (contextCompactionItemId) {
+      chatItems.push({
+        type: 'contextCompaction',
+        id: contextCompactionItemId
+      })
+    }
   }
 
   return chatItems

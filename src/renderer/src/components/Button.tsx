@@ -140,12 +140,24 @@ export const Button: FC<ButtonProps> = ({
       setMenuStyle(null)
     }
 
+    const handleScroll = (event: Event): void => {
+      const target = event.target
+      const root = rootRef.current
+
+      if (target instanceof Node) {
+        if (menuRef.current?.contains(target)) return
+        if (root && !target.contains(root)) return
+      }
+
+      closeMenu()
+    }
+
     window.addEventListener('resize', closeMenu)
-    window.addEventListener('scroll', closeMenu, true)
+    window.addEventListener('scroll', handleScroll, true)
 
     return () => {
       window.removeEventListener('resize', closeMenu)
-      window.removeEventListener('scroll', closeMenu, true)
+      window.removeEventListener('scroll', handleScroll, true)
     }
   }, [open])
 

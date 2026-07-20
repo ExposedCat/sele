@@ -13,6 +13,11 @@ const appApi: AppApi = {
   closeWindow: () => ipcRenderer.invoke(appIpcChannels.closeWindow),
   getDefaultCwd: () => ipcRenderer.invoke(appIpcChannels.getDefaultCwd),
   getGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.getGitChanges, options),
+  getFileTree: (options) => ipcRenderer.invoke(appIpcChannels.getFileTree, options),
+  getRecentGitCommitMessages: (options) =>
+    ipcRenderer.invoke(appIpcChannels.getRecentGitCommitMessages, options),
+  getUncommittedGitDiff: (options) =>
+    ipcRenderer.invoke(appIpcChannels.getUncommittedGitDiff, options),
   commitGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.commitGitChanges, options),
   pullGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pullGitChanges, options),
   pushGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pushGitChanges, options),
@@ -48,10 +53,14 @@ const providerApi: ProviderApi = {
   getSandboxModes: (providerId) =>
     ipcRenderer.invoke(providerIpcChannels.getSandboxModes, providerId),
   getModels: (providerId) => ipcRenderer.invoke(providerIpcChannels.getModels, providerId),
+  getUsage: (providerId, options) =>
+    ipcRenderer.invoke(providerIpcChannels.getUsage, providerId, options),
   getChats: (providerId, options) =>
     ipcRenderer.invoke(providerIpcChannels.getChats, providerId, options),
   getChat: (providerId, chatId) =>
     ipcRenderer.invoke(providerIpcChannels.getChat, providerId, chatId),
+  generateOneShot: (providerId, message, options) =>
+    ipcRenderer.invoke(providerIpcChannels.generateOneShot, providerId, message, options),
   startChat: (providerId, message, options) =>
     ipcRenderer.invoke(providerIpcChannels.startChat, providerId, message, options),
   continueChat: (providerId, chatId, message, options) =>
@@ -95,6 +104,8 @@ const providerApi: ProviderApi = {
     ipcRenderer.invoke(providerIpcChannels.markChatDone, providerId, chatId),
   markCwdChatsDone: (providerId, cwd) =>
     ipcRenderer.invoke(providerIpcChannels.markCwdChatsDone, providerId, cwd),
+  markChatSeen: (providerId, chatId, seenUpdatedAt) =>
+    ipcRenderer.invoke(providerIpcChannels.markChatSeen, providerId, chatId, seenUpdatedAt),
   setChatPinned: (providerId, chatId, pinned) =>
     ipcRenderer.invoke(providerIpcChannels.setChatPinned, providerId, chatId, pinned),
   onChatUpdated: (listener): (() => void) => {

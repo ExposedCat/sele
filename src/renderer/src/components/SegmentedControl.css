@@ -1,0 +1,79 @@
+:where(.ui-segmented-control) {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(var(--ui-segmented-control-count), minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  background: var(--control-surface);
+  box-shadow: var(--control-shadow);
+}
+
+:where(.ui-segmented-control__option) {
+  appearance: none;
+  display: inline-grid;
+  min-width: 0;
+  min-height: calc(var(--control-height) - 8px);
+  grid-auto-flow: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--control-radius) - 4px);
+  color: var(--lead);
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  outline: 0;
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+:where(.ui-segmented-control--small .ui-segmented-control__option) {
+  min-height: var(--control-height-small);
+  padding: 0 9px;
+  border-radius: calc(var(--control-radius-small) - 2px);
+}
+
+:where(.ui-segmented-control__option:hover:not(:disabled)),
+:where(.ui-segmented-control__option:focus-visible) {
+  color: var(--ink);
+  background: var(--control-surface-hover);
+}
+
+:where(.ui-segmented-control__option:focus-visible) {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+:where(.ui-segmented-control__option--active) {
+  color: var(--ink);
+  background: var(--glass-subtle);
+}
+
+:where(.ui-segmented-control__option:disabled) {
+  cursor: default;
+  opacity: 0.62;
+}
+
+:where(.ui-segmented-control__icon) {
+  display: grid;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  place-items: center;
+}
+
+:where(.ui-segmented-control__icon svg) {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  stroke-width: 2.2;
+}
+
+:where(.ui-segmented-control__label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

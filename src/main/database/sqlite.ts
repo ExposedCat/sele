@@ -6,12 +6,18 @@ import { Kysely, SqliteDialect, sql, type ColumnType } from 'kysely'
 import type { ProviderChatCwdKind } from '../../shared/provider'
 
 type SqliteBooleanColumn = ColumnType<number, number | boolean | undefined, number | boolean>
+type SqliteNullableNumberColumn = ColumnType<
+  number | null,
+  number | null | undefined,
+  number | null
+>
 
 export type LocalDatabase = {
   chat: {
     id: string
     pinned: SqliteBooleanColumn
     done: SqliteBooleanColumn
+    seen_updated_at: SqliteNullableNumberColumn
   }
   cwd_metadata: {
     cwd: string
@@ -48,6 +54,7 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
     .addColumn('id', 'text', (column) => column.primaryKey())
     .addColumn('pinned', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('done', 'integer', (column) => column.notNull().defaultTo(0))
+    .addColumn('seen_updated_at', 'integer')
     .execute()
 
   await db.schema
@@ -64,6 +71,9 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
   )
   await ensureColumn(db, 'cwd_metadata', 'branch_name', () =>
     db.schema.alterTable('cwd_metadata').addColumn('branch_name', 'text').execute()
+  )
+  await ensureColumn(db, 'chat', 'seen_updated_at', () =>
+    db.schema.alterTable('chat').addColumn('seen_updated_at', 'integer').execute()
   )
 
   schemaReady = true

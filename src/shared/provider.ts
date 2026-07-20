@@ -206,6 +206,59 @@ export type ProviderUpdateAvailability = {
   latestVersion: string
 }
 
+export type ProviderTokenUsageBreakdown = {
+  totalTokens: number
+  inputTokens: number
+  cachedInputTokens: number
+  outputTokens: number
+  reasoningOutputTokens: number
+}
+
+export type ProviderChatContextUsage = {
+  usedTokens: number
+  maxTokens: number | null
+  total: ProviderTokenUsageBreakdown
+  last: ProviderTokenUsageBreakdown
+  updatedAt: number
+}
+
+export type ProviderAccountUsageSummary = {
+  lifetimeTokens: string | null
+  peakDailyTokens: string | null
+  longestRunningTurnSec: string | null
+  currentStreakDays: string | null
+  longestStreakDays: string | null
+}
+
+export type ProviderAccountUsageDailyBucket = {
+  startDate: string
+  tokens: string
+}
+
+export type ProviderAccountRateLimitKind = 'primary' | 'secondary'
+
+export type ProviderAccountRateLimit = {
+  id: string | null
+  label: string
+  kind: ProviderAccountRateLimitKind
+  usedPercent: number
+  windowMinutes: number | null
+  resetsAt: number | null
+}
+
+export type ProviderAccountUsage = {
+  updatedAt: number
+  statisticsLoaded: boolean
+  summary: ProviderAccountUsageSummary | null
+  dailyUsageBuckets: ProviderAccountUsageDailyBucket[] | null
+  rateLimits: ProviderAccountRateLimit[]
+  errors: string[]
+}
+
+export type ProviderUsageOptions = {
+  includeStatistics?: boolean
+}
+
 export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
 export type ProviderChatCwdKind = 'directory' | 'gitWorktree'
 export type ProviderChatCwdMetadata = {
@@ -229,6 +282,7 @@ export type ProviderChatMetadata = {
   id: string
   pinned: boolean
   done: boolean
+  seenUpdatedAt: number | null
 }
 
 export type ProviderChat = {
@@ -243,8 +297,10 @@ export type ProviderChat = {
   createdAt: number
   updatedAt: number
   status: ProviderChatStatus | null
+  pendingApproval: ProviderPendingApproval | null
   pinned: boolean
   done: boolean
+  seenUpdatedAt: number | null
 }
 
 export type ProviderChatListOptions = {
@@ -341,7 +397,13 @@ export type ProviderPendingMessage = {
   createdAt?: number | null
 }
 
-export type ProviderChatItem = ProviderMessage | ProviderWorkingStep | ProviderPendingMessage
+export type ProviderContextCompaction = {
+  type: 'contextCompaction'
+  id: string
+}
+
+export type ProviderChatItem =
+  ProviderMessage | ProviderWorkingStep | ProviderPendingMessage | ProviderContextCompaction
 
 export type ProviderChatDetail = {
   id: string
@@ -353,8 +415,10 @@ export type ProviderChatDetail = {
   status: ProviderChatStatus | null
   pinned: boolean
   done: boolean
+  seenUpdatedAt: number | null
   capabilities: ProviderCapabilities
   pendingApproval: ProviderPendingApproval | null
+  contextUsage: ProviderChatContextUsage | null
   items: ProviderChatItem[]
 }
 
@@ -380,8 +444,17 @@ export type ProviderApi = {
   getApprovalModes: (providerId: ProviderId) => Promise<ProviderApprovalModeOption[]>
   getSandboxModes: (providerId: ProviderId) => Promise<ProviderSandboxModeOption[]>
   getModels: (providerId: ProviderId) => Promise<ProviderModel[]>
+  getUsage: (
+    providerId: ProviderId,
+    options?: ProviderUsageOptions
+  ) => Promise<ProviderAccountUsage>
   getChats: (providerId: ProviderId, options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
+  generateOneShot: (
+    providerId: ProviderId,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<string>
   startChat: (
     providerId: ProviderId,
     message: string,
@@ -432,6 +505,11 @@ export type ProviderApi = {
   stopChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
   markChatDone: (providerId: ProviderId, chatId: string) => Promise<ProviderChatMetadata>
   markCwdChatsDone: (providerId: ProviderId, cwd: string | null) => Promise<ProviderChatMetadata[]>
+  markChatSeen: (
+    providerId: ProviderId,
+    chatId: string,
+    seenUpdatedAt: number
+  ) => Promise<ProviderChatMetadata>
   setChatPinned: (
     providerId: ProviderId,
     chatId: string,
@@ -447,8 +525,10 @@ export const providerIpcChannels = {
   getApprovalModes: 'provider:get-approval-modes',
   getSandboxModes: 'provider:get-sandbox-modes',
   getModels: 'provider:get-models',
+  getUsage: 'provider:get-usage',
   getChats: 'provider:get-chats',
   getChat: 'provider:get-chat',
+  generateOneShot: 'provider:generate-one-shot',
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
   sendActiveChatMessage: 'provider:send-active-chat-message',
@@ -460,6 +540,7 @@ export const providerIpcChannels = {
   stopChat: 'provider:stop-chat',
   markChatDone: 'provider:mark-chat-done',
   markCwdChatsDone: 'provider:mark-cwd-chats-done',
+  markChatSeen: 'provider:mark-chat-seen',
   setChatPinned: 'provider:set-chat-pinned',
   chatUpdated: 'provider:chat-updated'
 } as const

@@ -9,6 +9,8 @@ import type {
   ProviderApprovalModeOption,
   ProviderSandboxModeOption,
   ProviderModel,
+  ProviderAccountUsage,
+  ProviderUsageOptions,
   ProviderActiveSendMode,
   ProviderTurnOptions
 } from '../../shared/provider'
@@ -21,8 +23,10 @@ export type ProviderAdapter = {
   getApprovalModes: () => Promise<ProviderApprovalModeOption[]>
   getSandboxModes: () => Promise<ProviderSandboxModeOption[]>
   getModels: () => Promise<ProviderModel[]>
+  getUsage: (options?: ProviderUsageOptions) => Promise<ProviderAccountUsage>
   getChats: (options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (chatId: string) => Promise<ProviderChatDetail>
+  generateOneShot: (message: string, options?: ProviderTurnOptions) => Promise<string>
   startChat: (message: string, options?: ProviderTurnOptions) => Promise<ProviderChatDetail>
   continueChat: (
     chatId: string,

@@ -1,24 +1,38 @@
+import { sql } from 'kysely'
 import type { ProviderChatMetadata } from '../../shared/provider'
 import { getDatabase } from './sqlite'
 
 const chatMetadataChunkSize = 200
 
 const toBoolean = (value: unknown): boolean => value === true || value === 1
+const toNumberOrNull = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null
+
+const normalizeSeenUpdatedAt = (seenUpdatedAt: number): number => {
+  if (!Number.isFinite(seenUpdatedAt) || seenUpdatedAt < 0) {
+    throw new Error('Invalid seen timestamp')
+  }
+
+  return Math.floor(seenUpdatedAt)
+}
 
 const getDefaultChatMetadata = (id: string): ProviderChatMetadata => ({
   id,
   pinned: false,
-  done: false
+  done: false,
+  seenUpdatedAt: null
 })
 
 const mapChatMetadataRow = (row: {
   id: string
   pinned: number
   done: number
+  seen_updated_at: number | null
 }): ProviderChatMetadata => ({
   id: row.id,
   pinned: toBoolean(row.pinned),
-  done: toBoolean(row.done)
+  done: toBoolean(row.done),
+  seenUpdatedAt: toNumberOrNull(row.seen_updated_at)
 })
 
 const uniqueChatIds = (chatIds: string[]): string[] =>
@@ -28,7 +42,7 @@ export const getChatMetadata = async (chatId: string): Promise<ProviderChatMetad
   const db = await getDatabase()
   const row = await db
     .selectFrom('chat')
-    .select(['id', 'pinned', 'done'])
+    .select(['id', 'pinned', 'done', 'seen_updated_at'])
     .where('id', '=', chatId)
     .executeTakeFirst()
 
@@ -48,7 +62,7 @@ export const getChatMetadataByIds = async (
     const chunk = ids.slice(index, index + chatMetadataChunkSize)
     const rows = await db
       .selectFrom('chat')
-      .select(['id', 'pinned', 'done'])
+      .select(['id', 'pinned', 'done', 'seen_updated_at'])
       .where('id', 'in', chunk)
       .execute()
 
@@ -88,6 +102,26 @@ export const setChatPinned = async (
     .onConflict((conflict) =>
       conflict.column('id').doUpdateSet({
         pinned: pinnedValue
+      })
+    )
+    .execute()
+
+  return getChatMetadata(chatId)
+}
+
+export const setChatSeen = async (
+  chatId: string,
+  seenUpdatedAt: number
+): Promise<ProviderChatMetadata> => {
+  const db = await getDatabase()
+  const nextSeenUpdatedAt = normalizeSeenUpdatedAt(seenUpdatedAt)
+
+  await db
+    .insertInto('chat')
+    .values({ id: chatId, pinned: 0, done: 0, seen_updated_at: nextSeenUpdatedAt })
+    .onConflict((conflict) =>
+      conflict.column('id').doUpdateSet({
+        seen_updated_at: sql<number>`max(coalesce(seen_updated_at, 0), ${nextSeenUpdatedAt})`
       })
     )
     .execute()

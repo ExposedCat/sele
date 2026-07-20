@@ -1,4 +1,8 @@
 import { readFile } from 'node:fs/promises'
+import type {
+  ProviderChatContextUsage,
+  ProviderTokenUsageBreakdown
+} from '../../../shared/provider'
 import type { CodexThreadItem, CodexTurn } from './CodexItemRenderers'
 import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
 
@@ -55,6 +59,14 @@ const getToolCallOutputType = (payload: RolloutPayload): string | null => {
 
 const getToolCallName = (payload: RolloutPayload): string =>
   payload.name ?? (payload.type === 'tool_search_call' ? 'tool_search' : 'tool')
+
+const getRecordValue = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+
+const getRequiredUsageNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 
 const parseRollout = (contents: string): RolloutEntry[] => {
   const entries: RolloutEntry[] = []
@@ -138,6 +150,81 @@ const getLastEntryTimestampSeconds = (entries: RolloutEntry[]): number | null =>
   }
 
   return null
+}
+
+const getUsageField = (
+  usage: Record<string, unknown>,
+  snakeCaseKey: string,
+  camelCaseKey: string
+): number | null => getRequiredUsageNumber(usage[snakeCaseKey] ?? usage[camelCaseKey])
+
+const normalizeRolloutTokenUsageBreakdown = (
+  value: unknown
+): ProviderTokenUsageBreakdown | null => {
+  const breakdown = getRecordValue(value)
+  if (!breakdown) return null
+
+  const totalTokens = getUsageField(breakdown, 'total_tokens', 'totalTokens')
+  const inputTokens = getUsageField(breakdown, 'input_tokens', 'inputTokens')
+  const cachedInputTokens = getUsageField(breakdown, 'cached_input_tokens', 'cachedInputTokens')
+  const outputTokens = getUsageField(breakdown, 'output_tokens', 'outputTokens')
+  const reasoningOutputTokens = getUsageField(
+    breakdown,
+    'reasoning_output_tokens',
+    'reasoningOutputTokens'
+  )
+
+  if (
+    totalTokens == null ||
+    inputTokens == null ||
+    cachedInputTokens == null ||
+    outputTokens == null ||
+    reasoningOutputTokens == null
+  ) {
+    return null
+  }
+
+  return {
+    totalTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens
+  }
+}
+
+const getTokenCountContextTokens = (last: ProviderTokenUsageBreakdown): number =>
+  last.inputTokens > 0 ? last.inputTokens : last.totalTokens
+
+const normalizeRolloutContextUsage = (entry: RolloutEntry): ProviderChatContextUsage | null => {
+  if (entry.payload.type !== 'token_count') return null
+
+  const info = getRecordValue(entry.payload.info)
+  if (!info) return null
+
+  const total = normalizeRolloutTokenUsageBreakdown(info.total_token_usage ?? info.totalTokenUsage)
+  const last = normalizeRolloutTokenUsageBreakdown(info.last_token_usage ?? info.lastTokenUsage)
+  if (!total || !last) return null
+
+  const modelContextWindow = info.model_context_window ?? info.modelContextWindow
+  const reportedContextWindow =
+    modelContextWindow == null ? null : getRequiredUsageNumber(modelContextWindow)
+  if (modelContextWindow != null && reportedContextWindow == null) return null
+
+  const usedTokens = getTokenCountContextTokens(last)
+  const maxTokens =
+    reportedContextWindow != null && reportedContextWindow > usedTokens
+      ? reportedContextWindow
+      : null
+  const updatedAt = getEntryTimestampSeconds(entry)
+
+  return {
+    usedTokens,
+    maxTokens,
+    total,
+    last,
+    updatedAt: updatedAt == null ? Date.now() : updatedAt * 1_000
+  }
 }
 
 const getToolCallInput = (payload: RolloutPayload): string | null => {
@@ -398,6 +485,25 @@ export const loadRolloutHistory = async (rolloutPath: string | null): Promise<Co
   } catch {
     return []
   }
+}
+
+export const loadRolloutContextUsage = async (
+  rolloutPath: string | null
+): Promise<ProviderChatContextUsage | null> => {
+  if (!rolloutPath) return null
+
+  try {
+    const entries = parseRollout(await readFile(rolloutPath, 'utf8'))
+
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const contextUsage = normalizeRolloutContextUsage(entries[index])
+      if (contextUsage) return contextUsage
+    }
+  } catch {
+    return null
+  }
+
+  return null
 }
 
 export const loadRolloutCwd = async (rolloutPath: string | null): Promise<string | null> => {

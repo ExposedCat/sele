@@ -11,6 +11,13 @@ import type {
   ProviderApprovalDecision,
   ProviderPendingApproval,
   ProviderPendingMessage,
+  ProviderAccountRateLimit,
+  ProviderAccountUsage,
+  ProviderAccountUsageDailyBucket,
+  ProviderAccountUsageSummary,
+  ProviderUsageOptions,
+  ProviderChatContextUsage,
+  ProviderTokenUsageBreakdown,
   ProviderUpdateAvailability,
   ProviderApprovalModeOption,
   ProviderSandboxModeOption,
@@ -23,14 +30,9 @@ import {
 } from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
-import {
-  getChatItems,
-  type CodexThreadItem,
-  type CodexTurn,
-  type CodexUserInput
-} from './CodexItemRenderers'
+import { getChatItems, type CodexThreadItem, type CodexTurn } from './CodexItemRenderers'
 import { getCodexUpdateAvailability, updateCodexProvider } from './CodexProviderUpdate'
-import { loadRolloutCwd, loadRolloutHistory } from './CodexRolloutHistory'
+import { loadRolloutContextUsage, loadRolloutCwd, loadRolloutHistory } from './CodexRolloutHistory'
 import { loadSessionThreadName, loadSessionThreadNames } from './CodexSessionIndex'
 import { getNestedToolCalls, isPatchToolCall } from './CodexToolCalls'
 
@@ -91,6 +93,16 @@ type CodexModel = {
 type ModelListResponse = {
   data: CodexModel[]
   nextCursor: string | null
+}
+
+type AccountUsageResponse = {
+  summary?: unknown
+  dailyUsageBuckets?: unknown
+}
+
+type AccountRateLimitsResponse = {
+  rateLimits?: unknown
+  rateLimitsByLimitId?: unknown
 }
 
 type ThreadReadResponse = {
@@ -225,11 +237,6 @@ type SteeringMessage = {
   options?: ProviderTurnOptions
 }
 
-type TurnRenderState = {
-  activeItemIds: Set<string>
-  lastActivityAt: number
-}
-
 const getAccountLabel = (account: CodexAccount): string => {
   if (account.type === 'chatgpt') return account.email
   if (account.type === 'apiKey') return 'OpenAI API key'
@@ -249,6 +256,189 @@ const getOptionalStringValue = (value: unknown): string | null =>
 
 const getOptionalNumberValue = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
+
+const getOptionalTokenStringValue = (value: unknown): string | null => {
+  if (typeof value === 'bigint') return value >= BigInt(0) ? value.toString() : null
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value).toString()
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return value.trim()
+
+  return null
+}
+
+const getRequiredUsageNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+
+const normalizeTokenUsageBreakdown = (value: unknown): ProviderTokenUsageBreakdown | null => {
+  const breakdown = getRecordValue(value)
+  if (!breakdown) return null
+
+  const totalTokens = getRequiredUsageNumber(breakdown.totalTokens)
+  const inputTokens = getRequiredUsageNumber(breakdown.inputTokens)
+  const cachedInputTokens = getRequiredUsageNumber(breakdown.cachedInputTokens)
+  const outputTokens = getRequiredUsageNumber(breakdown.outputTokens)
+  const reasoningOutputTokens = getRequiredUsageNumber(breakdown.reasoningOutputTokens)
+
+  if (
+    totalTokens == null ||
+    inputTokens == null ||
+    cachedInputTokens == null ||
+    outputTokens == null ||
+    reasoningOutputTokens == null
+  ) {
+    return null
+  }
+
+  return {
+    totalTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens
+  }
+}
+
+const getTokenCountContextTokens = (last: ProviderTokenUsageBreakdown): number =>
+  last.inputTokens > 0 ? last.inputTokens : last.totalTokens
+
+const normalizeChatContextUsage = (value: unknown): ProviderChatContextUsage | null => {
+  const usage = getRecordValue(value)
+  if (!usage) return null
+
+  const total = normalizeTokenUsageBreakdown(usage.total)
+  const last = normalizeTokenUsageBreakdown(usage.last)
+  if (!total || !last) return null
+
+  const modelContextWindow = usage.modelContextWindow
+  const reportedContextWindow =
+    modelContextWindow == null ? null : getRequiredUsageNumber(modelContextWindow)
+  if (modelContextWindow != null && reportedContextWindow == null) return null
+
+  const usedTokens = getTokenCountContextTokens(last)
+  const maxTokens =
+    reportedContextWindow != null && reportedContextWindow > usedTokens
+      ? reportedContextWindow
+      : null
+
+  return {
+    usedTokens,
+    maxTokens,
+    total,
+    last,
+    updatedAt: Date.now()
+  }
+}
+
+const normalizeAccountUsageSummary = (value: unknown): ProviderAccountUsageSummary | null => {
+  const summary = getRecordValue(value)
+  if (!summary) return null
+
+  return {
+    lifetimeTokens: getOptionalTokenStringValue(summary.lifetimeTokens),
+    peakDailyTokens: getOptionalTokenStringValue(summary.peakDailyTokens),
+    longestRunningTurnSec: getOptionalTokenStringValue(summary.longestRunningTurnSec),
+    currentStreakDays: getOptionalTokenStringValue(summary.currentStreakDays),
+    longestStreakDays: getOptionalTokenStringValue(summary.longestStreakDays)
+  }
+}
+
+const normalizeAccountUsageDailyBuckets = (
+  value: unknown
+): ProviderAccountUsageDailyBucket[] | null => {
+  if (value == null) return null
+  if (!Array.isArray(value)) return null
+
+  return value.flatMap((candidate): ProviderAccountUsageDailyBucket[] => {
+    const bucket = getRecordValue(candidate)
+    const startDate = getOptionalStringValue(bucket?.startDate)
+    const tokens = getOptionalTokenStringValue(bucket?.tokens)
+
+    return startDate && tokens ? [{ startDate, tokens }] : []
+  })
+}
+
+const normalizeRateLimitWindow = (
+  value: unknown
+): Pick<ProviderAccountRateLimit, 'usedPercent' | 'windowMinutes' | 'resetsAt'> | null => {
+  const window = getRecordValue(value)
+  if (!window) return null
+
+  const usedPercent = getOptionalNumberValue(window.usedPercent)
+  const windowMinutes =
+    window.windowDurationMins == null ? null : getOptionalNumberValue(window.windowDurationMins)
+  const resetsAt = window.resetsAt == null ? null : getOptionalNumberValue(window.resetsAt)
+
+  if (usedPercent == null) return null
+  if (window.windowDurationMins != null && windowMinutes == null) return null
+  if (window.resetsAt != null && resetsAt == null) return null
+
+  return { usedPercent, windowMinutes, resetsAt }
+}
+
+const normalizeRateLimitSnapshot = (
+  value: unknown,
+  fallbackLabel: string | null
+): ProviderAccountRateLimit[] => {
+  const snapshot = getRecordValue(value)
+  if (!snapshot) return []
+
+  const id = getOptionalStringValue(snapshot.limitId)
+  const limitName = getOptionalStringValue(snapshot.limitName)
+  const fallbackLimitLabel = fallbackLabel ?? id ?? 'Account'
+  const label =
+    limitName ??
+    (fallbackLimitLabel === 'codex'
+      ? 'Codex'
+      : fallbackLimitLabel
+          .replace(/^codex_/, '')
+          .replace(/[-_]+/g, ' ')
+          .replace(/\b\w/g, (letter) => letter.toLocaleUpperCase()))
+  const limits: ProviderAccountRateLimit[] = []
+
+  const primary = normalizeRateLimitWindow(snapshot.primary)
+  if (primary) {
+    limits.push({
+      id,
+      label,
+      kind: 'primary',
+      ...primary
+    })
+  }
+
+  const secondary = normalizeRateLimitWindow(snapshot.secondary)
+  if (secondary) {
+    limits.push({
+      id,
+      label,
+      kind: 'secondary',
+      ...secondary
+    })
+  }
+
+  return limits
+}
+
+const normalizeAccountRateLimits = (
+  value: AccountRateLimitsResponse | null
+): ProviderAccountRateLimit[] => {
+  if (!value) return []
+
+  const rateLimitsByLimitId = getRecordValue(value.rateLimitsByLimitId)
+  const limits = rateLimitsByLimitId
+    ? Object.entries(rateLimitsByLimitId).flatMap(([limitId, snapshot]) =>
+        normalizeRateLimitSnapshot(snapshot, limitId)
+      )
+    : normalizeRateLimitSnapshot(value.rateLimits, null)
+
+  return limits.sort((firstLimit, secondLimit) => {
+    if (secondLimit.usedPercent !== firstLimit.usedPercent) {
+      return secondLimit.usedPercent - firstLimit.usedPercent
+    }
+
+    return firstLimit.label.localeCompare(secondLimit.label)
+  })
+}
 
 const requireStringValue = (value: unknown, fieldName: string): string => {
   if (typeof value === 'string' && value) return value
@@ -373,19 +563,8 @@ const isLocalTurnStartUserMessage = (item: CodexThreadItem): boolean =>
 const isLocalSteeringUserMessage = (item: CodexThreadItem): boolean =>
   item.type === 'userMessage' && item.id.startsWith('steer:')
 
-const getCodexUserInputText = (input: CodexUserInput): string => {
-  if (input.type === 'text') return input.text
-  if (input.type === 'skill') return `$${input.name}`
-  if (input.type === 'mention') return `@${input.name}`
-  return '[Image]'
-}
-
-const getCodexUserMessageText = (item: CodexThreadItem): string | null => {
-  if (item.type !== 'userMessage' || !item.content) return null
-
-  const content = item.content.map(getCodexUserInputText).filter(Boolean).join('\n').trim()
-  return content || null
-}
+const getCodexUserMessageClientId = (item: CodexThreadItem): string | null =>
+  item.type === 'userMessage' ? getOptionalStringValue(item.clientId) : null
 
 const formatLegacyCommand = (command: unknown): string | null =>
   Array.isArray(command) && command.every((part) => typeof part === 'string')
@@ -402,10 +581,9 @@ const codexCapabilities = {
 
 const titleGenerationModel = 'gpt-5.4-mini'
 const titleGenerationTimeoutMs = 30_000
+const oneShotGenerationTimeoutMs = 120_000
 const titleGenerationPromptLimit = 2_000
 const chatUpdateDebounceMs = 50
-const turnRenderSettleMs = 180
-const turnRenderPollMs = 50
 let localTurnSequence = 0
 
 const titleGenerationOutputSchema = {
@@ -426,11 +604,6 @@ const createUserTextInput = (
 ): Array<{ type: 'text'; text: string; text_elements: [] }> => [
   { type: 'text', text, text_elements: [] }
 ]
-
-const sleep = (durationMs: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, durationMs))
-
-const getTurnRenderStateKey = (threadId: string, turnId: string): string => `${threadId}\n${turnId}`
 
 const truncateTitle = (value: string, maxLength: number): string => {
   if (value.length <= maxLength) return value
@@ -492,8 +665,6 @@ const getAgentMessageTextFromItem = (item: unknown): string | null => {
 
   return getStringValue(message.text)
 }
-
-const getItemObjectId = (item: unknown): string | null => getStringValue(getRecordValue(item)?.id)
 
 const getJsonText = (text: string): string => {
   const trimmed = text.trim()
@@ -629,10 +800,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private queuedTurnsByThread = new Map<string, QueuedTurn[]>()
   private queuedTurnStartThreads = new Set<string>()
   private chatUpdatedTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private turnRenderStates = new Map<string, TurnRenderState>()
   private rolledBackTurnIds = new Map<string, Set<string>>()
   private manuallyStoppedTurnIds = new Map<string, Set<string>>()
   private pendingApprovalsByThread = new Map<string, CodexPendingApproval[]>()
+  private contextUsageByThread = new Map<string, ProviderChatContextUsage>()
 
   constructor() {
     this.disposeNotificationListener = this.client.onNotification(this.handleNotification)
@@ -707,6 +878,49 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return models.length > 0 ? models : fallbackProviderModels
   }
 
+  getUsage = async (options: ProviderUsageOptions = {}): Promise<ProviderAccountUsage> => {
+    const includeStatistics = Boolean(options.includeStatistics)
+    const [usageResult, rateLimitsResult] = await Promise.allSettled([
+      includeStatistics
+        ? this.client.request<AccountUsageResponse>('account/usage/read', undefined)
+        : Promise.resolve<AccountUsageResponse | null>(null),
+      this.client.request<AccountRateLimitsResponse>('account/rateLimits/read', undefined)
+    ])
+
+    const errors: string[] = []
+    if (usageResult.status === 'rejected') {
+      errors.push(
+        usageResult.reason instanceof Error ? usageResult.reason.message : 'Usage unavailable'
+      )
+    }
+    if (rateLimitsResult.status === 'rejected') {
+      errors.push(
+        rateLimitsResult.reason instanceof Error
+          ? rateLimitsResult.reason.message
+          : 'Rate limits unavailable'
+      )
+    }
+
+    if (
+      rateLimitsResult.status === 'rejected' &&
+      (!includeStatistics || usageResult.status === 'rejected')
+    ) {
+      throw new Error(errors[0] ?? 'Usage unavailable')
+    }
+
+    const usage = usageResult.status === 'fulfilled' ? usageResult.value : null
+    const rateLimits = rateLimitsResult.status === 'fulfilled' ? rateLimitsResult.value : null
+
+    return {
+      updatedAt: Date.now(),
+      statisticsLoaded: includeStatistics && usageResult.status === 'fulfilled',
+      summary: normalizeAccountUsageSummary(usage?.summary),
+      dailyUsageBuckets: normalizeAccountUsageDailyBuckets(usage?.dailyUsageBuckets),
+      rateLimits: normalizeAccountRateLimits(rateLimits),
+      errors
+    }
+  }
+
   getChats = async (options: ProviderChatListOptions = {}): Promise<ProviderChatPage> => {
     const response = await this.client.request<ThreadListResponse>('thread/list', {
       cursor: options.cursor ?? null,
@@ -733,8 +947,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
           createdAt: namedThread.createdAt * 1_000,
           updatedAt: namedThread.updatedAt * 1_000,
           status: getThreadStatus(namedThread),
+          pendingApproval: this.getProviderPendingApproval(namedThread.id),
           pinned: false,
-          done: false
+          done: false,
+          seenUpdatedAt: null
         }
       })
     )
@@ -751,10 +967,11 @@ export class CodexProviderAdapter implements ProviderAdapter {
       includeTurns: true
     })
 
-    const [cwd, name, turns] = await Promise.all([
+    const [cwd, name, turns, contextUsage] = await Promise.all([
       this.resolveThreadCwd(response.thread),
       this.resolveThreadName(response.thread),
-      this.getTurnsForThread(response.thread)
+      this.getTurnsForThread(response.thread),
+      loadRolloutContextUsage(response.thread.path)
     ])
     const thread = {
       ...response.thread,
@@ -763,8 +980,55 @@ export class CodexProviderAdapter implements ProviderAdapter {
       turns: this.filterRolledBackTurns(response.thread.id, turns)
     }
     this.cacheThread(thread)
+    if (contextUsage) this.contextUsageByThread.set(thread.id, contextUsage)
 
     return this.createChatDetail(thread)
+  }
+
+  generateOneShot = async (message: string, options?: ProviderTurnOptions): Promise<string> => {
+    const text = message.trim()
+    if (!text) throw new Error('Cannot generate from an empty message')
+
+    const startedThread = await this.client.request<ThreadStartResponse>('thread/start', {
+      cwd: options?.cwd,
+      model: options?.model,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      config: {
+        'features.enable_fanout': false,
+        'features.hooks': false,
+        'features.multi_agent': false,
+        'features.multi_agent_v2': false,
+        web_search: 'disabled'
+      },
+      ephemeral: true
+    })
+    const threadId = startedThread.thread.id
+    const generatedText = this.waitForOneShotText(
+      threadId,
+      oneShotGenerationTimeoutMs,
+      'one-shot response'
+    )
+
+    try {
+      await this.client.request<TurnStartResponse>('turn/start', {
+        threadId,
+        cwd: options?.cwd,
+        input: createUserTextInput(text),
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: false },
+        model: options?.model,
+        effort: options?.reasoningEffort,
+        summary: null
+      })
+
+      return (await generatedText)?.trim() ?? ''
+    } catch (error) {
+      generatedText.catch(() => {})
+      throw error
+    } finally {
+      await this.client.request('thread/unsubscribe', { threadId }).catch(() => {})
+    }
   }
 
   startChat = async (
@@ -1051,7 +1315,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.queuedTurnsByThread.clear()
     this.queuedTurnStartThreads.clear()
     this.manuallyStoppedTurnIds.clear()
-    this.turnRenderStates.clear()
     this.client.dispose()
   }
 
@@ -1108,8 +1371,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const initialSteeringMessage = this.getSteeringMessage(chatId, initialMessageId)
     if (!initialSteeringMessage || initialSteeringMessage.status !== 'waiting') return
 
-    await this.waitForTurnReadyForSteering(chatId, initialSteeringMessage.turnId)
-
     const currentSteeringMessage = this.getSteeringMessage(chatId, initialMessageId)
     if (!currentSteeringMessage || currentSteeringMessage.status !== 'waiting') return
 
@@ -1121,14 +1382,12 @@ export class CodexProviderAdapter implements ProviderAdapter {
       return
     }
 
-    const steeringMessage = this.insertWaitingSteeringMessage(
+    const steeringMessage = this.markWaitingSteeringMessagePending(
       chatId,
       initialMessageId,
       activeTurnId
     )
     if (!steeringMessage) return
-
-    this.emitChatUpdated(chatId)
 
     let expectedTurnId = activeTurnId
     let steeringMessageId = steeringMessage.id
@@ -1140,6 +1399,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
           const response = await this.client.request<TurnSteerResponse | string>('turn/steer', {
             threadId: chatId,
             expectedTurnId,
+            clientUserMessageId: steeringMessage.itemId,
             input: createUserTextInput(steeringMessage.text)
           })
           const acceptedTurnId = getSteerResponseTurnId(response) ?? expectedTurnId
@@ -1149,8 +1409,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
               steeringMessageId
           }
           this.activeTurnIds.set(chatId, acceptedTurnId)
-          this.markSteeringMessageSent(chatId, steeringMessageId)
-          this.emitChatUpdated(chatId)
           break
         } catch (error) {
           const serverTurnId = didRetryWithServerTurnId ? null : getFoundActiveTurnId(error)
@@ -1308,8 +1566,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     status: getThreadStatus(thread),
     pinned: false,
     done: false,
+    seenUpdatedAt: null,
     capabilities: codexCapabilities,
     pendingApproval: this.getProviderPendingApproval(thread.id),
+    contextUsage: this.contextUsageByThread.get(thread.id) ?? null,
     items: [
       ...getChatItems(this.getRenderableTurns(thread), thread.createdAt, {
         hiddenPendingMessageIds: this.hiddenPendingMessageIdsByThread.get(thread.id),
@@ -1465,6 +1725,13 @@ export class CodexProviderAdapter implements ProviderAdapter {
   }
 
   private waitForTitleGenerationText = (threadId: string): Promise<string | null> =>
+    this.waitForOneShotText(threadId, titleGenerationTimeoutMs, 'thread title generation')
+
+  private waitForOneShotText = (
+    threadId: string,
+    timeoutMs: number,
+    errorLabel: string
+  ): Promise<string | null> =>
     new Promise((resolve, reject) => {
       let turnId: string | null = null
       let agentMessageText = ''
@@ -1476,8 +1743,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
       const timeout = setTimeout(() => {
         cleanup()
-        reject(new Error('Timed out waiting for thread title generation'))
-      }, titleGenerationTimeoutMs)
+        reject(new Error(`Timed out waiting for ${errorLabel}`))
+      }, timeoutMs)
 
       const dispose = this.client.onNotification((notification) => {
         const params = getRecordValue(notification.params)
@@ -1519,7 +1786,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
         cleanup()
 
         if (completedTurn.status && completedTurn.status !== 'completed') {
-          reject(new Error(`Thread title generation ended with status ${completedTurn.status}`))
+          reject(new Error(`${errorLabel} ended with status ${completedTurn.status}`))
           return
         }
 
@@ -1592,83 +1859,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     }, chatUpdateDebounceMs)
 
     this.chatUpdatedTimers.set(threadId, timer)
-  }
-
-  private markTurnRenderActivity = (
-    threadId: string,
-    turnId: string,
-    options: {
-      itemId?: string | null
-      status?: 'running' | 'finished'
-      clearActiveItems?: boolean
-    } = {}
-  ): void => {
-    const stateKey = getTurnRenderStateKey(threadId, turnId)
-    const state = this.turnRenderStates.get(stateKey) ?? {
-      activeItemIds: new Set<string>(),
-      lastActivityAt: 0
-    }
-
-    if (options.clearActiveItems) state.activeItemIds.clear()
-    if (options.itemId && options.status === 'running') state.activeItemIds.add(options.itemId)
-    if (options.itemId && options.status === 'finished') state.activeItemIds.delete(options.itemId)
-
-    state.lastActivityAt = Date.now()
-    this.turnRenderStates.set(stateKey, state)
-  }
-
-  private getRunningTurnItemIds = (threadId: string, turnId: string): Set<string> => {
-    const turn = this.threads.get(threadId)?.turns.find((candidate) => candidate.id === turnId)
-    if (!turn) return new Set()
-
-    return new Set(turn.items.filter((item) => item.status === 'running').map((item) => item.id))
-  }
-
-  private getActiveRenderItemCount = (threadId: string, turnId: string): number => {
-    const state = this.turnRenderStates.get(getTurnRenderStateKey(threadId, turnId))
-    const itemIds = this.getRunningTurnItemIds(threadId, turnId)
-    state?.activeItemIds.forEach((itemId) => itemIds.add(itemId))
-    return itemIds.size
-  }
-
-  private waitForTurnRenderSettled = async (threadId: string, turnId: string): Promise<void> => {
-    for (;;) {
-      if (this.getActiveTurnId(threadId) !== turnId) return
-
-      const state = this.turnRenderStates.get(getTurnRenderStateKey(threadId, turnId))
-      const activeItemCount = this.getActiveRenderItemCount(threadId, turnId)
-      const lastActivityAt = state?.lastActivityAt ?? 0
-      const idleWaitMs = lastActivityAt > 0 ? turnRenderSettleMs - (Date.now() - lastActivityAt) : 0
-
-      if (activeItemCount === 0 && idleWaitMs <= 0 && !this.chatUpdatedTimers.has(threadId)) {
-        return
-      }
-
-      await sleep(
-        Math.max(
-          turnRenderPollMs,
-          activeItemCount > 0 ? 0 : idleWaitMs,
-          this.chatUpdatedTimers.has(threadId) ? chatUpdateDebounceMs : 0
-        )
-      )
-    }
-  }
-
-  private isTurnWaitingOnUserInput = (threadId: string, turnId: string): boolean => {
-    if (this.getActiveTurnId(threadId) !== turnId) return false
-
-    const status = this.threads.get(threadId)?.status
-    return status?.type === 'active' && status.activeFlags.includes('waitingOnUserInput')
-  }
-
-  private waitForTurnReadyForSteering = async (threadId: string, turnId: string): Promise<void> => {
-    for (;;) {
-      await this.waitForTurnRenderSettled(threadId, turnId)
-      if (this.getActiveTurnId(threadId) !== turnId) return
-      if (this.isTurnWaitingOnUserInput(threadId, turnId)) return
-
-      await sleep(turnRenderPollMs)
-    }
   }
 
   private updateThread = (
@@ -2028,7 +2218,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return steeringMessage
   }
 
-  private insertWaitingSteeringMessage = (
+  private markWaitingSteeringMessagePending = (
     threadId: string,
     messageId: string,
     turnId: string
@@ -2036,16 +2226,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const steeringMessage = this.getSteeringMessage(threadId, messageId)
     if (!steeringMessage || steeringMessage.status !== 'waiting') return null
 
-    const updatedThread = this.updateTurnItems(threadId, turnId, (items) => [
-      ...items,
-      {
-        type: 'userMessage',
-        id: steeringMessage.itemId,
-        content: [{ type: 'text', text: steeringMessage.text }]
-      }
-    ])
-    if (!updatedThread) return null
-
+    // Keep the message outside the turn until Codex echoes its client id. The server item
+    // provides the authoritative position after all output from the previous continuation.
     const nextMessage = {
       ...steeringMessage,
       id: `${turnId}:${steeringMessage.itemId}`,
@@ -2117,19 +2299,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return true
   }
 
-  private markSteeringMessageSent = (threadId: string, messageId: string): void => {
-    this.updateSteeringMessages(threadId, (messages) =>
-      messages.map((message) =>
-        message.id === messageId
-          ? {
-              ...message,
-              status: 'sent'
-            }
-          : message
-      )
-    )
-  }
-
   private markSteeringMessagesSentForTurn = (threadId: string, turnId: string): void => {
     this.updateSteeringMessages(threadId, (messages) =>
       messages.map((message) =>
@@ -2166,19 +2335,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
           : message
       )
     )
-    if (steeringMessage.status !== 'waiting') {
-      this.updateTurnItems(threadId, steeringMessage.turnId, (items) =>
-        items.map((item) =>
-          item.id === steeringMessage.itemId
-            ? {
-                ...item,
-                content: [{ type: 'text', text }]
-              }
-            : item
-        )
-      )
-    }
-
     return true
   }
 
@@ -2191,18 +2347,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
       this.steeringMessagesByThread.get(threadId)?.find((message) => message.id === messageId) ??
       null
     if (!steeringMessage) return null
-
-    if (steeringMessage.turnId !== turnId) {
-      this.removeTurnItem(threadId, steeringMessage.turnId, steeringMessage.itemId)
-      this.updateTurnItems(threadId, turnId, (items) => [
-        ...items,
-        {
-          type: 'userMessage',
-          id: steeringMessage.itemId,
-          content: [{ type: 'text', text: steeringMessage.text }]
-        }
-      ])
-    }
 
     const nextMessageId = `${turnId}:${steeringMessage.itemId}`
     this.updateSteeringMessages(threadId, (messages) =>
@@ -2247,13 +2391,13 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
   private getProviderPendingMessages = (threadId: string): ProviderPendingMessage[] => {
     const queuedTurns = this.queuedTurnsByThread.get(threadId) ?? []
-    const waitingSteeringMessages = (this.steeringMessagesByThread.get(threadId) ?? []).filter(
-      (steeringMessage) => steeringMessage.status === 'waiting'
+    const unanchoredSteeringMessages = (this.steeringMessagesByThread.get(threadId) ?? []).filter(
+      (steeringMessage) => steeringMessage.status !== 'sent'
     )
     const hiddenMessageIds = this.hiddenPendingMessageIdsByThread.get(threadId)
 
     return [
-      ...waitingSteeringMessages
+      ...unanchoredSteeringMessages
         .filter((steeringMessage) => !hiddenMessageIds?.has(steeringMessage.id))
         .map((steeringMessage) => ({
           type: 'pendingMessage' as const,
@@ -2434,35 +2578,21 @@ export class CodexProviderAdapter implements ProviderAdapter {
     nextItems: CodexThreadItem[]
   ): CodexThreadItem[] => {
     const shouldDropLocalTurnStartMessage = hasUserMessage(nextItems)
-    const previousServerUserMessageIds = new Set(
-      previousItems
-        .filter(
-          (item) =>
-            item.type === 'userMessage' &&
-            !isLocalTurnStartUserMessage(item) &&
-            !isLocalSteeringUserMessage(item)
-        )
-        .map((item) => item.id)
-    )
     const turnSteeringMessages = (this.steeringMessagesByThread.get(threadId) ?? []).filter(
-      (message) => message.turnId === turnId && message.status !== 'waiting'
+      (message) => message.turnId === turnId && message.status !== 'sent'
     )
     const unmatchedSteeringMessages = [...turnSteeringMessages]
     const replacedLocalSteeringItemIds = new Set<string>()
     const replacementSteeringMessages = new Map<string, SteeringMessage>()
 
     for (const item of nextItems) {
-      if (
-        item.type !== 'userMessage' ||
-        isLocalSteeringUserMessage(item) ||
-        previousServerUserMessageIds.has(item.id)
-      ) {
+      if (item.type !== 'userMessage' || isLocalSteeringUserMessage(item)) {
         continue
       }
 
-      const text = getCodexUserMessageText(item)
+      const clientId = getCodexUserMessageClientId(item)
       const steeringMessageIndex = unmatchedSteeringMessages.findIndex(
-        (message) => message.text === text
+        (message) => message.itemId === clientId
       )
       if (steeringMessageIndex < 0) continue
 
@@ -2683,7 +2813,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
       if (this.activeTurnIds.get(threadId) === turn.id) this.activeTurnIds.delete(threadId)
       this.pendingApprovalsByThread.delete(threadId)
       this.setThreadStatus(threadId, { type: 'idle' })
-      this.markTurnRenderActivity(threadId, turn.id, { clearActiveItems: true })
     }
 
     const pendingTurnId =
@@ -2724,9 +2853,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     )
 
     this.upsertItems(threadId, turnId, items)
-    for (const item of items) {
-      this.markTurnRenderActivity(threadId, turnId, { itemId: item.id, status })
-    }
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2742,7 +2868,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
       text: `${item?.type === 'agentMessage' ? (item.text ?? '') : ''}${delta}`,
       phase: item?.type === 'agentMessage' ? (item.phase ?? null) : null
     }))
-    this.markTurnRenderActivity(threadId, turnId, { itemId, status: 'running' })
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2757,7 +2882,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
       ...(item?.type === 'plan' ? item : { type: 'plan', id: itemId }),
       text: `${item?.type === 'plan' ? (item.text ?? '') : ''}${delta}`
     }))
-    this.markTurnRenderActivity(threadId, turnId, { itemId, status: 'running' })
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2781,7 +2905,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
         summary
       }
     })
-    this.markTurnRenderActivity(threadId, turnId, { itemId, status: 'running' })
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2817,7 +2940,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
       return item
     })
-    this.markTurnRenderActivity(threadId, turnId, { itemId, status: 'running' })
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2833,7 +2955,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
       changes: params.changes as CodexThreadItem['changes'],
       rawToolData: item?.rawToolData ?? (item ? [item] : undefined)
     }))
-    this.markTurnRenderActivity(threadId, turnId, { itemId, status: 'running' })
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2842,7 +2963,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const turnId = getTurnId(params)
     const message = getRawResponseMessage(params.item)
     if (!threadId || !turnId || !message) return
-    const itemId = getItemObjectId(params.item)
 
     this.updateTurnItems(threadId, turnId, (items) => {
       const finalMessageIndex = items.findLastIndex(
@@ -2871,7 +2991,6 @@ export class CodexProviderAdapter implements ProviderAdapter {
         }
       ]
     })
-    this.markTurnRenderActivity(threadId, turnId, { itemId, status: 'finished' })
     this.scheduleChatUpdated(threadId)
   }
 
@@ -2894,6 +3013,17 @@ export class CodexProviderAdapter implements ProviderAdapter {
       }))
     }
 
+    this.scheduleChatUpdated(threadId)
+  }
+
+  private handleThreadTokenUsage = (params: Record<string, unknown>): void => {
+    const threadId = getThreadId(params)
+    if (!threadId) return
+
+    const contextUsage = normalizeChatContextUsage(params.tokenUsage)
+    if (!contextUsage) return
+
+    this.contextUsageByThread.set(threadId, contextUsage)
     this.scheduleChatUpdated(threadId)
   }
 
@@ -3048,6 +3178,11 @@ export class CodexProviderAdapter implements ProviderAdapter {
       notification.method === 'thread/name/updated'
     ) {
       this.handleThreadNotification(notification, params as ThreadNotificationParams)
+      return
+    }
+
+    if (notification.method === 'thread/tokenUsage/updated') {
+      this.handleThreadTokenUsage(params as Record<string, unknown>)
     }
   }
 }

@@ -60,6 +60,34 @@
   opacity: 0.82;
 }
 
+.chat-detail__context-compaction {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 0;
+  color: var(--quiet);
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.chat-detail__context-compaction::before,
+.chat-detail__context-compaction::after {
+  content: '';
+  display: block;
+  height: 1px;
+  min-width: 24px;
+  flex: 1;
+  background: var(--line);
+}
+
+.chat-detail__context-compaction span {
+  flex: none;
+  max-width: min(100%, 280px);
+  overflow-wrap: anywhere;
+}
+
 .chat-detail__pending-message-label {
   max-width: 82%;
   color: var(--quiet);

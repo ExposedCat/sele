@@ -21,9 +21,26 @@ export type AppGitFileChange = {
   status: string
 }
 
+export type AppGitPatchChange = {
+  path: string
+  kind: Extract<AppGitChangeKind, 'edit' | 'create' | 'delete'>
+  diff: string
+}
+
+export type AppFileTreeFile = {
+  path: string
+  previousPath?: string | null
+  kind?: AppGitChangeKind | null
+  status?: string | null
+}
+
 export type AppGitChangesOptions = {
   cwd?: string | null
   source: AppGitChangeSource
+}
+
+export type AppFileTreeOptions = {
+  cwd?: string | null
 }
 
 export type AppGitChangesResult = {
@@ -35,11 +52,35 @@ export type AppGitChangesResult = {
   files: AppGitFileChange[]
 }
 
+export type AppFileTreeResult = {
+  repositoryRoot: string
+  branchName: string | null
+  files: AppFileTreeFile[]
+}
+
 export type AppGitCommitOptions = {
   cwd?: string | null
   action?: AppGitCommitAction
   files: string[]
+  patches?: AppGitPatchChange[]
   message?: string | null
+}
+
+export type AppGitRecentCommitMessagesOptions = {
+  cwd?: string | null
+  limit?: number | null
+}
+
+export type AppGitRecentCommitMessagesResult = {
+  messages: string[]
+}
+
+export type AppGitDiffOptions = {
+  cwd?: string | null
+}
+
+export type AppGitDiffResult = {
+  diff: string
 }
 
 export type AppGitCommitResult = {
@@ -93,6 +134,11 @@ export type AppApi = {
   closeWindow: () => Promise<void>
   getDefaultCwd: () => Promise<string>
   getGitChanges: (options: AppGitChangesOptions) => Promise<AppGitChangesResult>
+  getFileTree: (options?: AppFileTreeOptions) => Promise<AppFileTreeResult>
+  getRecentGitCommitMessages: (
+    options?: AppGitRecentCommitMessagesOptions
+  ) => Promise<AppGitRecentCommitMessagesResult>
+  getUncommittedGitDiff: (options?: AppGitDiffOptions) => Promise<AppGitDiffResult>
   commitGitChanges: (options: AppGitCommitOptions) => Promise<AppGitCommitResult>
   pullGitChanges: (options?: AppGitPullOptions) => Promise<AppGitPullResult>
   pushGitChanges: (options?: AppGitPushOptions) => Promise<AppGitPushResult>
@@ -111,6 +157,9 @@ export const appIpcChannels = {
   closeWindow: 'app:close-window',
   getDefaultCwd: 'app:get-default-cwd',
   getGitChanges: 'app:get-git-changes',
+  getFileTree: 'app:get-file-tree',
+  getRecentGitCommitMessages: 'app:get-recent-git-commit-messages',
+  getUncommittedGitDiff: 'app:get-uncommitted-git-diff',
   commitGitChanges: 'app:commit-git-changes',
   pullGitChanges: 'app:pull-git-changes',
   pushGitChanges: 'app:push-git-changes',

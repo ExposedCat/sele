@@ -145,8 +145,12 @@ export const Dropdown = <TValue extends string>({
 
     const handleScroll = (event: Event): void => {
       const target = event.target
+      const root = rootRef.current
 
-      if (target instanceof Node && menuRef.current?.contains(target)) return
+      if (target instanceof Node) {
+        if (menuRef.current?.contains(target)) return
+        if (root && !target.contains(root)) return
+      }
 
       closeMenu()
     }

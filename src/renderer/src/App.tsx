@@ -10,13 +10,13 @@ import {
   FolderPlus,
   GitBranch,
   GitCommitHorizontal,
-  GitCompareArrows,
   GitMerge,
   GitPullRequestArrow,
+  ListChevronsDownUp,
+  ListChevronsUpDown,
   Maximize2,
   Minimize2,
   Minus,
-  Pencil,
   Search,
   Sparkles,
   SquarePen,
@@ -29,9 +29,11 @@ import {
   FolderIcon as SymbolsFolderIcon
 } from '@react-symbols/icons/utils'
 import type {
+  AppFileTreeResult,
   AppGitChangeKind,
   AppGitChangesResult,
   AppGitCommitAction,
+  AppGitPatchChange,
   AppGitPullStrategy,
   AppGitRecoverableFailure,
   AppGitRecoveryActionId,
@@ -42,6 +44,7 @@ import type {
   ProviderChatDetail,
   ProviderFileDiff,
   ProviderWorkingItem,
+  ProviderWorkingStep,
   ProviderChatItem,
   ProviderChatMetadata,
   ProviderMessage,
@@ -55,9 +58,11 @@ import type {
   ProviderId,
   ProviderModel,
   ProviderModelId,
+  ProviderAccountUsage,
   ProviderReasoningEffort,
   ProviderSandboxMode,
   ProviderSandboxModeOption,
+  ProviderUsageOptions,
   ProviderUpdateAvailability
 } from '../../shared/provider'
 import {
@@ -71,9 +76,11 @@ import {
 } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
-import { Button } from './components/Button'
+import { Button, type ButtonDropdownAction } from './components/Button'
 import { Dropdown, type DropdownOption } from './components/Dropdown'
+import { Input } from './components/Input'
 import { MessageBox } from './components/MessageBox'
+import { SegmentedControl } from './components/SegmentedControl'
 import { appApi } from './appApi'
 import { providerApi } from './providerApi'
 import './App.css'
@@ -93,6 +100,7 @@ type ApprovalResolutionState = {
   error: string | null
 }
 type ProviderUpdateState = 'idle' | 'updating'
+type UsageLoadState = 'idle' | 'loading' | 'ready' | 'error'
 type ProviderUpdateSuggestion = ProviderUpdateAvailability & {
   providerId: ProviderId
 }
@@ -101,11 +109,10 @@ type ProviderUpdatePreference = {
   ignoredVersions: string[]
 }
 type ProviderUpdatePreferences = Partial<Record<ProviderId, ProviderUpdatePreference>>
-type ChangeSource = 'branch' | 'lastTurn' | 'uncommitted'
-type GitChangeSource = Exclude<ChangeSource, 'lastTurn'>
-type CommitMode = 'ai' | 'manual'
+type ChangeSource = 'chat' | 'lastTurn' | 'uncommitted'
+type GitChangeSource = Exclude<ChangeSource, 'chat' | 'lastTurn'>
 type ChangesPaneView = 'git' | 'files'
-type GitCommitPromptAction = AppGitCommitAction | 'multipleCommits'
+type GitCommitPromptAction = AppGitCommitAction
 type GitSyncAction = 'pull' | 'push' | 'pullAndPush'
 type GitSyncStep = Exclude<GitSyncAction, 'pullAndPush'>
 type GitSyncRecoveryState = {
@@ -118,6 +125,9 @@ type GitSyncRecoveryState = {
 type GitSyncRecoveryActionOptions = {
   rememberStrategy?: boolean
 }
+type FileTreeScope = {
+  cwd: string
+}
 type ChangedFile = {
   path: string
   previousPath?: string | null
@@ -126,24 +136,39 @@ type ChangedFile = {
   kind: AppGitChangeKind
   status?: string
   diff?: string
+  patches?: AppGitPatchChange[]
 }
-type ChangeTreeFileNode = {
+type RepositoryFile = {
+  path: string
+  previousPath?: string | null
+  displayPath?: string
+  displayPreviousPath?: string | null
+  kind?: AppGitChangeKind | null
+  status?: string | null
+}
+type TreeFile = ChangedFile | RepositoryFile
+type DisplayTreeFile<TFile extends TreeFile> = TFile & {
+  displayPath: string
+  displayPreviousPath: string | null
+}
+type ChangeTreeFileNode<TFile extends TreeFile = TreeFile> = {
   type: 'file'
   name: string
-  file: ChangedFile
+  file: TFile
 }
-type ChangeTreeFolderNode = {
+type ChangeTreeFolderNode<TFile extends TreeFile = TreeFile> = {
   type: 'folder'
   name: string
   path: string
-  children: ChangeTreeNode[]
+  children: ChangeTreeNode<TFile>[]
 }
-type ChangeTreeNode = ChangeTreeFolderNode | ChangeTreeFileNode
-type MutableChangeTreeFolder = {
+type ChangeTreeNode<TFile extends TreeFile = TreeFile> =
+  ChangeTreeFolderNode<TFile> | ChangeTreeFileNode<TFile>
+type MutableChangeTreeFolder<TFile extends TreeFile = TreeFile> = {
   name: string
   path: string
-  folders: Map<string, MutableChangeTreeFolder>
-  files: ChangeTreeFileNode[]
+  folders: Map<string, MutableChangeTreeFolder<TFile>>
+  files: ChangeTreeFileNode<TFile>[]
 }
 type ChatPaneWidths = {
   sidebar: number
@@ -265,13 +290,12 @@ const writeStoredProviderUpdatePreferences = (preferences: ProviderUpdatePrefere
 const changeSourceLabels = {
   uncommitted: 'Uncommitted',
   lastTurn: 'Last turn',
-  branch: 'Branch'
+  chat: 'Chat'
 } satisfies Record<ChangeSource, string>
 
 const commitActionLabels = {
   commit: 'Commit',
-  amend: 'Amend',
-  multipleCommits: 'Multiple commits'
+  amend: 'Amend'
 } satisfies Record<GitCommitPromptAction, string>
 
 const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
@@ -302,6 +326,34 @@ const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
       animateOnHover={false}
       aria-hidden="true"
     />
+  )
+}
+
+const GitSyncCountsLabel: React.FC<{ unpulledCount: number; unpushedCount: number }> = ({
+  unpulledCount,
+  unpushedCount
+}) => {
+  const showPull = unpulledCount > 0
+  const showPush = unpushedCount > 0
+
+  return (
+    <span className="changes-sidebar__sync-label">
+      {showPull && (
+        <span className="changes-sidebar__sync-label-segment">
+          <Download className="changes-sidebar__sync-label-icon" aria-hidden="true" />
+          <span>Pull</span>
+          <span className="changes-sidebar__sync-label-count">{unpulledCount}</span>
+        </span>
+      )}
+      {showPull && showPush && <span className="changes-sidebar__sync-label-separator">·</span>}
+      {showPush && (
+        <span className="changes-sidebar__sync-label-segment">
+          <Upload className="changes-sidebar__sync-label-icon" aria-hidden="true" />
+          <span>Push</span>
+          <span className="changes-sidebar__sync-label-count">{unpushedCount}</span>
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -531,10 +583,15 @@ const getApprovalModeForPolicy = (
 }
 
 const getApprovalAccessOptions = (
-  approvalMode: ProviderApprovalMode
+  approvalMode: ProviderApprovalMode,
+  sandboxMode: ProviderSandboxMode
 ): { approvalPolicy: ProviderApprovalPolicy; approvalsReviewer: ProviderApprovalsReviewer } => {
-  if (approvalMode === 'never') return { approvalPolicy: 'never', approvalsReviewer: 'user' }
-  if (approvalMode === 'auto-review') {
+  const effectiveApprovalMode = sandboxMode === 'danger-full-access' ? 'never' : approvalMode
+
+  if (effectiveApprovalMode === 'never') {
+    return { approvalPolicy: 'never', approvalsReviewer: 'user' }
+  }
+  if (effectiveApprovalMode === 'auto-review') {
     return { approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' }
   }
 
@@ -793,6 +850,8 @@ const getChatFromDetail = (
   createdAt: existingChat?.createdAt ?? updatedAt,
   updatedAt,
   status: detail.status,
+  pendingApproval: detail.pendingApproval,
+  seenUpdatedAt: detail.seenUpdatedAt ?? existingChat?.seenUpdatedAt ?? null,
   pinned: detail.pinned ?? existingChat?.pinned ?? false,
   done: detail.done ?? existingChat?.done ?? false
 })
@@ -825,6 +884,52 @@ const hasActiveWorkingStep = (detail: ProviderChatDetail | null): boolean =>
 const hasPendingSteeringMessage = (detail: ProviderChatDetail | null): boolean =>
   detail?.items.some((item) => item.type === 'pendingMessage' && item.kind === 'steering') ?? false
 
+const getWorkingItemEstimateText = (item: ProviderWorkingItem): string => {
+  if (item.type === 'message') return item.content
+  if (item.type === 'tool') {
+    return [item.label, item.command, item.stdout].filter(Boolean).join('\n')
+  }
+  if (item.type === 'toolGroup') return item.tools.map(getWorkingItemEstimateText).join('\n')
+
+  return ''
+}
+
+const getChatItemEstimateText = (item: ProviderChatItem): string => {
+  if (item.type === 'message') return item.content
+  if (item.type === 'pendingMessage') return item.content
+  if (item.type === 'working') return item.items.map(getWorkingItemEstimateText).join('\n')
+
+  return ''
+}
+
+const estimateTokenCount = (text: string): number => {
+  const normalizedText = text.trim()
+  if (!normalizedText) return 0
+
+  return Math.max(1, Math.ceil(normalizedText.length / 4))
+}
+
+const getEstimatedContextTokens = (detail: ProviderChatDetail | null): number | null => {
+  if (!detail) return null
+
+  const text = detail.items.map(getChatItemEstimateText).filter(Boolean).join('\n')
+  return estimateTokenCount(text)
+}
+
+const mergeAccountUsage = (
+  currentUsage: ProviderAccountUsage | null,
+  nextUsage: ProviderAccountUsage
+): ProviderAccountUsage => {
+  if (nextUsage.statisticsLoaded || !currentUsage?.statisticsLoaded) return nextUsage
+
+  return {
+    ...nextUsage,
+    statisticsLoaded: true,
+    summary: currentUsage.summary,
+    dailyUsageBuckets: currentUsage.dailyUsageBuckets
+  }
+}
+
 const getVisibleChatItems = (
   items: ProviderChatItem[],
   editingMessage: EditingMessage | null
@@ -838,8 +943,10 @@ const getVisibleChatItems = (
   return editingMessageIndex < 0 ? items : items.slice(0, editingMessageIndex)
 }
 
-const sortChangedFiles = (files: ChangedFile[]): ChangedFile[] =>
+const sortTreeFiles = <TFile extends TreeFile>(files: TFile[]): TFile[] =>
   [...files].sort((firstFile, secondFile) => firstFile.path.localeCompare(secondFile.path))
+
+const sortChangedFiles = (files: ChangedFile[]): ChangedFile[] => sortTreeFiles(files)
 
 const getPathParts = (path: string): string[] => path.replace(/\\/g, '/').split('/').filter(Boolean)
 
@@ -856,32 +963,37 @@ const normalizeDisplayPath = (path: string, root: string | null): string => {
   return normalizedPath
 }
 
-const getChangedFileDisplayPath = (file: ChangedFile): string => file.displayPath ?? file.path
+const getChangedFileDisplayPath = (file: TreeFile): string => file.displayPath ?? file.path
 
-const getChangedFileDisplayPreviousPath = (file: ChangedFile): string | null =>
+const getChangedFileDisplayPreviousPath = (file: TreeFile): string | null =>
   file.displayPreviousPath ?? file.previousPath ?? null
 
-const getChangedFilesWithDisplayPaths = (
-  files: ChangedFile[],
+const getTreeFilesWithDisplayPaths = <TFile extends TreeFile>(
+  files: TFile[],
   root: string | null
-): ChangedFile[] =>
+): DisplayTreeFile<TFile>[] =>
   files.map((file) => ({
     ...file,
     displayPath: normalizeDisplayPath(file.path, root),
     displayPreviousPath: file.previousPath ? normalizeDisplayPath(file.previousPath, root) : null
   }))
 
-const createMutableChangeTreeFolder = (name: string, path: string): MutableChangeTreeFolder => ({
+const createMutableChangeTreeFolder = <TFile extends TreeFile>(
+  name: string,
+  path: string
+): MutableChangeTreeFolder<TFile> => ({
   name,
   path,
   folders: new Map(),
   files: []
 })
 
-const finalizeChangeTreeFolder = (folder: MutableChangeTreeFolder): ChangeTreeNode[] => {
+const finalizeChangeTreeFolder = <TFile extends TreeFile>(
+  folder: MutableChangeTreeFolder<TFile>
+): ChangeTreeNode<TFile>[] => {
   const folders = Array.from(folder.folders.values())
     .sort((firstFolder, secondFolder) => firstFolder.name.localeCompare(secondFolder.name))
-    .map<ChangeTreeFolderNode>((childFolder) => ({
+    .map<ChangeTreeFolderNode<TFile>>((childFolder) => ({
       type: 'folder',
       name: childFolder.name,
       path: childFolder.path,
@@ -895,8 +1007,8 @@ const finalizeChangeTreeFolder = (folder: MutableChangeTreeFolder): ChangeTreeNo
   return [...folders, ...files]
 }
 
-const buildChangeTree = (files: ChangedFile[]): ChangeTreeNode[] => {
-  const root = createMutableChangeTreeFolder('', '')
+const buildChangeTree = <TFile extends TreeFile>(files: TFile[]): ChangeTreeNode<TFile>[] => {
+  const root = createMutableChangeTreeFolder<TFile>('', '')
 
   for (const file of files) {
     const displayPath = getChangedFileDisplayPath(file)
@@ -927,6 +1039,24 @@ const buildChangeTree = (files: ChangedFile[]): ChangeTreeNode[] => {
   return finalizeChangeTreeFolder(root)
 }
 
+const getTreeFolderPaths = <TFile extends TreeFile>(nodes: ChangeTreeNode<TFile>[]): string[] =>
+  nodes.flatMap((node) =>
+    node.type === 'folder' ? [node.path, ...getTreeFolderPaths(node.children)] : []
+  )
+
+const getCollapsedTreeFolders = (folderPaths: string[]): Record<string, boolean> =>
+  Object.fromEntries(folderPaths.map((folderPath) => [folderPath, true]))
+
+const getDefaultFileTreeCollapsedFolders = (files: RepositoryFile[]): Record<string, boolean> => {
+  const folderPaths = getTreeFolderPaths(buildChangeTree(files))
+
+  if (!folderPaths.includes('src')) return {}
+
+  return Object.fromEntries(
+    folderPaths.filter((folderPath) => folderPath !== 'src').map((folderPath) => [folderPath, true])
+  )
+}
+
 const getWorkingItemDiffs = (item: ProviderWorkingItem): ProviderFileDiff[] => {
   if (item.type === 'tool') return item.diffs
   if (item.type === 'toolGroup') return item.tools.flatMap((tool) => tool.diffs)
@@ -934,24 +1064,53 @@ const getWorkingItemDiffs = (item: ProviderWorkingItem): ProviderFileDiff[] => {
   return []
 }
 
-const getLastTurnChangedFiles = (detail: ProviderChatDetail | null): ChangedFile[] => {
-  const lastWorkingStep = detail?.items.findLast((item) => item.type === 'working')
-  if (!lastWorkingStep) return []
+const getPatchChangeKind = (kind: ProviderFileDiff['kind']): AppGitPatchChange['kind'] => kind
 
+const mergePatchChangeKind = (
+  currentKind: AppGitPatchChange['kind'],
+  nextKind: AppGitPatchChange['kind']
+): AppGitPatchChange['kind'] => {
+  if (currentKind === 'create' && nextKind !== 'delete') return 'create'
+  return nextKind
+}
+
+const getPatchChangedFiles = (workingSteps: ProviderWorkingStep[]): ChangedFile[] => {
   const filesByPath = new Map<string, ChangedFile>()
 
-  for (const workingItem of lastWorkingStep.items) {
-    for (const diff of getWorkingItemDiffs(workingItem)) {
-      filesByPath.set(diff.path, {
-        path: diff.path,
-        kind: diff.kind,
-        diff: diff.diff
-      })
+  for (const workingStep of workingSteps) {
+    for (const workingItem of workingStep.items) {
+      for (const diff of getWorkingItemDiffs(workingItem)) {
+        const patch = {
+          path: diff.path,
+          kind: getPatchChangeKind(diff.kind),
+          diff: diff.diff
+        } satisfies AppGitPatchChange
+        const existingFile = filesByPath.get(diff.path)
+        const existingKind = existingFile?.patches?.at(-1)?.kind
+
+        filesByPath.set(diff.path, {
+          path: diff.path,
+          kind: existingKind ? mergePatchChangeKind(existingKind, patch.kind) : patch.kind,
+          diff: diff.diff,
+          patches: [...(existingFile?.patches ?? []), patch]
+        })
+      }
     }
   }
 
   return sortChangedFiles(Array.from(filesByPath.values()))
 }
+
+const getChatWorkingSteps = (detail: ProviderChatDetail | null): ProviderWorkingStep[] =>
+  detail?.items.filter((item): item is ProviderWorkingStep => item.type === 'working') ?? []
+
+const getLastTurnChangedFiles = (detail: ProviderChatDetail | null): ChangedFile[] => {
+  const lastWorkingStep = getChatWorkingSteps(detail).at(-1)
+  return lastWorkingStep ? getPatchChangedFiles([lastWorkingStep]) : []
+}
+
+const getChatChangedFiles = (detail: ProviderChatDetail | null): ChangedFile[] =>
+  getPatchChangedFiles(getChatWorkingSteps(detail))
 
 const getGitChangedFiles = (result: AppGitChangesResult | null): ChangedFile[] =>
   sortChangedFiles(
@@ -963,12 +1122,15 @@ const getGitChangedFiles = (result: AppGitChangesResult | null): ChangedFile[] =
     })) ?? []
   )
 
-const formatCommitFile = (file: ChangedFile): string => {
-  const previousPath = getChangedFileDisplayPreviousPath(file)
-  const path = getChangedFileDisplayPath(file)
-
-  return previousPath ? `${previousPath} -> ${path}` : path
-}
+const getRepositoryFiles = (result: AppFileTreeResult | null): RepositoryFile[] =>
+  sortTreeFiles(
+    result?.files.map((file) => ({
+      path: file.path,
+      previousPath: file.previousPath,
+      kind: file.kind,
+      status: file.status
+    })) ?? []
+  )
 
 const getCommitFiles = (files: ChangedFile[]): string[] =>
   Array.from(
@@ -979,38 +1141,62 @@ const getCommitFiles = (files: ChangedFile[]): string[] =>
     )
   )
 
-const getCommitPromptTarget = (files: ChangedFile[], source: ChangeSource): string => {
-  if (source === 'uncommitted') return 'all uncommitted'
+const getCommitPatches = (files: ChangedFile[]): AppGitPatchChange[] =>
+  files.flatMap((file) => file.patches ?? [])
 
-  const fileList = files.map(formatCommitFile).join(', ')
-  return fileList || 'these changes'
-}
+const isPatchChangeSource = (source: ChangeSource): boolean =>
+  source === 'chat' || source === 'lastTurn'
 
-const appendCommitPromptInstructions = (prompt: string, instructions: string): string => {
-  const trimmedInstructions = instructions.trim()
-  return trimmedInstructions
-    ? `${prompt}\n\nAdditional instructions: ${trimmedInstructions}`
-    : prompt
-}
+const formatPatchForPrompt = (patch: AppGitPatchChange): string =>
+  [`File: ${patch.path}`, `Kind: ${patch.kind}`, patch.diff.trimEnd()].filter(Boolean).join('\n')
 
-const getCommitMessage = (
-  files: ChangedFile[],
-  action: GitCommitPromptAction,
-  source: ChangeSource,
-  instructions: string
-): string => {
-  const target = getCommitPromptTarget(files, source)
-  let prompt: string
+const formatRecentCommitMessagesForPrompt = (messages: string[]): string =>
+  messages.length > 0 ? messages.map((message) => `\`${message}\``).join(', ') : 'none'
 
-  if (action === 'amend') {
-    prompt = `Amend last commit with ${target}.`
-  } else if (action === 'multipleCommits') {
-    prompt = `Following repo commit preferences and naming, split ${target} into 1, 2, or more commits based on the amount and intent of the changes.`
-  } else {
-    prompt = `Following repo commit preferences and naming, commit: ${target}`
-  }
+const getCommitNamePrompt = (
+  recentMessages: string[],
+  patchText: string,
+  commitInstruction: string
+): string =>
+  [
+    `Recent repo commit names: ${formatRecentCommitMessagesForPrompt(recentMessages)}`,
+    'Following the naming, respond with a commit name for the patch:',
+    '```',
+    patchText.trimEnd(),
+    '```',
+    "Don't write or do anything else. Don't write code fences.",
+    commitInstruction
+  ].join('\n')
 
-  return appendCommitPromptInstructions(prompt, instructions)
+const getPatchCommitNamePrompt = (recentMessages: string[], patches: AppGitPatchChange[]): string =>
+  getCommitNamePrompt(
+    recentMessages,
+    patches.map(formatPatchForPrompt).join('\n\n'),
+    'Commit only the exact patch changes below. Do not stage whole files or unrelated hunks, even when another uncommitted change touches the same file.'
+  )
+
+const getUncommittedCommitNamePrompt = (recentMessages: string[], diff: string): string =>
+  getCommitNamePrompt(recentMessages, diff, 'Commit all uncommitted changes shown in the patch.')
+
+const normalizeGeneratedCommitName = (value: string): string | null => {
+  const unfencedValue = value
+    .trim()
+    .replace(/^```[a-z]*\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+  const firstLine = unfencedValue
+    .split(/\r?\n/)
+    .find((line) => line.trim().length > 0)
+    ?.trim()
+  if (!firstLine) return null
+
+  const commitName = firstLine
+    .replace(/^(commit (message|name)|message|name)[:\s]+/i, '')
+    .replace(/^[`"']+|[`"']+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return commitName || null
 }
 
 const getErrorMessage = (error: unknown, fallback: string): string => {
@@ -1027,17 +1213,19 @@ const isGitChangesScope = (
   source: GitChangeSource | null
 ): boolean => Boolean(scope && cwd && source && scope.cwd === cwd && scope.source === source)
 
-const getChangesEmptyMessage = (
-  source: ChangeSource,
-  cwd: string | null,
-  result: AppGitChangesResult | null
-): string => {
+const isFileTreeScope = (scope: FileTreeScope | null, cwd: string | null): boolean =>
+  Boolean(scope && cwd && scope.cwd === cwd)
+
+const getChangesEmptyMessage = (source: ChangeSource, cwd: string | null): string => {
   if (source === 'lastTurn') return 'No files changed in the last turn.'
+  if (source === 'chat') return 'No files changed in this chat.'
   if (!cwd) return 'Choose a folder to see changes.'
-  if (source === 'branch' && result && !result.baseRef) return 'No branch base found.'
 
   return `No ${changeSourceLabels[source].toLocaleLowerCase()} changes.`
 }
+
+const getFileTreeEmptyMessage = (cwd: string | null): string =>
+  cwd ? 'No files found.' : 'Choose a folder to see files.'
 
 const getApprovalSummary = (
   approval: NonNullable<ProviderChatDetail['pendingApproval']>
@@ -1055,43 +1243,6 @@ const getProviderUpdateSummary = (suggestion: ProviderUpdateSuggestion): string 
   `Update ${providerLabels[suggestion.providerId]} from ${suggestion.currentVersion} to ${
     suggestion.latestVersion
   }`
-
-type CommitModeToggleProps = {
-  mode: CommitMode
-  disabled: boolean
-  onChange: (mode: CommitMode) => void
-}
-
-const CommitModeToggle: React.FC<CommitModeToggleProps> = ({ mode, disabled, onChange }) => (
-  <div className="changes-sidebar__mode-toggle" role="group" aria-label="Commit mode">
-    <button
-      className={`changes-sidebar__mode-option${
-        mode === 'ai' ? ' changes-sidebar__mode-option--active' : ''
-      }`}
-      type="button"
-      aria-label="Use AI commit flow"
-      aria-pressed={mode === 'ai'}
-      title="Use AI commit flow"
-      disabled={disabled}
-      onClick={() => onChange('ai')}
-    >
-      <Sparkles aria-hidden="true" />
-    </button>
-    <button
-      className={`changes-sidebar__mode-option${
-        mode === 'manual' ? ' changes-sidebar__mode-option--active' : ''
-      }`}
-      type="button"
-      aria-label="Use manual commit message"
-      aria-pressed={mode === 'manual'}
-      title="Use manual commit message"
-      disabled={disabled}
-      onClick={() => onChange('manual')}
-    >
-      <Pencil aria-hidden="true" />
-    </button>
-  </div>
-)
 
 export const App: React.FC = () => {
   const storedMessageBoxSelection = useMemo(() => readStoredMessageBoxSelection(), [])
@@ -1133,6 +1284,9 @@ export const App: React.FC = () => {
   const [providerUpdateError, setProviderUpdateError] = useState<string | null>(null)
   const [providerUpdatePreferences, setProviderUpdatePreferences] =
     useState<ProviderUpdatePreferences>(readStoredProviderUpdatePreferences)
+  const [accountUsage, setAccountUsage] = useState<ProviderAccountUsage | null>(null)
+  const [accountUsageState, setAccountUsageState] = useState<UsageLoadState>('idle')
+  const [accountUsageError, setAccountUsageError] = useState<string | null>(null)
   const [newChatOpen, setNewChatOpen] = useState(true)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null)
   const [newSessionProvider, setNewSessionProvider] = useState<ProviderId>('codex')
@@ -1149,11 +1303,20 @@ export const App: React.FC = () => {
   const [gitChangeLoadState, setGitChangeLoadState] = useState<LoadState>('ready')
   const [gitChangeLoadScope, setGitChangeLoadScope] = useState<GitChangesScope | null>(null)
   const [gitChangeLoadRequest, setGitChangeLoadRequest] = useState(0)
+  const [fileTree, setFileTree] = useState<AppFileTreeResult | null>(null)
+  const [fileTreeScope, setFileTreeScope] = useState<FileTreeScope | null>(null)
+  const [fileTreeLoadState, setFileTreeLoadState] = useState<LoadState>('ready')
+  const [fileTreeLoadScope, setFileTreeLoadScope] = useState<FileTreeScope | null>(null)
+  const [fileTreeLoadRequest, setFileTreeLoadRequest] = useState(0)
   const [collapsedChangeTreeFolders, setCollapsedChangeTreeFolders] = useState<
     Record<string, boolean>
   >({})
-  const [commitMode, setCommitMode] = useState<CommitMode>('ai')
+  const [collapsedFileTreeFolders, setCollapsedFileTreeFolders] = useState<Record<string, boolean>>(
+    {}
+  )
   const [commitInput, setCommitInput] = useState('')
+  const [commitNameState, setCommitNameState] = useState<SendState>('idle')
+  const [commitNameError, setCommitNameError] = useState<string | null>(null)
   const [commitState, setCommitState] = useState<SendState>('idle')
   const [commitError, setCommitError] = useState<string | null>(null)
   const [syncState, setSyncState] = useState<SendState>('idle')
@@ -1174,10 +1337,13 @@ export const App: React.FC = () => {
   const sendInFlightRef = useRef(false)
   const chatAutoScrollEnabledRef = useRef(true)
   const chatAutoScrollFrameRef = useRef<number | null>(null)
+  const selectedChatKeyRef = useRef<string | null>(null)
   const modelManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.model))
   const reasoningManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.reasoningEffort))
   const approvalModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.approvalMode))
   const sandboxModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.sandboxMode))
+  const approvalModeBeforeFullAccessRef = useRef<ProviderApprovalMode | null>(null)
+  const collapsedFileTreeFoldersByCwdRef = useRef(new Map<string, Record<string, boolean>>())
 
   const defaultPanePercents = useMemo(() => getDefaultChatPanePercents(panelsWidth), [panelsWidth])
   const preferredPanePercents = panePercents ?? defaultPanePercents
@@ -1185,6 +1351,10 @@ export const App: React.FC = () => {
     () => clampChatPanePercentsToAvailable(preferredPanePercents, panelsWidth),
     [panelsWidth, preferredPanePercents]
   )
+
+  useEffect(() => {
+    selectedChatKeyRef.current = selectedChat ? getChatKey(selectedChat) : null
+  }, [selectedChat])
 
   useEffect(() => {
     if (!panePercents) return
@@ -1204,6 +1374,13 @@ export const App: React.FC = () => {
   useEffect(() => {
     writeStoredMessageBoxSelection({ approvalMode, model, reasoningEffort, sandboxMode })
   }, [approvalMode, model, reasoningEffort, sandboxMode])
+
+  useEffect(() => {
+    if (sandboxMode !== 'danger-full-access' || approvalMode === 'never') return
+
+    approvalModeBeforeFullAccessRef.current = approvalMode
+    queueMicrotask(() => setApprovalMode('never'))
+  }, [approvalMode, sandboxMode])
 
   useEffect(() => {
     let active = true
@@ -1619,7 +1796,14 @@ export const App: React.FC = () => {
     setChats((currentChats) =>
       currentChats.map((chat) => {
         const metadata = metadataById.get(chat.id)
-        return metadata ? { ...chat, pinned: metadata.pinned, done: metadata.done } : chat
+        return metadata
+          ? {
+              ...chat,
+              pinned: metadata.pinned,
+              done: metadata.done,
+              seenUpdatedAt: metadata.seenUpdatedAt
+            }
+          : chat
       })
     )
     setSelectedChat((currentChat) => {
@@ -1627,7 +1811,12 @@ export const App: React.FC = () => {
 
       const metadata = metadataById.get(currentChat.id)
       return metadata
-        ? { ...currentChat, pinned: metadata.pinned, done: metadata.done }
+        ? {
+            ...currentChat,
+            pinned: metadata.pinned,
+            done: metadata.done,
+            seenUpdatedAt: metadata.seenUpdatedAt
+          }
         : currentChat
     })
     setChatDetail((currentDetail) => {
@@ -1635,21 +1824,85 @@ export const App: React.FC = () => {
 
       const metadata = metadataById.get(currentDetail.id)
       return metadata
-        ? { ...currentDetail, pinned: metadata.pinned, done: metadata.done }
+        ? {
+            ...currentDetail,
+            pinned: metadata.pinned,
+            done: metadata.done,
+            seenUpdatedAt: metadata.seenUpdatedAt
+          }
         : currentDetail
     })
   }, [])
 
+  const applySeenUpdatedAt = useCallback(
+    (providerId: ProviderId, chatId: string, seenUpdatedAt: number): void => {
+      const mergeSeenUpdatedAt = (currentSeenUpdatedAt: number | null): number =>
+        currentSeenUpdatedAt == null ? seenUpdatedAt : Math.max(currentSeenUpdatedAt, seenUpdatedAt)
+
+      setChats((currentChats) =>
+        currentChats.map((chat) =>
+          chat.providerId === providerId && chat.id === chatId
+            ? { ...chat, seenUpdatedAt: mergeSeenUpdatedAt(chat.seenUpdatedAt) }
+            : chat
+        )
+      )
+      setSelectedChat((currentChat) =>
+        currentChat?.providerId === providerId && currentChat.id === chatId
+          ? { ...currentChat, seenUpdatedAt: mergeSeenUpdatedAt(currentChat.seenUpdatedAt) }
+          : currentChat
+      )
+      setChatDetail((currentDetail) =>
+        currentDetail?.id === chatId
+          ? { ...currentDetail, seenUpdatedAt: mergeSeenUpdatedAt(currentDetail.seenUpdatedAt) }
+          : currentDetail
+      )
+    },
+    []
+  )
+
+  const markChatSeenAt = useCallback(
+    (providerId: ProviderId, chatId: string, seenUpdatedAt: number): void => {
+      applySeenUpdatedAt(providerId, chatId, seenUpdatedAt)
+
+      void providerApi
+        .markChatSeen(providerId, chatId, seenUpdatedAt)
+        .then((metadata) => applyChatMetadata([metadata]))
+        .catch(() => {
+          // Keep the optimistic in-memory seen state if persistence fails.
+        })
+    },
+    [applyChatMetadata, applySeenUpdatedAt]
+  )
+
+  const applyViewedChatDetail = useCallback(
+    (
+      providerId: ProviderId,
+      detail: ProviderChatDetail,
+      options: ApplyChatDetailOptions = {}
+    ): void => {
+      applyChatDetail(providerId, detail, options)
+      markChatSeenAt(providerId, detail.id, Date.now())
+    },
+    [applyChatDetail, markChatSeenAt]
+  )
+
   useEffect(
     () =>
       providerApi.onChatUpdated((event) => {
+        const seenUpdatedAt = Date.now()
+        const updatedChatKey = getChatKey({ providerId: event.providerId, id: event.chatId })
+
         applyChatDetail(event.providerId, event.detail)
+        if (selectedChatKeyRef.current === updatedChatKey) {
+          markChatSeenAt(event.providerId, event.chatId, seenUpdatedAt)
+        }
       }),
-    [applyChatDetail]
+    [applyChatDetail, markChatSeenAt]
   )
 
   const selectedProviderId = selectedChat?.providerId
   const selectedChatId = selectedChat?.id
+  const usageProviderId = selectedProviderId ?? newSessionProvider
   const changesCwd = selectedChat ? (chatDetail?.cwd ?? selectedChat.cwd) : newSessionCwd
   const changesProjectCwd = selectedChat
     ? (chatDetail?.projectCwd ?? selectedChat.projectCwd ?? changesCwd)
@@ -1658,7 +1911,54 @@ export const App: React.FC = () => {
   const currentApprovalResolution =
     approvalResolution.approvalId === pendingApproval?.id ? approvalResolution : null
   const approvalDecisionInFlight = currentApprovalResolution?.decision ?? null
+  const resolvingApprovalId = approvalResolution.decision ? approvalResolution.approvalId : null
   const approvalError = currentApprovalResolution?.error ?? null
+
+  const refreshAccountUsage = useCallback(
+    async (options: ProviderUsageOptions = {}): Promise<void> => {
+      const providerId = usageProviderId
+      setAccountUsageState('loading')
+      setAccountUsageError(null)
+
+      try {
+        const usage = await providerApi.getUsage(providerId, options)
+        setAccountUsage((currentUsage) => mergeAccountUsage(currentUsage, usage))
+        setAccountUsageState('ready')
+      } catch (error) {
+        setAccountUsageState('error')
+        setAccountUsageError(getErrorMessage(error, 'Unable to load usage.'))
+      }
+    },
+    [usageProviderId]
+  )
+
+  useEffect(() => {
+    let active = true
+    const providerId = usageProviderId
+
+    queueMicrotask(() => {
+      if (!active) return
+      setAccountUsageState('loading')
+      setAccountUsageError(null)
+    })
+
+    providerApi
+      .getUsage(providerId)
+      .then((usage) => {
+        if (!active) return
+        setAccountUsage(usage)
+        setAccountUsageState('ready')
+      })
+      .catch((error) => {
+        if (!active) return
+        setAccountUsageState('error')
+        setAccountUsageError(getErrorMessage(error, 'Unable to load usage.'))
+      })
+
+    return () => {
+      active = false
+    }
+  }, [usageProviderId])
 
   useEffect(() => {
     if (!selectedProviderId || !selectedChatId) return
@@ -1672,6 +1972,7 @@ export const App: React.FC = () => {
         if (!active) return
         setChatDetail(detail)
         setChatLoadState('ready')
+        markChatSeenAt(selectedProviderId, selectedChatId, Date.now())
       })
       .catch(() => {
         if (active) setChatLoadState('error')
@@ -1680,7 +1981,7 @@ export const App: React.FC = () => {
     return () => {
       active = false
     }
-  }, [chatDetail?.id, chatLoadRequest, selectedProviderId, selectedChatId])
+  }, [chatDetail?.id, chatLoadRequest, markChatSeenAt, selectedProviderId, selectedChatId])
 
   useEffect(() => {
     const resizeHandles = [resizeHandleRef.current, changesResizeHandleRef.current].filter(
@@ -1781,14 +2082,13 @@ export const App: React.FC = () => {
     if (!changesCwd) return
 
     let active = true
-    const gitChangeSource: GitChangeSource =
-      changeSource === 'lastTurn' ? 'uncommitted' : changeSource
+    const gitChangeSource: GitChangeSource = 'uncommitted'
     const gitChangeScope: GitChangesScope = {
       cwd: changesCwd,
       source: gitChangeSource
     }
 
-    if (changeSource !== 'lastTurn') {
+    if (changeSource === 'uncommitted') {
       queueMicrotask(() => {
         if (!active) return
         setGitChangeLoadScope(gitChangeScope)
@@ -1806,18 +2106,59 @@ export const App: React.FC = () => {
         setGitChanges(result)
         setGitChangesScope(gitChangeScope)
         setGitChangeLoadScope(gitChangeScope)
-        if (changeSource !== 'lastTurn') setGitChangeLoadState('ready')
+        if (changeSource === 'uncommitted') setGitChangeLoadState('ready')
       })
       .catch(() => {
         if (!active) return
         setGitChangeLoadScope(gitChangeScope)
-        if (changeSource !== 'lastTurn') setGitChangeLoadState('error')
+        if (changeSource === 'uncommitted') setGitChangeLoadState('error')
       })
 
     return () => {
       active = false
     }
   }, [changeSource, changesCwd, gitChangeLoadRequest])
+
+  useEffect(() => {
+    if (changesPaneView !== 'files' || !changesCwd) return
+
+    let active = true
+    const nextFileTreeScope: FileTreeScope = { cwd: changesCwd }
+
+    queueMicrotask(() => {
+      if (!active) return
+      setFileTreeLoadScope(nextFileTreeScope)
+      setFileTreeLoadState('loading')
+    })
+
+    appApi
+      .getFileTree({ cwd: changesCwd })
+      .then((result) => {
+        if (!active) return
+        setFileTree(result)
+        setFileTreeScope(nextFileTreeScope)
+        setFileTreeLoadScope(nextFileTreeScope)
+        setFileTreeLoadState('ready')
+        const rememberedCollapsedFolders = collapsedFileTreeFoldersByCwdRef.current.get(
+          nextFileTreeScope.cwd
+        )
+        const nextCollapsedFolders =
+          rememberedCollapsedFolders ??
+          getDefaultFileTreeCollapsedFolders(getRepositoryFiles(result))
+
+        setCollapsedFileTreeFolders(nextCollapsedFolders)
+        collapsedFileTreeFoldersByCwdRef.current.set(nextFileTreeScope.cwd, nextCollapsedFolders)
+      })
+      .catch(() => {
+        if (!active) return
+        setFileTreeLoadScope(nextFileTreeScope)
+        setFileTreeLoadState('error')
+      })
+
+    return () => {
+      active = false
+    }
+  }, [changesCwd, changesPaneView, fileTreeLoadRequest])
 
   const searchTerms = searchQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
   const filteredChats =
@@ -1934,18 +2275,25 @@ export const App: React.FC = () => {
   const handleSelectChat = (chat: ProviderChat): void => {
     const selectingCurrentChat =
       selectedChat?.providerId === chat.providerId && selectedChat.id === chat.id
+    const seenUpdatedAt = chat.updatedAt
+    const seenChat = {
+      ...chat,
+      seenUpdatedAt:
+        chat.seenUpdatedAt == null ? seenUpdatedAt : Math.max(chat.seenUpdatedAt, seenUpdatedAt)
+    }
 
     setSendState('idle')
     setEditingMessage(null)
     setNewChatOpen(false)
     setSearchOpen(false)
     setSearchQuery('')
+    markChatSeenAt(chat.providerId, chat.id, seenUpdatedAt)
 
     if (selectingCurrentChat && chatLoadState === 'ready' && chatDetail?.id === chat.id) return
 
     setChatDetail(null)
     setChatLoadState('loading')
-    setSelectedChat(chat)
+    setSelectedChat(seenChat)
 
     if (selectingCurrentChat) {
       setChatLoadRequest((currentRequest) => currentRequest + 1)
@@ -2013,12 +2361,29 @@ export const App: React.FC = () => {
   }
 
   const handleApprovalModeChange = (nextApprovalMode: ProviderApprovalMode): void => {
+    if (sandboxMode === 'danger-full-access') return
+
     approvalModeManuallySelectedRef.current = true
     setApprovalMode(nextApprovalMode)
   }
 
   const handleSandboxModeChange = (nextSandboxMode: ProviderSandboxMode): void => {
     sandboxModeManuallySelectedRef.current = true
+
+    if (nextSandboxMode === 'danger-full-access') {
+      if (sandboxMode !== 'danger-full-access') {
+        approvalModeBeforeFullAccessRef.current = approvalMode === 'never' ? null : approvalMode
+      }
+      setApprovalMode('never')
+    } else if (
+      sandboxMode === 'danger-full-access' &&
+      approvalMode === 'never' &&
+      approvalModeBeforeFullAccessRef.current
+    ) {
+      setApprovalMode(approvalModeBeforeFullAccessRef.current)
+      approvalModeBeforeFullAccessRef.current = null
+    }
+
     setSandboxMode(nextSandboxMode)
   }
 
@@ -2193,7 +2558,7 @@ export const App: React.FC = () => {
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
     const turnOptions = {
-      ...getApprovalAccessOptions(approvalMode),
+      ...getApprovalAccessOptions(approvalMode, sandboxMode),
       model,
       reasoningEffort,
       sandboxMode
@@ -2224,7 +2589,7 @@ export const App: React.FC = () => {
                 message,
                 turnOptions
               )
-        applyChatDetail(selectedChat.providerId, detail)
+        applyViewedChatDetail(selectedChat.providerId, detail)
         setEditingMessage(null)
         setSendState('idle')
       } catch (error) {
@@ -2245,7 +2610,7 @@ export const App: React.FC = () => {
           ...turnOptions,
           cwd: newSessionCwd ?? undefined
         })
-        applyChatDetail(newSessionProvider, detail, { select: true })
+        applyViewedChatDetail(newSessionProvider, detail, { select: true })
         setSendState('idle')
       } catch {
         setSendState('error')
@@ -2269,7 +2634,7 @@ export const App: React.FC = () => {
           activeMode ?? 'steer',
           turnOptions
         )
-        applyChatDetail(providerId, detail)
+        applyViewedChatDetail(providerId, detail)
         setSendState('idle')
       } catch {
         setSendState('error')
@@ -2281,21 +2646,22 @@ export const App: React.FC = () => {
     }
 
     if (chatDetail?.id === chatId) {
-      applyChatDetail(providerId, {
+      applyViewedChatDetail(providerId, {
         ...chatDetail,
         status: 'active',
+        contextUsage: chatDetail.contextUsage,
         items: getOptimisticItems(chatDetail.items, message)
       })
     }
 
     try {
       const detail = await providerApi.continueChat(providerId, chatId, message, turnOptions)
-      applyChatDetail(providerId, detail)
+      applyViewedChatDetail(providerId, detail)
       setSendState('idle')
     } catch {
       void providerApi
         .getChat(providerId, chatId)
-        .then((detail) => applyChatDetail(providerId, detail))
+        .then((detail) => applyViewedChatDetail(providerId, detail))
         .catch(() => {})
       setSendState('error')
     } finally {
@@ -2303,19 +2669,21 @@ export const App: React.FC = () => {
     }
   }
 
-  const handleResolveApproval = async (decision: ProviderApprovalDecision): Promise<void> => {
-    if (!selectedChat || !pendingApproval || approvalDecisionInFlight) return
+  const resolveChatApproval = async (
+    chat: ProviderChat,
+    approval: NonNullable<ProviderChat['pendingApproval']>,
+    decision: ProviderApprovalDecision,
+    options: { markViewed: boolean }
+  ): Promise<void> => {
+    if (approvalResolution.decision) return
 
-    const approvalId = pendingApproval.id
+    const approvalId = approval.id
     setApprovalResolution({ approvalId, decision, error: null })
 
     try {
-      const detail = await providerApi.resolveApproval(
-        selectedChat.providerId,
-        selectedChat.id,
-        decision
-      )
-      applyChatDetail(selectedChat.providerId, detail)
+      const detail = await providerApi.resolveApproval(chat.providerId, chat.id, decision)
+      if (options.markViewed) applyViewedChatDetail(chat.providerId, detail)
+      else applyChatDetail(chat.providerId, detail)
     } catch {
       setApprovalResolution({
         approvalId,
@@ -2331,6 +2699,26 @@ export const App: React.FC = () => {
     }
   }
 
+  const handleResolveApproval = async (decision: ProviderApprovalDecision): Promise<void> => {
+    if (!selectedChat || !pendingApproval || approvalDecisionInFlight) return
+
+    await resolveChatApproval(selectedChat, pendingApproval, decision, { markViewed: true })
+  }
+
+  const handleResolveChatApproval = async (
+    chat: ProviderChat,
+    decision: ProviderApprovalDecision
+  ): Promise<void> => {
+    const approval =
+      chat.pendingApproval ??
+      (selectedChat?.providerId === chat.providerId && chatDetail?.id === chat.id
+        ? chatDetail.pendingApproval
+        : null)
+    if (!approval) return
+
+    await resolveChatApproval(chat, approval, decision, { markViewed: false })
+  }
+
   const handleStopChat = async (): Promise<void> => {
     if (!selectedChat || sendInFlightRef.current) return
     sendInFlightRef.current = true
@@ -2338,7 +2726,7 @@ export const App: React.FC = () => {
 
     try {
       const detail = await providerApi.stopChat(selectedChat.providerId, selectedChat.id)
-      applyChatDetail(selectedChat.providerId, detail)
+      applyViewedChatDetail(selectedChat.providerId, detail)
       setSendState('idle')
     } catch {
       setSendState('error')
@@ -2356,7 +2744,7 @@ export const App: React.FC = () => {
         selectedChat.id,
         message.id
       )
-      applyChatDetail(selectedChat.providerId, detail)
+      applyViewedChatDetail(selectedChat.providerId, detail)
       if (sendState === 'error') setSendState('idle')
     } catch {
       setSendState('error')
@@ -2374,7 +2762,7 @@ export const App: React.FC = () => {
         selectedChat.id,
         message.id
       )
-      applyChatDetail(selectedChat.providerId, detail)
+      applyViewedChatDetail(selectedChat.providerId, detail)
       setSendState('idle')
     } catch {
       setSendState('error')
@@ -2404,10 +2792,12 @@ export const App: React.FC = () => {
         onMarkChatDone={handleMarkChatDone}
         onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
         onNewChatInCwd={handleNewChatInCwd}
+        onResolveApproval={(chat, decision) => void handleResolveChatApproval(chat, decision)}
         onSelectChat={handleSelectChat}
         onToggle={handleToggleCwdGroup}
         onToggleChatPinned={handleToggleChatPinned}
         onUnpinPinnedChats={(nextGroup) => void handleUnpinPinnedChats(nextGroup)}
+        resolvingApprovalId={resolvingApprovalId}
       />
     )
   }
@@ -2429,10 +2819,27 @@ export const App: React.FC = () => {
     !editingMessage
   )
   const visibleChatItems = chatDetail ? getVisibleChatItems(chatDetail.items, editingMessage) : []
+  const messageBoxContextUsage = useMemo(() => {
+    if (chatDetail?.contextUsage) {
+      return {
+        source: 'exact' as const,
+        usedTokens: chatDetail.contextUsage.usedTokens,
+        maxTokens: chatDetail.contextUsage.maxTokens
+      }
+    }
+
+    const estimatedTokens = getEstimatedContextTokens(chatDetail)
+    return {
+      source: estimatedTokens == null ? ('unavailable' as const) : ('estimated' as const),
+      usedTokens: estimatedTokens,
+      maxTokens: null
+    }
+  }, [chatDetail])
   const chatPanelOpen = Boolean(selectedChat) || newChatOpen
   const lastTurnChangedFiles = useMemo(() => getLastTurnChangedFiles(chatDetail), [chatDetail])
+  const chatChangedFiles = useMemo(() => getChatChangedFiles(chatDetail), [chatDetail])
   const currentGitChangeSource: GitChangeSource | null =
-    changeSource === 'lastTurn' ? null : changeSource
+    changeSource === 'uncommitted' ? 'uncommitted' : null
   const gitChangesMatchCurrentSource = isGitChangesScope(
     gitChangesScope,
     changesCwd,
@@ -2443,12 +2850,29 @@ export const App: React.FC = () => {
     () => (changesCwd ? getGitChangedFiles(displayedGitChanges) : []),
     [changesCwd, displayedGitChanges]
   )
-  const rawChangedFiles = changeSource === 'lastTurn' ? lastTurnChangedFiles : gitChangedFiles
+  const rawChangedFiles =
+    changeSource === 'chat'
+      ? chatChangedFiles
+      : changeSource === 'lastTurn'
+        ? lastTurnChangedFiles
+        : gitChangedFiles
   const changedFilesDisplayRoot =
     displayedGitChanges?.repositoryRoot ?? changesProjectCwd ?? changesCwd ?? null
   const changedFiles = useMemo(
-    () => getChangedFilesWithDisplayPaths(rawChangedFiles, changedFilesDisplayRoot),
+    () => getTreeFilesWithDisplayPaths(rawChangedFiles, changedFilesDisplayRoot),
     [changedFilesDisplayRoot, rawChangedFiles]
+  )
+  const fileTreeMatchesCurrentCwd = isFileTreeScope(fileTreeScope, changesCwd)
+  const displayedFileTree = fileTreeMatchesCurrentCwd ? fileTree : null
+  const rawRepositoryFiles = useMemo(
+    () => (changesCwd ? getRepositoryFiles(displayedFileTree) : []),
+    [changesCwd, displayedFileTree]
+  )
+  const repositoryFilesDisplayRoot =
+    displayedFileTree?.repositoryRoot ?? changesProjectCwd ?? changesCwd ?? null
+  const repositoryFiles = useMemo(
+    () => getTreeFilesWithDisplayPaths(rawRepositoryFiles, repositoryFilesDisplayRoot),
+    [rawRepositoryFiles, repositoryFilesDisplayRoot]
   )
   const gitChangeLoadMatchesCurrentSource = isGitChangesScope(
     gitChangeLoadScope,
@@ -2456,18 +2880,42 @@ export const App: React.FC = () => {
     currentGitChangeSource
   )
   const changesLoadState =
-    changeSource === 'lastTurn' || !changesCwd
+    changeSource === 'chat' || changeSource === 'lastTurn' || !changesCwd
       ? 'ready'
       : gitChangeLoadMatchesCurrentSource
         ? gitChangeLoadState
         : 'loading'
   const visibleChangesLoadState =
     changesLoadState === 'loading' && displayedGitChanges ? 'ready' : changesLoadState
-  const unpushedCount =
-    changesCwd && gitChangesScope?.cwd === changesCwd ? (gitChanges?.unpushedCount ?? 0) : 0
+  const fileTreeLoadMatchesCurrentCwd = isFileTreeScope(fileTreeLoadScope, changesCwd)
+  const filesLoadState = !changesCwd
+    ? 'ready'
+    : fileTreeLoadMatchesCurrentCwd
+      ? fileTreeLoadState
+      : 'loading'
+  const visibleFilesLoadState =
+    filesLoadState === 'loading' && displayedFileTree ? 'ready' : filesLoadState
+  const gitSyncMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
+  const unpulledCount = gitSyncMetadata?.unpulledCount ?? 0
+  const unpushedCount = gitSyncMetadata?.unpushedCount ?? 0
+  const hasUnpulledChanges = unpulledCount > 0
   const hasUnpushedChanges = unpushedCount > 0
+  const hasSyncChanges = hasUnpulledChanges || hasUnpushedChanges
+  const primarySyncAction: GitSyncAction =
+    hasUnpulledChanges && hasUnpushedChanges ? 'pullAndPush' : hasUnpulledChanges ? 'pull' : 'push'
+  const syncButtonTitle = [
+    hasUnpulledChanges ? `${unpulledCount} commit${unpulledCount === 1 ? '' : 's'} to pull` : null,
+    hasUnpushedChanges ? `${unpushedCount} commit${unpushedCount === 1 ? '' : 's'} to push` : null
+  ]
+    .filter(Boolean)
+    .join(', ')
   const changesGitMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
-  const currentBranchName = changesGitMetadata?.branchName ?? selectedChat?.branchName ?? null
+  const filesMetadata = changesCwd && fileTreeScope?.cwd === changesCwd ? fileTree : null
+  const currentBranchName =
+    (changesPaneView === 'files' ? filesMetadata?.branchName : changesGitMetadata?.branchName) ??
+    changesGitMetadata?.branchName ??
+    selectedChat?.branchName ??
+    null
   const branchDropdownValue = currentBranchName ?? '__no_branch__'
   const branchDropdownOptions = useMemo<DropdownOption<string>[]>(
     () => [
@@ -2479,42 +2927,80 @@ export const App: React.FC = () => {
     ],
     [branchDropdownValue, currentBranchName]
   )
-  const canCommitChangeSource = changeSource !== 'branch'
-  const commitUnavailableTitle = canCommitChangeSource
-    ? undefined
-    : 'Switch to Uncommitted or Last turn to commit files.'
   const commitInputValue = commitInput.trim()
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
-  const changeTree = useMemo(() => buildChangeTree(changedFiles), [changedFiles])
+  const commitPatches = useMemo(() => getCommitPatches(changedFiles), [changedFiles])
   const syncInProgress = syncState === 'sending'
   const visibleSyncRecovery = syncRecovery && syncRecovery.cwd === changesCwd ? syncRecovery : null
   const commitBaseDisabled =
-    !canCommitChangeSource ||
     changedFiles.length === 0 ||
-    commitFiles.length === 0 ||
+    (isPatchChangeSource(changeSource) ? commitPatches.length === 0 : commitFiles.length === 0) ||
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
     syncInProgress
   const getCommitActionDisabled = (action: GitCommitPromptAction): boolean =>
-    commitBaseDisabled ||
-    (commitMode === 'manual'
-      ? !changesCwd || action === 'multipleCommits' || (action === 'commit' && !commitInputValue)
-      : sendState === 'sending' ||
-        Boolean(editingMessage) ||
-        (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false))
+    commitBaseDisabled || !changesCwd || (action === 'commit' && !commitInputValue)
   const commitDisabled = getCommitActionDisabled('commit')
+  const commitNameSourceAvailable = isPatchChangeSource(changeSource)
+    ? commitPatches.length > 0
+    : commitFiles.length > 0
+  const generateCommitNameDisabled =
+    !changesCwd ||
+    !commitNameSourceAvailable ||
+    changesLoadState !== 'ready' ||
+    commitNameState === 'sending' ||
+    commitState === 'sending' ||
+    syncInProgress
+  const generateCommitNameTitle = 'Generate commit name'
   const syncDisabled = !changesCwd || syncInProgress || commitState === 'sending'
+  const syncDropdownActions: ButtonDropdownAction[] = [
+    ...(hasUnpulledChanges
+      ? [
+          {
+            id: 'pull',
+            label: `Pull ${unpulledCount}`,
+            disabled: syncDisabled,
+            callback: () => void handleSyncChanges('pull'),
+            icon: <Download aria-hidden="true" />
+          }
+        ]
+      : []),
+    ...(hasUnpushedChanges
+      ? [
+          {
+            id: 'push',
+            label: `Push ${unpushedCount}`,
+            disabled: syncDisabled,
+            callback: () => void handleSyncChanges('push'),
+            icon: <Upload aria-hidden="true" />
+          }
+        ]
+      : [])
+  ]
   const gitAiResolutionDisabled =
     syncInProgress ||
     sendState === 'sending' ||
     Boolean(editingMessage) ||
     (selectedChat ? chatLoadState !== 'ready' || chatIsBusy : false)
-  const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd, displayedGitChanges)
-  const showBranchEmptyIcon =
-    changeSource === 'branch' &&
-    visibleChangesLoadState === 'ready' &&
-    changedFiles.length === 0 &&
-    Boolean(displayedGitChanges?.baseRef)
+  const changesEmptyMessage = getChangesEmptyMessage(changeSource, changesCwd)
+  const filesEmptyMessage = getFileTreeEmptyMessage(changesCwd)
+  const changeTree = useMemo(() => buildChangeTree(changedFiles), [changedFiles])
+  const repositoryFileTree = useMemo(() => buildChangeTree(repositoryFiles), [repositoryFiles])
+  const changeTreeFolderPaths = useMemo(() => getTreeFolderPaths(changeTree), [changeTree])
+  const repositoryFileTreeFolderPaths = useMemo(
+    () => getTreeFolderPaths(repositoryFileTree),
+    [repositoryFileTree]
+  )
+  const activeTreeFolderPaths =
+    changesPaneView === 'files' ? repositoryFileTreeFolderPaths : changeTreeFolderPaths
+  const activeCollapsedTreeFolders =
+    changesPaneView === 'files' ? collapsedFileTreeFolders : collapsedChangeTreeFolders
+  const hasCollapsedActiveTreeFolders = activeTreeFolderPaths.some(
+    (folderPath) => activeCollapsedTreeFolders[folderPath]
+  )
+  const treeToggleLabel = hasCollapsedActiveTreeFolders ? 'Expand all' : 'Collapse all'
+  const activeSidebarLoadState = changesPaneView === 'files' ? filesLoadState : changesLoadState
+  const refreshSidebarLabel = changesPaneView === 'files' ? 'Refresh files' : 'Refresh changes'
   const usePercentagePaneTracks = Boolean(panePercents) || panelsWidth > 0
   const panelsStyle = {
     '--chat-sidebar-width': usePercentagePaneTracks
@@ -2535,9 +3021,47 @@ export const App: React.FC = () => {
     }))
   }
 
-  const renderChangeTreeNode = (node: ChangeTreeNode, depth: number): React.ReactElement => {
+  const handleToggleFileTreeFolder = (folderPath: string): void => {
+    setCollapsedFileTreeFolders((currentFolders) => {
+      const nextFolders = {
+        ...currentFolders,
+        [folderPath]: !currentFolders[folderPath]
+      }
+
+      if (changesCwd) collapsedFileTreeFoldersByCwdRef.current.set(changesCwd, nextFolders)
+
+      return nextFolders
+    })
+  }
+
+  const handleToggleActiveTreeFolders = (): void => {
+    if (activeTreeFolderPaths.length === 0) return
+
+    const nextCollapsedFolders = hasCollapsedActiveTreeFolders
+      ? {}
+      : getCollapsedTreeFolders(activeTreeFolderPaths)
+
+    if (changesPaneView === 'files') {
+      if (changesCwd) {
+        collapsedFileTreeFoldersByCwdRef.current.set(changesCwd, nextCollapsedFolders)
+      }
+      setCollapsedFileTreeFolders(nextCollapsedFolders)
+      return
+    }
+
+    setCollapsedChangeTreeFolders(nextCollapsedFolders)
+  }
+
+  const renderTreeNode = <TFile extends TreeFile>(
+    node: ChangeTreeNode<TFile>,
+    depth: number,
+    options: {
+      collapsedFolders: Record<string, boolean>
+      onToggleFolder: (folderPath: string) => void
+    }
+  ): React.ReactElement => {
     if (node.type === 'folder') {
-      const collapsed = Boolean(collapsedChangeTreeFolders[node.path])
+      const collapsed = Boolean(options.collapsedFolders[node.path])
 
       return (
         <li
@@ -2551,7 +3075,7 @@ export const App: React.FC = () => {
             type="button"
             title={node.path}
             style={getChangeTreeRowStyle(depth)}
-            onClick={() => handleToggleChangeTreeFolder(node.path)}
+            onClick={() => options.onToggleFolder(node.path)}
           >
             <span className="changes-sidebar__tree-chevron" aria-hidden="true">
               {collapsed ? <ChevronRight /> : <ChevronDown />}
@@ -2563,7 +3087,7 @@ export const App: React.FC = () => {
           </button>
           {!collapsed && node.children.length > 0 && (
             <ul className="changes-sidebar__tree-group" role="group">
-              {node.children.map((childNode) => renderChangeTreeNode(childNode, depth + 1))}
+              {node.children.map((childNode) => renderTreeNode(childNode, depth + 1, options))}
             </ul>
           )}
         </li>
@@ -2573,13 +3097,18 @@ export const App: React.FC = () => {
     const previousDisplayPath = getChangedFileDisplayPreviousPath(node.file)
     const displayPath = getChangedFileDisplayPath(node.file)
     const fileTitle = previousDisplayPath ? `${previousDisplayPath} -> ${displayPath}` : displayPath
+    const changeKind = node.file.kind ?? null
+    const fileItemClassName = [
+      'changes-sidebar__tree-item',
+      'changes-sidebar__tree-item--file',
+      changeKind ? 'changes-sidebar__tree-item--changed' : null,
+      changeKind ? `changes-sidebar__tree-item--${changeKind}` : null
+    ]
+      .filter(Boolean)
+      .join(' ')
 
     return (
-      <li
-        className={`changes-sidebar__tree-item changes-sidebar__tree-item--file changes-sidebar__tree-item--${node.file.kind}`}
-        key={node.file.path}
-        role="treeitem"
-      >
+      <li className={fileItemClassName} key={node.file.path} role="treeitem">
         <div
           className="changes-sidebar__tree-row changes-sidebar__tree-row--file"
           title={fileTitle}
@@ -2597,42 +3126,91 @@ export const App: React.FC = () => {
     )
   }
 
-  const handleCommitModeChange = (mode: CommitMode): void => {
-    setCommitState('idle')
+  const renderChangeTreeNode = (
+    node: ChangeTreeNode<DisplayTreeFile<ChangedFile>>,
+    depth: number
+  ): React.ReactElement =>
+    renderTreeNode(node, depth, {
+      collapsedFolders: collapsedChangeTreeFolders,
+      onToggleFolder: handleToggleChangeTreeFolder
+    })
+
+  const renderRepositoryFileTreeNode = (
+    node: ChangeTreeNode<DisplayTreeFile<RepositoryFile>>,
+    depth: number
+  ): React.ReactElement =>
+    renderTreeNode(node, depth, {
+      collapsedFolders: collapsedFileTreeFolders,
+      onToggleFolder: handleToggleFileTreeFolder
+    })
+
+  const handleGenerateCommitName = async (): Promise<void> => {
+    if (generateCommitNameDisabled || !changesCwd) return
+
+    setCommitNameState('sending')
+    setCommitNameError(null)
     setCommitError(null)
-    setCommitMode(mode)
+
+    try {
+      const recentCommits = await appApi.getRecentGitCommitMessages({ cwd: changesCwd, limit: 3 })
+      let prompt: string
+
+      if (isPatchChangeSource(changeSource)) {
+        prompt = getPatchCommitNamePrompt(recentCommits.messages, commitPatches)
+      } else {
+        const uncommittedDiff = await appApi.getUncommittedGitDiff({ cwd: changesCwd })
+        if (!uncommittedDiff.diff.trim()) throw new Error('No uncommitted diff to name')
+
+        prompt = getUncommittedCommitNamePrompt(recentCommits.messages, uncommittedDiff.diff)
+      }
+
+      const generatedName = await providerApi.generateOneShot(
+        selectedChat?.providerId ?? newSessionProvider,
+        prompt,
+        {
+          ...getApprovalAccessOptions('never', 'read-only'),
+          cwd: changesCwd,
+          model,
+          reasoningEffort,
+          sandboxMode: 'read-only'
+        }
+      )
+      const commitName = normalizeGeneratedCommitName(generatedName)
+
+      if (!commitName) throw new Error('Empty commit name')
+
+      setCommitInput(commitName)
+      setCommitNameState('idle')
+    } catch (error) {
+      setCommitNameState('error')
+      setCommitNameError(getErrorMessage(error, 'Unable to generate commit name.'))
+    }
   }
 
   const handleCommitChangedFiles = async (
     action: GitCommitPromptAction = 'commit'
   ): Promise<void> => {
     if (getCommitActionDisabled(action)) return
+    if (!changesCwd) return
 
-    if (commitMode === 'manual') {
-      if (!changesCwd || action === 'multipleCommits') return
+    setCommitState('sending')
+    setCommitError(null)
 
-      setCommitState('sending')
-      setCommitError(null)
-
-      try {
-        await appApi.commitGitChanges({
-          cwd: changesCwd,
-          action,
-          files: commitFiles,
-          message: action === 'amend' ? null : commitInputValue
-        })
-        setCommitInput('')
-        setCommitState('idle')
-        setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
-      } catch (error) {
-        setCommitState('error')
-        setCommitError(getErrorMessage(error, 'Unable to commit these files.'))
-      }
-
-      return
+    try {
+      await appApi.commitGitChanges({
+        cwd: changesCwd,
+        action,
+        files: commitFiles,
+        patches: isPatchChangeSource(changeSource) ? commitPatches : undefined,
+        message: action === 'amend' ? null : commitInputValue
+      })
+      setCommitInput('')
+      setCommitState('idle')
+      setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
+    } catch (error) {
+      setCommitState('error')
+      setCommitError(getErrorMessage(error, 'Unable to commit these files.'))
     }
-
-    await handleSendMessage(getCommitMessage(changedFiles, action, changeSource, commitInputValue))
   }
 
   const showRecoverableGitFailure = (
@@ -2823,7 +3401,7 @@ export const App: React.FC = () => {
                     Search conversations
                   </label>
                   <div className="chat-home__search-field">
-                    <input
+                    <Input
                       ref={searchInputRef}
                       id="chat-search"
                       type="search"
@@ -3114,6 +3692,10 @@ export const App: React.FC = () => {
                   disabled={messageBoxDisabled}
                   editSession={editingMessage}
                   error={sendState === 'error' ? 'Unable to complete request.' : null}
+                  accountUsage={accountUsage}
+                  accountUsageError={accountUsageError}
+                  accountUsageState={accountUsageState}
+                  contextUsage={messageBoxContextUsage}
                   model={model}
                   models={models}
                   pending={sendState === 'sending'}
@@ -3126,6 +3708,7 @@ export const App: React.FC = () => {
                   onReasoningEffortChange={handleReasoningEffortChange}
                   onSandboxModeChange={handleSandboxModeChange}
                   onStop={handleStopChat}
+                  onUsageRefresh={refreshAccountUsage}
                   onSend={handleSendMessage}
                 />
               </div>
@@ -3149,49 +3732,53 @@ export const App: React.FC = () => {
           <aside className="changes-sidebar" aria-label="Changed files">
             <header className="changes-sidebar__header">
               {renderWindowControls('default')}
-              <div className="changes-sidebar__view-toggle" role="group" aria-label="Changes view">
-                <button
-                  className={`changes-sidebar__view-option${
-                    changesPaneView === 'git' ? ' changes-sidebar__view-option--active' : ''
-                  }`}
-                  type="button"
-                  aria-label="Git"
-                  aria-pressed={changesPaneView === 'git'}
-                  title="Git"
-                  onClick={() => setChangesPaneView('git')}
-                >
-                  <GitBranch aria-hidden="true" />
-                </button>
-                <button
-                  className={`changes-sidebar__view-option${
-                    changesPaneView === 'files' ? ' changes-sidebar__view-option--active' : ''
-                  }`}
-                  type="button"
-                  aria-label="Files"
-                  aria-pressed={changesPaneView === 'files'}
-                  title="Files"
-                  onClick={() => setChangesPaneView('files')}
-                >
-                  <Files aria-hidden="true" />
-                </button>
-              </div>
+              <SegmentedControl
+                aria-label="Changes view"
+                className="changes-sidebar__view-toggle"
+                options={[
+                  {
+                    value: 'git',
+                    label: null,
+                    ariaLabel: 'Git',
+                    title: 'Git',
+                    icon: <GitBranch aria-hidden="true" />
+                  },
+                  {
+                    value: 'files',
+                    label: null,
+                    ariaLabel: 'Files',
+                    title: 'Files',
+                    icon: <Files aria-hidden="true" />
+                  }
+                ]}
+                value={changesPaneView}
+                onChange={setChangesPaneView}
+              />
             </header>
             <div className="changes-sidebar__body">
-              <div className="changes-sidebar__controls">
-                <label className="sr-only" htmlFor="changes-source">
-                  Diff type
-                </label>
-                <Dropdown
-                  id="changes-source"
-                  fill
-                  options={changeSourceOptions}
-                  size="large"
-                  value={changeSource}
-                  onChange={(nextChangeSource) => {
-                    setCollapsedChangeTreeFolders({})
-                    setChangeSource(nextChangeSource)
-                  }}
-                />
+              <div
+                className={`changes-sidebar__controls${
+                  changesPaneView === 'files' ? ' changes-sidebar__controls--files' : ''
+                }`}
+              >
+                {changesPaneView === 'git' && (
+                  <>
+                    <label className="sr-only" htmlFor="changes-source">
+                      Diff type
+                    </label>
+                    <Dropdown
+                      id="changes-source"
+                      fill
+                      options={changeSourceOptions}
+                      size="large"
+                      value={changeSource}
+                      onChange={(nextChangeSource) => {
+                        setCollapsedChangeTreeFolders({})
+                        setChangeSource(nextChangeSource)
+                      }}
+                    />
+                  </>
+                )}
                 <label className="sr-only" htmlFor="changes-branch">
                   Branch
                 </label>
@@ -3206,253 +3793,264 @@ export const App: React.FC = () => {
                 <Button
                   theme="transparent"
                   size="small"
-                  aria-label="Refresh changes"
-                  title="Refresh changes"
-                  disabled={!changesCwd || changesLoadState === 'loading'}
-                  callback={() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1)}
-                  icon={<GitRefreshIcon active={changesLoadState === 'loading'} />}
+                  aria-label={treeToggleLabel}
+                  title={treeToggleLabel}
+                  disabled={activeTreeFolderPaths.length === 0}
+                  callback={handleToggleActiveTreeFolders}
+                  icon={
+                    hasCollapsedActiveTreeFolders ? (
+                      <ListChevronsUpDown aria-hidden="true" />
+                    ) : (
+                      <ListChevronsDownUp aria-hidden="true" />
+                    )
+                  }
+                />
+                <Button
+                  theme="transparent"
+                  size="small"
+                  aria-label={refreshSidebarLabel}
+                  title={refreshSidebarLabel}
+                  disabled={!changesCwd || activeSidebarLoadState === 'loading'}
+                  callback={() => {
+                    if (changesPaneView === 'files') {
+                      setFileTreeLoadRequest((currentRequest) => currentRequest + 1)
+                      return
+                    }
+
+                    setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
+                  }}
+                  icon={<GitRefreshIcon active={activeSidebarLoadState === 'loading'} />}
                 />
               </div>
-              <div
-                className={`changes-sidebar__content${
-                  showBranchEmptyIcon ? ' changes-sidebar__content--centered' : ''
-                }`}
-              >
-                {visibleChangesLoadState === 'loading' && (
-                  <p className="changes-sidebar__status">Loading changes...</p>
-                )}
-                {visibleChangesLoadState === 'error' && (
-                  <p className="changes-sidebar__status">Unable to load changes.</p>
-                )}
-                {visibleChangesLoadState === 'ready' && changedFiles.length === 0 && (
+              <div className="changes-sidebar__content">
+                {changesPaneView === 'git' ? (
                   <>
-                    {showBranchEmptyIcon ? (
-                      <GitCompareArrows
-                        className="changes-sidebar__empty-icon"
-                        aria-label="No branch changes"
-                        role="img"
-                      />
-                    ) : (
+                    {visibleChangesLoadState === 'loading' && (
+                      <p className="changes-sidebar__status">Loading changes...</p>
+                    )}
+                    {visibleChangesLoadState === 'error' && (
+                      <p className="changes-sidebar__status">Unable to load changes.</p>
+                    )}
+                    {visibleChangesLoadState === 'ready' && changedFiles.length === 0 && (
                       <p className="changes-sidebar__status">{changesEmptyMessage}</p>
+                    )}
+                    {visibleChangesLoadState === 'ready' && changedFiles.length > 0 && (
+                      <ul className="changes-sidebar__tree" role="tree">
+                        {changeTree.map((node) => renderChangeTreeNode(node, 0))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {visibleFilesLoadState === 'loading' && (
+                      <p className="changes-sidebar__status">Loading files...</p>
+                    )}
+                    {visibleFilesLoadState === 'error' && (
+                      <p className="changes-sidebar__status">Unable to load files.</p>
+                    )}
+                    {visibleFilesLoadState === 'ready' && repositoryFiles.length === 0 && (
+                      <p className="changes-sidebar__status">{filesEmptyMessage}</p>
+                    )}
+                    {visibleFilesLoadState === 'ready' && repositoryFiles.length > 0 && (
+                      <ul className="changes-sidebar__tree" role="tree">
+                        {repositoryFileTree.map((node) => renderRepositoryFileTreeNode(node, 0))}
+                      </ul>
                     )}
                   </>
                 )}
-                {visibleChangesLoadState === 'ready' && changedFiles.length > 0 && (
-                  <ul className="changes-sidebar__tree" role="tree">
-                    {changeTree.map((node) => renderChangeTreeNode(node, 0))}
-                  </ul>
-                )}
               </div>
             </div>
-            <footer className="changes-sidebar__footer">
-              <div className="changes-sidebar__input-row">
-                <label className="changes-sidebar__commit-message">
-                  <span className="sr-only">
-                    {commitMode === 'manual' ? 'Commit message' : 'AI commit instructions'}
-                  </span>
-                  <input
-                    type="text"
-                    value={commitInput}
-                    placeholder={
-                      commitMode === 'manual' ? 'Commit message' : 'AI commit instructions'
-                    }
-                    disabled={!canCommitChangeSource}
-                    title={commitUnavailableTitle}
-                    onChange={(event) => {
-                      setCommitState('idle')
-                      setCommitError(null)
-                      setCommitInput(event.target.value)
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !commitDisabled) {
-                        void handleCommitChangedFiles()
-                      }
-                    }}
-                  />
-                </label>
-                <CommitModeToggle
-                  mode={commitMode}
-                  disabled={!canCommitChangeSource}
-                  onChange={handleCommitModeChange}
-                />
-              </div>
-              <div className="changes-sidebar__commit-row">
-                <Button
-                  disabled={commitDisabled}
-                  title={commitUnavailableTitle}
-                  callback={() => void handleCommitChangedFiles('commit')}
-                  dropdownActions={[
-                    {
-                      id: 'amend',
-                      label: commitActionLabels.amend,
-                      disabled: getCommitActionDisabled('amend'),
-                      title: commitUnavailableTitle,
-                      callback: () => void handleCommitChangedFiles('amend')
-                    },
-                    {
-                      id: 'multipleCommits',
-                      label: commitActionLabels.multipleCommits,
-                      disabled: getCommitActionDisabled('multipleCommits'),
-                      title: commitUnavailableTitle,
-                      callback: () => void handleCommitChangedFiles('multipleCommits')
-                    }
-                  ]}
-                  dropdownLabel="Commit actions"
-                  dropdownMenuAlign="end"
-                  dropdownPlacement="top"
-                  icon={<GitCommitHorizontal aria-hidden="true" />}
-                  label={<span>{commitActionLabels.commit}</span>}
-                  theme="primary"
-                  fill
-                />
-              </div>
-              {hasUnpushedChanges && (
-                <div className="changes-sidebar__sync-row">
+            {changesPaneView === 'git' && (
+              <footer className="changes-sidebar__footer">
+                <div className="changes-sidebar__input-row">
+                  <label className="changes-sidebar__commit-message">
+                    <span className="sr-only">Commit message</span>
+                    <Input
+                      type="text"
+                      value={commitInput}
+                      placeholder="Commit message"
+                      onChange={(event) => {
+                        setCommitState('idle')
+                        setCommitError(null)
+                        setCommitNameState('idle')
+                        setCommitNameError(null)
+                        setCommitInput(event.target.value)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !commitDisabled) {
+                          void handleCommitChangedFiles()
+                        }
+                      }}
+                    />
+                  </label>
                   <Button
-                    title={`${unpushedCount} unpushed commit${unpushedCount === 1 ? '' : 's'}`}
-                    disabled={syncDisabled}
-                    callback={() => void handleSyncChanges('pullAndPush')}
+                    aria-label="Generate commit name"
+                    title={generateCommitNameTitle}
+                    disabled={generateCommitNameDisabled}
+                    callback={() => void handleGenerateCommitName()}
+                    icon={<Sparkles aria-hidden="true" />}
+                    label={<span>AI</span>}
+                    theme="secondary"
+                  />
+                </div>
+                <div className="changes-sidebar__commit-row">
+                  <Button
+                    disabled={commitDisabled}
+                    callback={() => void handleCommitChangedFiles('commit')}
                     dropdownActions={[
                       {
-                        id: 'pull',
-                        label: 'Pull',
-                        disabled: syncDisabled,
-                        callback: () => void handleSyncChanges('pull'),
-                        icon: <Download aria-hidden="true" />
-                      },
-                      {
-                        id: 'push',
-                        label: 'Push',
-                        disabled: syncDisabled,
-                        callback: () => void handleSyncChanges('push'),
-                        icon: <Upload aria-hidden="true" />
+                        id: 'amend',
+                        label: commitActionLabels.amend,
+                        disabled: getCommitActionDisabled('amend'),
+                        callback: () => void handleCommitChangedFiles('amend')
                       }
                     ]}
-                    dropdownLabel="Sync actions"
+                    dropdownLabel="Commit actions"
                     dropdownMenuAlign="end"
                     dropdownPlacement="top"
-                    icon={<GitRefreshIcon active={syncInProgress} />}
-                    label={<span>Pull & Push</span>}
-                    theme="secondary"
+                    icon={<GitCommitHorizontal aria-hidden="true" />}
+                    label={<span>{commitActionLabels.commit}</span>}
+                    theme="primary"
                     fill
                   />
                 </div>
-              )}
-              {visibleSyncRecovery && (
-                <section
-                  className="chat-approval changes-sidebar__sync-recovery"
-                  aria-label="Git recovery options"
-                >
-                  <div className="changes-sidebar__sync-recovery-header">
-                    <span className="chat-approval__label">
-                      {visibleSyncRecovery.failure.title}
-                    </span>
+                {hasSyncChanges && (
+                  <div className="changes-sidebar__sync-row">
                     <Button
-                      aria-label="Dismiss Git recovery options"
-                      title="Dismiss"
-                      disabled={syncInProgress}
-                      callback={handleDismissGitSyncRecovery}
-                      icon={<X aria-hidden="true" />}
-                      theme="transparent"
-                      size="small"
-                    />
-                  </div>
-                  <span
-                    className="chat-approval__summary"
-                    title={visibleSyncRecovery.failure.message}
-                  >
-                    {visibleSyncRecovery.failure.message}
-                  </span>
-                  <span
-                    className="chat-approval__cwd changes-sidebar__sync-recovery-command"
-                    title={visibleSyncRecovery.failure.command}
-                  >
-                    {visibleSyncRecovery.failure.command}
-                  </span>
-                  {visibleSyncRecovery.error && (
-                    <span className="chat-approval__error" role="status">
-                      {visibleSyncRecovery.error}
-                    </span>
-                  )}
-                  <div
-                    className={`changes-sidebar__sync-recovery-actions${
-                      visibleSyncRecovery.failure.actions.length === 1
-                        ? ' changes-sidebar__sync-recovery-actions--single'
-                        : ''
-                    }`}
-                  >
-                    {visibleSyncRecovery.failure.actions.map((action, actionIndex) => {
-                      const rememberLabel = getGitRecoveryRememberLabel(action.id)
-
-                      return (
-                        <Button
-                          key={action.id}
-                          title={action.description}
-                          disabled={syncInProgress}
-                          callback={() => void handleGitSyncRecoveryAction(action.id)}
-                          dropdownActions={
-                            rememberLabel
-                              ? [
-                                  {
-                                    id: `${action.id}-remember`,
-                                    label: rememberLabel,
-                                    title: `${rememberLabel} for this repository`,
-                                    callback: () =>
-                                      void handleGitSyncRecoveryAction(action.id, {
-                                        rememberStrategy: true
-                                      })
-                                  }
-                                ]
-                              : undefined
-                          }
-                          dropdownLabel={`${action.label} options`}
-                          dropdownMenuAlign="end"
-                          dropdownPlacement="top"
-                          icon={getGitRecoveryActionIcon(action.id, syncInProgress)}
-                          label={<span>{action.label}</span>}
-                          theme={actionIndex === 0 ? 'primary' : 'secondary'}
-                          size="small"
-                          fill
-                        />
-                      )
-                    })}
-                  </div>
-                  <div className="changes-sidebar__sync-recovery-ai">
-                    <Button
-                      title="Ask Codex to resolve this Git sync issue once"
-                      disabled={gitAiResolutionDisabled}
-                      callback={() => void handleGitAiResolution()}
-                      dropdownActions={[
-                        {
-                          id: 'ai-remember',
-                          label: 'Make it remember',
-                          title: 'Ask Codex to configure a repo-local pull strategy, then sync',
-                          callback: () => void handleGitAiResolution(true)
-                        }
-                      ]}
-                      dropdownLabel="AI resolution options"
+                      title={syncButtonTitle}
+                      disabled={syncDisabled}
+                      callback={() => void handleSyncChanges(primarySyncAction)}
+                      dropdownActions={syncDropdownActions}
+                      dropdownLabel="Sync actions"
                       dropdownMenuAlign="end"
                       dropdownPlacement="top"
-                      icon={<Sparkles aria-hidden="true" />}
-                      label={<span>AI Resolution</span>}
+                      label={
+                        <GitSyncCountsLabel
+                          unpulledCount={unpulledCount}
+                          unpushedCount={unpushedCount}
+                        />
+                      }
                       theme="secondary"
-                      size="small"
                       fill
                     />
                   </div>
-                </section>
-              )}
-              {commitState === 'error' && (
-                <p className="changes-sidebar__commit-error" role="status">
-                  {commitError ?? 'Unable to commit these files.'}
-                </p>
-              )}
-              {syncState === 'error' && !syncRecovery && (
-                <p className="changes-sidebar__commit-error" role="status">
-                  {syncError ?? 'Unable to sync changes.'}
-                </p>
-              )}
-            </footer>
+                )}
+                {visibleSyncRecovery && (
+                  <section
+                    className="chat-approval changes-sidebar__sync-recovery"
+                    aria-label="Git recovery options"
+                  >
+                    <div className="changes-sidebar__sync-recovery-header">
+                      <span className="chat-approval__label">
+                        {visibleSyncRecovery.failure.title}
+                      </span>
+                      <Button
+                        aria-label="Dismiss Git recovery options"
+                        title="Dismiss"
+                        disabled={syncInProgress}
+                        callback={handleDismissGitSyncRecovery}
+                        icon={<X aria-hidden="true" />}
+                        theme="transparent"
+                        size="small"
+                      />
+                    </div>
+                    <span
+                      className="chat-approval__summary"
+                      title={visibleSyncRecovery.failure.message}
+                    >
+                      {visibleSyncRecovery.failure.message}
+                    </span>
+                    <span
+                      className="chat-approval__cwd changes-sidebar__sync-recovery-command"
+                      title={visibleSyncRecovery.failure.command}
+                    >
+                      {visibleSyncRecovery.failure.command}
+                    </span>
+                    {visibleSyncRecovery.error && (
+                      <span className="chat-approval__error" role="status">
+                        {visibleSyncRecovery.error}
+                      </span>
+                    )}
+                    <div
+                      className={`changes-sidebar__sync-recovery-actions${
+                        visibleSyncRecovery.failure.actions.length === 1
+                          ? ' changes-sidebar__sync-recovery-actions--single'
+                          : ''
+                      }`}
+                    >
+                      {visibleSyncRecovery.failure.actions.map((action, actionIndex) => {
+                        const rememberLabel = getGitRecoveryRememberLabel(action.id)
+
+                        return (
+                          <Button
+                            key={action.id}
+                            title={action.description}
+                            disabled={syncInProgress}
+                            callback={() => void handleGitSyncRecoveryAction(action.id)}
+                            dropdownActions={
+                              rememberLabel
+                                ? [
+                                    {
+                                      id: `${action.id}-remember`,
+                                      label: rememberLabel,
+                                      title: `${rememberLabel} for this repository`,
+                                      callback: () =>
+                                        void handleGitSyncRecoveryAction(action.id, {
+                                          rememberStrategy: true
+                                        })
+                                    }
+                                  ]
+                                : undefined
+                            }
+                            dropdownLabel={`${action.label} options`}
+                            dropdownMenuAlign="end"
+                            dropdownPlacement="top"
+                            icon={getGitRecoveryActionIcon(action.id, syncInProgress)}
+                            label={<span>{action.label}</span>}
+                            theme={actionIndex === 0 ? 'primary' : 'secondary'}
+                            size="small"
+                            fill
+                          />
+                        )
+                      })}
+                    </div>
+                    <div className="changes-sidebar__sync-recovery-ai">
+                      <Button
+                        title="Ask Codex to resolve this Git sync issue once"
+                        disabled={gitAiResolutionDisabled}
+                        callback={() => void handleGitAiResolution()}
+                        dropdownActions={[
+                          {
+                            id: 'ai-remember',
+                            label: 'Make it remember',
+                            title: 'Ask Codex to configure a repo-local pull strategy, then sync',
+                            callback: () => void handleGitAiResolution(true)
+                          }
+                        ]}
+                        dropdownLabel="AI resolution options"
+                        dropdownMenuAlign="end"
+                        dropdownPlacement="top"
+                        icon={<Sparkles aria-hidden="true" />}
+                        label={<span>AI Resolution</span>}
+                        theme="secondary"
+                        size="small"
+                        fill
+                      />
+                    </div>
+                  </section>
+                )}
+                {(commitState === 'error' || commitNameState === 'error') && (
+                  <p className="changes-sidebar__commit-error" role="status">
+                    {commitError ?? commitNameError ?? 'Unable to commit these files.'}
+                  </p>
+                )}
+                {syncState === 'error' && !syncRecovery && (
+                  <p className="changes-sidebar__commit-error" role="status">
+                    {syncError ?? 'Unable to sync changes.'}
+                  </p>
+                )}
+              </footer>
+            )}
           </aside>
         </div>
       </div>
