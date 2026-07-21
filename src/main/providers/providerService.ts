@@ -134,6 +134,7 @@ export const providerApi: ProviderApi = {
     applyMetadataToDetail(await adapters[providerId].getChat(chatId)),
   generateOneShot: (providerId, message, options) =>
     adapters[providerId].generateOneShot(message, options),
+  cancelOneShot: (providerId, generationId) => adapters[providerId].cancelOneShot(generationId),
   startChat: async (providerId, message, options) =>
     applyMetadataToDetail(await adapters[providerId].startChat(message, options)),
   continueChat: (providerId, chatId, message, options) =>

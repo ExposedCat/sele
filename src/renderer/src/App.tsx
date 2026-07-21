@@ -90,7 +90,8 @@ import {
   isProviderApprovalMode,
   isProviderApprovalPolicy,
   isProviderApprovalsReviewer,
-  isProviderSandboxMode
+  isProviderSandboxMode,
+  providerOneShotGenerationCanceledMessage
 } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
@@ -143,6 +144,10 @@ type ChangesPaneView = 'git' | 'files'
 type GitCommitPromptAction = AppGitCommitAction
 type GitSyncAction = 'pull' | 'push' | 'pullAndPush'
 type GitSyncStep = Exclude<GitSyncAction, 'pullAndPush'>
+type CommitNameGeneration = {
+  providerId: ProviderId
+  generationId: string
+}
 type GitSyncRecoveryState = {
   cwd: string
   requestedAction: GitSyncAction
@@ -1378,6 +1383,9 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
   return message || fallback
 }
 
+const isOneShotGenerationCanceledError = (error: unknown): boolean =>
+  getErrorMessage(error, '') === providerOneShotGenerationCanceledMessage
+
 const isGitChangesScope = (
   scope: GitChangesScope | null,
   cwd: string | null,
@@ -1508,6 +1516,8 @@ export const App: React.FC = () => {
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
+  const commitNameGenerationRef = useRef<CommitNameGeneration | null>(null)
+  const commitNameGenerationSequenceRef = useRef(0)
   const chatAutoScrollEnabledRef = useRef(true)
   const chatAutoScrollFrameRef = useRef<number | null>(null)
   const selectedChatKeyRef = useRef<string | null>(null)
@@ -1540,6 +1550,17 @@ export const App: React.FC = () => {
       if (chatAutoScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(chatAutoScrollFrameRef.current)
       }
+    },
+    []
+  )
+
+  useEffect(
+    () => () => {
+      const generation = commitNameGenerationRef.current
+      if (!generation) return
+
+      commitNameGenerationRef.current = null
+      void providerApi.cancelOneShot(generation.providerId, generation.generationId).catch(() => {})
     },
     []
   )
@@ -3395,12 +3416,31 @@ export const App: React.FC = () => {
       onToggleFolder: handleToggleFileTreeFolder
     })
 
+  const createCommitNameGenerationId = (): string =>
+    `commit-name:${Date.now()}:${++commitNameGenerationSequenceRef.current}`
+
+  const cancelCommitNameGeneration = (): void => {
+    const generation = commitNameGenerationRef.current
+    if (!generation) return
+
+    commitNameGenerationRef.current = null
+    setCommitNameState('idle')
+    setCommitNameError(null)
+    void providerApi.cancelOneShot(generation.providerId, generation.generationId).catch(() => {})
+  }
+
   const handleGenerateCommitName = async (): Promise<void> => {
     if (generateCommitNameDisabled || !changesCwd) return
 
+    const providerId = selectedChat?.providerId ?? newSessionProvider
+    const generationId = createCommitNameGenerationId()
+
+    commitNameGenerationRef.current = { providerId, generationId }
     setCommitNameState('sending')
     setCommitNameError(null)
     setCommitError(null)
+
+    let generatedText: string | null = null
 
     try {
       const recentCommits = await appApi.getRecentGitCommitMessages({ cwd: changesCwd, limit: 3 })
@@ -3415,26 +3455,39 @@ export const App: React.FC = () => {
         prompt = getUncommittedCommitNamePrompt(recentCommits.messages, uncommittedDiff.diff)
       }
 
-      const generatedName = await providerApi.generateOneShot(
-        selectedChat?.providerId ?? newSessionProvider,
-        prompt,
-        {
-          ...getApprovalAccessOptions('never', 'read-only'),
-          cwd: changesCwd,
-          model,
-          reasoningEffort,
-          sandboxMode: 'read-only'
-        }
-      )
-      const commitName = normalizeGeneratedCommitName(generatedName)
+      if (commitNameGenerationRef.current?.generationId !== generationId) return
+
+      generatedText = await providerApi.generateOneShot(providerId, prompt, {
+        ...getApprovalAccessOptions('never', 'read-only'),
+        cwd: changesCwd,
+        generationId,
+        model,
+        reasoningEffort,
+        sandboxMode: 'read-only'
+      })
+      if (commitNameGenerationRef.current?.generationId !== generationId) return
+
+      const commitName = normalizeGeneratedCommitName(generatedText)
 
       if (!commitName) throw new Error('Empty commit name')
 
       setCommitInput(commitName)
       setCommitNameState('idle')
     } catch (error) {
+      if (commitNameGenerationRef.current?.generationId !== generationId) return
+
+      if (isOneShotGenerationCanceledError(error)) {
+        setCommitNameState('idle')
+        setCommitNameError(null)
+        return
+      }
+
       setCommitNameState('error')
       setCommitNameError(getErrorMessage(error, 'Unable to generate commit name.'))
+    } finally {
+      if (commitNameGenerationRef.current?.generationId === generationId) {
+        commitNameGenerationRef.current = null
+      }
     }
   }
 
@@ -3446,6 +3499,7 @@ export const App: React.FC = () => {
 
     setCommitState('sending')
     setCommitError(null)
+    if (action === 'amend') cancelCommitNameGeneration()
 
     try {
       await appApi.commitGitChanges({

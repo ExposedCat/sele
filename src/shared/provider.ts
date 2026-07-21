@@ -437,6 +437,12 @@ export type ProviderTurnOptions = {
   sandboxMode: ProviderSandboxMode
 }
 
+export type ProviderOneShotOptions = ProviderTurnOptions & {
+  generationId?: string
+}
+
+export const providerOneShotGenerationCanceledMessage = 'One-shot generation canceled'
+
 export type ProviderApi = {
   login: (providerId: ProviderId) => Promise<ProviderLoginResult>
   getUpdateAvailability: (providerId: ProviderId) => Promise<ProviderUpdateAvailability | null>
@@ -453,8 +459,9 @@ export type ProviderApi = {
   generateOneShot: (
     providerId: ProviderId,
     message: string,
-    options?: ProviderTurnOptions
+    options?: ProviderOneShotOptions
   ) => Promise<string>
+  cancelOneShot: (providerId: ProviderId, generationId: string) => Promise<void>
   startChat: (
     providerId: ProviderId,
     message: string,
@@ -529,6 +536,7 @@ export const providerIpcChannels = {
   getChats: 'provider:get-chats',
   getChat: 'provider:get-chat',
   generateOneShot: 'provider:generate-one-shot',
+  cancelOneShot: 'provider:cancel-one-shot',
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
   sendActiveChatMessage: 'provider:send-active-chat-message',

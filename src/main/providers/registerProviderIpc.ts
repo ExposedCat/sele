@@ -5,6 +5,7 @@ import type {
   ProviderActiveSendMode,
   ProviderChatListOptions,
   ProviderId,
+  ProviderOneShotOptions,
   ProviderTurnOptions,
   ProviderUsageOptions
 } from '../../shared/provider'
@@ -32,6 +33,11 @@ const requireChatId = (value: unknown): string => {
 
 const requireMessageId = (value: unknown): string => {
   if (typeof value !== 'string' || !value) throw new Error('Invalid message ID')
+  return value
+}
+
+const requireGenerationId = (value: unknown): string => {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('Invalid generation ID')
   return value
 }
 
@@ -152,6 +158,22 @@ const requireTurnOptions = (value: unknown): ProviderTurnOptions | undefined => 
   }
 }
 
+const requireOneShotOptions = (value: unknown): ProviderOneShotOptions | undefined => {
+  const turnOptions = requireTurnOptions(value)
+  if (value == null) return turnOptions
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid one-shot options')
+
+  const generationId = (value as { generationId?: unknown }).generationId
+  if (generationId != null) {
+    return {
+      ...turnOptions!,
+      generationId: requireGenerationId(generationId)
+    }
+  }
+
+  return turnOptions
+}
+
 export const registerProviderIpc = (): void => {
   providerApi.onChatUpdated((event) => {
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -201,8 +223,14 @@ export const registerProviderIpc = (): void => {
       providerApi.generateOneShot(
         requireProviderId(providerId),
         requireMessage(message),
-        requireTurnOptions(options)
+        requireOneShotOptions(options)
       )
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.cancelOneShot,
+    (_, providerId: unknown, generationId: unknown) =>
+      providerApi.cancelOneShot(requireProviderId(providerId), requireGenerationId(generationId))
   )
 
   ipcMain.handle(

@@ -21,12 +21,14 @@ import type {
   ProviderUpdateAvailability,
   ProviderApprovalModeOption,
   ProviderSandboxModeOption,
-  ProviderTurnOptions
+  ProviderTurnOptions,
+  ProviderOneShotOptions
 } from '../../../shared/provider'
 import {
   fallbackProviderApprovalModes,
   fallbackProviderModels,
-  fallbackProviderSandboxModes
+  fallbackProviderSandboxModes,
+  providerOneShotGenerationCanceledMessage
 } from '../../../shared/provider'
 import type { ProviderAdapter } from '../ProviderAdapter'
 import { CodexAppServerClient, type RpcNotification, type RpcRequest } from './CodexAppServerClient'
@@ -225,6 +227,11 @@ type QueuedTurn = {
   text: string
   createdAt: number
   options?: ProviderTurnOptions
+}
+type OneShotGeneration = {
+  threadId: string | null
+  turnId: string | null
+  canceled: boolean
 }
 
 type SteeringMessage = {
@@ -589,6 +596,7 @@ const codexCapabilities = {
 const titleGenerationModel = 'gpt-5.4-mini'
 const titleGenerationTimeoutMs = 30_000
 const oneShotGenerationTimeoutMs = 120_000
+const oneShotCancellationRetentionMs = 120_000
 const titleGenerationPromptLimit = 2_000
 const chatUpdateDebounceMs = 50
 let localTurnSequence = 0
@@ -802,6 +810,9 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private threads = new Map<string, CodexThread>()
   private pendingTurnIds = new Map<string, string>()
   private activeTurnIds = new Map<string, string>()
+  private activeOneShotGenerations = new Map<string, OneShotGeneration>()
+  private canceledOneShotGenerationIds = new Set<string>()
+  private canceledOneShotGenerationTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private steeringMessagesByThread = new Map<string, SteeringMessage[]>()
   private hiddenPendingMessageIdsByThread = new Map<string, Set<string>>()
   private queuedTurnsByThread = new Map<string, QueuedTurn[]>()
@@ -992,33 +1003,75 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return this.createChatDetail(thread)
   }
 
-  generateOneShot = async (message: string, options?: ProviderTurnOptions): Promise<string> => {
+  generateOneShot = async (message: string, options?: ProviderOneShotOptions): Promise<string> => {
     const text = message.trim()
     if (!text) throw new Error('Cannot generate from an empty message')
 
-    const startedThread = await this.client.request<ThreadStartResponse>('thread/start', {
-      cwd: options?.cwd,
-      model: options?.model,
-      approvalPolicy: 'never',
-      sandbox: 'read-only',
-      config: {
-        'features.enable_fanout': false,
-        'features.hooks': false,
-        'features.multi_agent': false,
-        'features.multi_agent_v2': false,
-        web_search: 'disabled'
-      },
-      ephemeral: true
-    })
-    const threadId = startedThread.thread.id
-    const generatedText = this.waitForOneShotText(
-      threadId,
-      oneShotGenerationTimeoutMs,
-      'one-shot response'
-    )
+    const generationId = options?.generationId?.trim() || null
+    const canceledBeforeStart = generationId
+      ? this.takeCanceledOneShotGeneration(generationId)
+      : false
+    const generation: OneShotGeneration | null = generationId
+      ? {
+          threadId: null,
+          turnId: null,
+          canceled: canceledBeforeStart
+        }
+      : null
+
+    if (generationId) {
+      if (this.activeOneShotGenerations.has(generationId)) {
+        throw new Error('Duplicate one-shot generation ID')
+      }
+
+      this.activeOneShotGenerations.set(generationId, generation!)
+    }
+
+    let threadId: string | null = null
+    let generatedText: Promise<string | null> | null = null
+
+    const throwIfCanceled = async (): Promise<void> => {
+      if (!generation?.canceled) return
+
+      await this.interruptOneShotGeneration(generation).catch(() => {})
+      throw new Error(providerOneShotGenerationCanceledMessage)
+    }
 
     try {
-      await this.client.request<TurnStartResponse>('turn/start', {
+      await throwIfCanceled()
+
+      const startedThread = await this.client.request<ThreadStartResponse>('thread/start', {
+        cwd: options?.cwd,
+        model: options?.model,
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+        config: {
+          'features.enable_fanout': false,
+          'features.hooks': false,
+          'features.multi_agent': false,
+          'features.multi_agent_v2': false,
+          web_search: 'disabled'
+        },
+        ephemeral: true
+      })
+      threadId = startedThread.thread.id
+      if (generation) generation.threadId = threadId
+
+      await throwIfCanceled()
+
+      generatedText = this.waitForOneShotText(
+        threadId,
+        oneShotGenerationTimeoutMs,
+        'one-shot response',
+        (turnId) => {
+          if (!generation) return
+
+          generation.turnId = turnId
+          if (generation.canceled) void this.interruptOneShotGeneration(generation)
+        }
+      )
+
+      const startedTurn = await this.client.request<TurnStartResponse>('turn/start', {
         threadId,
         cwd: options?.cwd,
         input: createUserTextInput(text),
@@ -1028,14 +1081,64 @@ export class CodexProviderAdapter implements ProviderAdapter {
         effort: options?.reasoningEffort,
         summary: null
       })
+      if (generation) generation.turnId = startedTurn.turn.id
 
-      return (await generatedText)?.trim() ?? ''
+      await throwIfCanceled()
+
+      const generatedResponseText = (await generatedText)?.trim() ?? ''
+      await throwIfCanceled()
+      return generatedResponseText
     } catch (error) {
-      generatedText.catch(() => {})
+      generatedText?.catch(() => {})
+      if (generation?.canceled) throw new Error(providerOneShotGenerationCanceledMessage)
       throw error
     } finally {
-      await this.client.request('thread/unsubscribe', { threadId }).catch(() => {})
+      if (generationId) this.activeOneShotGenerations.delete(generationId)
+      if (threadId) await this.client.request('thread/unsubscribe', { threadId }).catch(() => {})
     }
+  }
+
+  cancelOneShot = async (generationId: string): Promise<void> => {
+    const generation = this.activeOneShotGenerations.get(generationId)
+    if (!generation) {
+      this.rememberCanceledOneShotGeneration(generationId)
+      return
+    }
+
+    generation.canceled = true
+    await this.interruptOneShotGeneration(generation)
+  }
+
+  private rememberCanceledOneShotGeneration = (generationId: string): void => {
+    this.canceledOneShotGenerationIds.add(generationId)
+
+    const existingTimer = this.canceledOneShotGenerationTimers.get(generationId)
+    if (existingTimer) clearTimeout(existingTimer)
+
+    const timer = setTimeout(() => {
+      this.canceledOneShotGenerationIds.delete(generationId)
+      this.canceledOneShotGenerationTimers.delete(generationId)
+    }, oneShotCancellationRetentionMs)
+
+    this.canceledOneShotGenerationTimers.set(generationId, timer)
+  }
+
+  private takeCanceledOneShotGeneration = (generationId: string): boolean => {
+    const canceled = this.canceledOneShotGenerationIds.delete(generationId)
+    const timer = this.canceledOneShotGenerationTimers.get(generationId)
+
+    if (timer) {
+      clearTimeout(timer)
+      this.canceledOneShotGenerationTimers.delete(generationId)
+    }
+
+    return canceled
+  }
+
+  private interruptOneShotGeneration = async (generation: OneShotGeneration): Promise<void> => {
+    if (!generation.threadId || !generation.turnId) return
+
+    await this.interruptTurn(generation.threadId, generation.turnId)
   }
 
   startChat = async (
@@ -1317,6 +1420,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.disposeServerRequestListener = null
     this.chatUpdatedTimers.forEach((timer) => clearTimeout(timer))
     this.chatUpdatedTimers.clear()
+    this.activeOneShotGenerations.clear()
+    this.canceledOneShotGenerationIds.clear()
+    this.canceledOneShotGenerationTimers.forEach((timer) => clearTimeout(timer))
+    this.canceledOneShotGenerationTimers.clear()
     this.steeringMessagesByThread.clear()
     this.hiddenPendingMessageIdsByThread.clear()
     this.queuedTurnsByThread.clear()
@@ -1737,7 +1844,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
   private waitForOneShotText = (
     threadId: string,
     timeoutMs: number,
-    errorLabel: string
+    errorLabel: string,
+    onTurnStarted?: (turnId: string) => void
   ): Promise<string | null> =>
     new Promise((resolve, reject) => {
       let turnId: string | null = null
@@ -1761,7 +1869,10 @@ export class CodexProviderAdapter implements ProviderAdapter {
         if (notification.method === 'turn/started') {
           const turn = getRecordValue(params?.turn)
           const startedTurnId = getStringValue(turn?.id)
-          if (startedTurnId) turnId = startedTurnId
+          if (startedTurnId) {
+            turnId = startedTurnId
+            onTurnStarted?.(startedTurnId)
+          }
           return
         }
 

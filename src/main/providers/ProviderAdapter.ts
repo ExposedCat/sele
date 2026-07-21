@@ -12,7 +12,8 @@ import type {
   ProviderAccountUsage,
   ProviderUsageOptions,
   ProviderActiveSendMode,
-  ProviderTurnOptions
+  ProviderTurnOptions,
+  ProviderOneShotOptions
 } from '../../shared/provider'
 
 export type ProviderAdapter = {
@@ -26,7 +27,8 @@ export type ProviderAdapter = {
   getUsage: (options?: ProviderUsageOptions) => Promise<ProviderAccountUsage>
   getChats: (options?: ProviderChatListOptions) => Promise<ProviderChatPage>
   getChat: (chatId: string) => Promise<ProviderChatDetail>
-  generateOneShot: (message: string, options?: ProviderTurnOptions) => Promise<string>
+  generateOneShot: (message: string, options?: ProviderOneShotOptions) => Promise<string>
+  cancelOneShot: (generationId: string) => Promise<void>
   startChat: (message: string, options?: ProviderTurnOptions) => Promise<ProviderChatDetail>
   continueChat: (
     chatId: string,
