@@ -28,6 +28,7 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  RefreshCw,
   Search,
   Sparkles,
   SquarePen,
@@ -38,10 +39,7 @@ import {
   DownloadIcon as AnimatedDownloadIcon,
   GitBranchIcon as AnimatedGitBranchIcon,
   GitCommitHorizontalIcon as AnimatedGitCommitHorizontalIcon,
-  RefreshCwIcon as AnimatedRefreshCwIcon,
-  SparklesIcon as AnimatedSparklesIcon,
-  UploadIcon as AnimatedUploadIcon,
-  type RefreshCwIconHandle
+  UploadIcon as AnimatedUploadIcon
 } from 'lucide-animated'
 import {
   FileIcon as SymbolsFileIcon,
@@ -82,6 +80,7 @@ import type {
   ProviderReasoningEffort,
   ProviderSandboxMode,
   ProviderSandboxModeOption,
+  ProviderTurnOptions,
   ProviderUsageOptions,
   ProviderUpdateAvailability
 } from '../../shared/provider'
@@ -92,8 +91,7 @@ import {
   isProviderApprovalMode,
   isProviderApprovalPolicy,
   isProviderApprovalsReviewer,
-  isProviderSandboxMode,
-  providerOneShotGenerationCanceledMessage
+  isProviderSandboxMode
 } from '../../shared/provider'
 import { ChatDetailItem } from './components/ChatDetailItem'
 import { ChatListGroup, type ChatListGroupData } from './components/ChatListGroup'
@@ -146,10 +144,6 @@ type ChangesPaneView = 'git' | 'files'
 type GitCommitPromptAction = AppGitCommitAction
 type GitSyncAction = 'pull' | 'push' | 'pullAndPush'
 type GitSyncStep = Exclude<GitSyncAction, 'pullAndPush'>
-type CommitNameGeneration = {
-  providerId: ProviderId
-  generationId: string
-}
 type GitSyncRecoveryState = {
   cwd: string
   requestedAction: GitSyncAction
@@ -159,6 +153,11 @@ type GitSyncRecoveryState = {
 }
 type GitSyncRecoveryActionOptions = {
   rememberStrategy?: boolean
+}
+type CachedPatchChangedFiles = {
+  cwd: string
+  source: PatchChangeSource
+  files: ChangedFile[]
 }
 type FileTreeScope = {
   cwd: string
@@ -337,41 +336,16 @@ const changeSourceLabels = {
   chat: 'Chat'
 } satisfies Record<ChangeSource, string>
 
+const getFixedChangeSource = (): ChangeSource => 'uncommitted'
+
 const commitActionLabels = {
   commit: 'Commit',
   amend: 'Amend'
 } satisfies Record<GitCommitPromptAction, string>
 
-const GitRefreshIcon: React.FC<{ active: boolean }> = ({ active }) => {
-  const iconRef = useRef<RefreshCwIconHandle | null>(null)
-
-  useEffect(() => {
-    const icon = iconRef.current
-
-    if (!active) {
-      icon?.stopAnimation()
-      return undefined
-    }
-
-    icon?.startAnimation()
-    const interval = window.setInterval(() => icon?.startAnimation(), refreshIconReplayMs)
-
-    return () => {
-      window.clearInterval(interval)
-      icon?.stopAnimation()
-    }
-  }, [active])
-
-  return (
-    <AnimatedRefreshCwIcon
-      ref={iconRef}
-      className="changes-sidebar__refresh-icon"
-      size={20}
-      animateOnHover={false}
-      aria-hidden="true"
-    />
-  )
-}
+const GitRefreshIcon: React.FC = () => (
+  <RefreshCw className="changes-sidebar__refresh-icon" aria-hidden="true" />
+)
 
 const ChangesAnimatedIcon: React.FC<{
   Icon: AnimatedIconComponent
@@ -482,14 +456,11 @@ const getGitRecoveryPullStrategy = (
   return null
 }
 
-const getGitRecoveryActionIcon = (
-  actionId: AppGitRecoveryActionId,
-  active: boolean
-): React.ReactNode => {
+const getGitRecoveryActionIcon = (actionId: AppGitRecoveryActionId): React.ReactNode => {
   if (actionId === 'pull-rebase') return <GitPullRequestArrow aria-hidden="true" />
   if (actionId === 'pull-merge') return <GitMerge aria-hidden="true" />
 
-  return <GitRefreshIcon active={active} />
+  return <GitRefreshIcon />
 }
 
 const getGitRecoveryRememberLabel = (actionId: AppGitRecoveryActionId): string | null => {
@@ -770,7 +741,6 @@ const writeStoredMessageBoxSelection = (selection: MessageBoxSelection): void =>
 }
 
 const providerOptions = getDropdownOptions(providerLabels)
-const changeSourceOptions = getDropdownOptions(changeSourceLabels)
 
 const approvalTypeLabels = {
   command: 'Command approval',
@@ -808,6 +778,9 @@ const modelSupportsReasoningEffort = (
 
 const getChatKey = (chat: Pick<ProviderChat, 'providerId' | 'id'>): string =>
   `${chat.providerId}:${chat.id}`
+
+const isActiveChatStatus = (status: ProviderChatDetail['status'] | undefined): boolean =>
+  status === 'active' || status === 'waitingOnApproval' || status === 'waitingOnUserInput'
 
 const compareChatsByCreatedAtDesc = (firstChat: ProviderChat, secondChat: ProviderChat): number => {
   if (secondChat.createdAt !== firstChat.createdAt) {
@@ -1325,56 +1298,37 @@ const filterChangedFilesByPatches = (
   })
 }
 
-const formatPatchForPrompt = (patch: AppGitPatchChange): string =>
-  [`File: ${patch.path}`, `Kind: ${patch.kind}`, patch.diff.trimEnd()].filter(Boolean).join('\n')
+const formatExtraUserInstructionsForPrompt = (instructions: string): string | null => {
+  const trimmedInstructions = instructions.trim()
+  return trimmedInstructions
+    ? `Extra user instructions: ${JSON.stringify(trimmedInstructions)}`
+    : null
+}
 
-const formatRecentCommitMessagesForPrompt = (messages: string[]): string =>
-  messages.length > 0 ? messages.map((message) => `\`${message}\``).join(', ') : 'none'
+const scopedChatCommitPrompt = [
+  'Inspect current `git status` / `git diff` yourself and create a scoped Git commit for all work done in this chat before this commit request.',
+  'There are highly likely some changes of parallel work in same files which were touched in this session, so you need to check actual diffs and create a scoped hunk patch to commit instead of committing entire file, to ensure that only work done in this chat gets committed.',
+  'Do not include any unrelated changes and include all changes from this session.',
+  'Do not ask for review or confirmation.',
+  'If you cannot scope the changes, do not commit and explain why.'
+].join(' ')
 
-const getCommitNamePrompt = (
-  recentMessages: string[],
-  patchText: string,
-  commitInstruction: string
-): string =>
-  [
-    `Recent repo commit names: ${formatRecentCommitMessagesForPrompt(recentMessages)}`,
-    'Following the naming, respond with a commit name for the patch:',
-    '```',
-    patchText.trimEnd(),
-    '```',
-    "Don't write or do anything else. Don't write code fences.",
-    commitInstruction
-  ].join('\n')
+const getScopedChatCommitPrompt = (
+  action: GitCommitPromptAction,
+  extraInstructions: string
+): string => {
+  const actionInstruction =
+    action === 'amend'
+      ? 'Amend HEAD instead of creating a new commit.'
+      : null
 
-const getPatchCommitNamePrompt = (recentMessages: string[], patches: AppGitPatchChange[]): string =>
-  getCommitNamePrompt(
-    recentMessages,
-    patches.map(formatPatchForPrompt).join('\n\n'),
-    'Commit only the exact patch changes below. Do not stage whole files or unrelated hunks, even when another uncommitted change touches the same file.'
-  )
-
-const getUncommittedCommitNamePrompt = (recentMessages: string[], diff: string): string =>
-  getCommitNamePrompt(recentMessages, diff, 'Commit all uncommitted changes shown in the patch.')
-
-const normalizeGeneratedCommitName = (value: string): string | null => {
-  const unfencedValue = value
-    .trim()
-    .replace(/^```[a-z]*\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim()
-  const firstLine = unfencedValue
-    .split(/\r?\n/)
-    .find((line) => line.trim().length > 0)
-    ?.trim()
-  if (!firstLine) return null
-
-  const commitName = firstLine
-    .replace(/^(commit (message|name)|message|name)[:\s]+/i, '')
-    .replace(/^[`"']+|[`"']+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  return commitName || null
+  return [
+    scopedChatCommitPrompt,
+    actionInstruction,
+    formatExtraUserInstructionsForPrompt(extraInstructions)
+  ]
+    .filter((line): line is string => line != null)
+    .join('\n')
 }
 
 const getErrorMessage = (error: unknown, fallback: string): string => {
@@ -1384,9 +1338,6 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
 
   return message || fallback
 }
-
-const isOneShotGenerationCanceledError = (error: unknown): boolean =>
-  getErrorMessage(error, '') === providerOneShotGenerationCanceledMessage
 
 const isGitChangesScope = (
   scope: GitChangesScope | null,
@@ -1481,7 +1432,7 @@ export const App: React.FC = () => {
   const [projectIconsByGroup, setProjectIconsByGroup] = useState<
     Record<string, AppProjectIcon | null>
   >({})
-  const [changeSource, setChangeSource] = useState<ChangeSource>('uncommitted')
+  const changeSource = getFixedChangeSource()
   const [changesPaneView, setChangesPaneView] = useState<ChangesPaneView>('git')
   const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
   const [gitChangesScope, setGitChangesScope] = useState<GitChangesScope | null>(null)
@@ -1491,6 +1442,8 @@ export const App: React.FC = () => {
   const [uncommittedPatchFilter, setUncommittedPatchFilter] =
     useState<UncommittedPatchFilter | null>(null)
   const [uncommittedPatchFilterState, setUncommittedPatchFilterState] = useState<LoadState>('ready')
+  const [cachedPatchChangedFiles, setCachedPatchChangedFiles] =
+    useState<CachedPatchChangedFiles | null>(null)
   const [fileTree, setFileTree] = useState<AppFileTreeResult | null>(null)
   const [fileTreeScope, setFileTreeScope] = useState<FileTreeScope | null>(null)
   const [fileTreeLoadState, setFileTreeLoadState] = useState<LoadState>('ready')
@@ -1503,8 +1456,6 @@ export const App: React.FC = () => {
     {}
   )
   const [commitInput, setCommitInput] = useState('')
-  const [commitNameState, setCommitNameState] = useState<SendState>('idle')
-  const [commitNameError, setCommitNameError] = useState<string | null>(null)
   const [commitState, setCommitState] = useState<SendState>('idle')
   const [commitError, setCommitError] = useState<string | null>(null)
   const [syncState, setSyncState] = useState<SendState>('idle')
@@ -1521,11 +1472,11 @@ export const App: React.FC = () => {
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sendInFlightRef = useRef(false)
-  const commitNameGenerationRef = useRef<CommitNameGeneration | null>(null)
-  const commitNameGenerationSequenceRef = useRef(0)
+  const commitInFlightRef = useRef(false)
   const chatAutoScrollEnabledRef = useRef(true)
   const chatAutoScrollFrameRef = useRef<number | null>(null)
   const selectedChatKeyRef = useRef<string | null>(null)
+  const chatHadActiveTurnByKeyRef = useRef(new Map<string, boolean>())
   const loadingProjectIconsRef = useRef(new Set<string>())
   const modelManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.model))
   const reasoningManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.reasoningEffort))
@@ -1556,17 +1507,6 @@ export const App: React.FC = () => {
       if (chatAutoScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(chatAutoScrollFrameRef.current)
       }
-    },
-    []
-  )
-
-  useEffect(
-    () => () => {
-      const generation = commitNameGenerationRef.current
-      if (!generation) return
-
-      commitNameGenerationRef.current = null
-      void providerApi.cancelOneShot(generation.providerId, generation.generationId).catch(() => {})
     },
     []
   )
@@ -2117,6 +2057,30 @@ export const App: React.FC = () => {
   const approvalDecisionInFlight = currentApprovalResolution?.decision ?? null
   const resolvingApprovalId = approvalResolution.decision ? approvalResolution.approvalId : null
   const approvalError = currentApprovalResolution?.error ?? null
+
+  useEffect(() => {
+    if (!selectedProviderId || !selectedChatId) return
+    const chatKey = getChatKey({ providerId: selectedProviderId, id: selectedChatId })
+    const hasActiveTurn = isActiveChatStatus(chatDetail?.status)
+    const hadActiveTurn = chatHadActiveTurnByKeyRef.current.get(chatKey) ?? false
+
+    if (hasActiveTurn) {
+      chatHadActiveTurnByKeyRef.current.set(chatKey, true)
+      return
+    }
+
+    if (!hadActiveTurn) {
+      chatHadActiveTurnByKeyRef.current.set(chatKey, false)
+      return
+    }
+
+    if (!changesCwd) {
+      return
+    }
+
+    chatHadActiveTurnByKeyRef.current.set(chatKey, false)
+    queueMicrotask(() => setGitChangeLoadRequest((currentRequest) => currentRequest + 1))
+  }, [changesCwd, chatDetail?.status, selectedChatId, selectedProviderId])
 
   const refreshAccountUsage = useCallback(
     async (options: ProviderUsageOptions = {}): Promise<void> => {
@@ -2761,6 +2725,8 @@ export const App: React.FC = () => {
     }
   }
 
+  const providerUpdateInProgress = providerUpdateState === 'updating'
+
   const handleMarkChatDone = async (chat: ProviderChat): Promise<void> => {
     try {
       const metadata = await providerApi.markChatDone(chat.providerId, chat.id)
@@ -2855,6 +2821,13 @@ export const App: React.FC = () => {
     setEditingMessage(null)
   }
 
+  const getCurrentTurnOptions = (): ProviderTurnOptions => ({
+    ...getApprovalAccessOptions(approvalMode, sandboxMode),
+    model,
+    reasoningEffort,
+    sandboxMode
+  })
+
   const handleSendMessage = async (
     message: string,
     activeMode?: ProviderActiveSendMode
@@ -2862,12 +2835,7 @@ export const App: React.FC = () => {
     if (sendInFlightRef.current) return
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
-    const turnOptions = {
-      ...getApprovalAccessOptions(approvalMode, sandboxMode),
-      model,
-      reasoningEffort,
-      sandboxMode
-    }
+    const turnOptions = getCurrentTurnOptions()
 
     if (editingMessage) {
       if (!selectedChat) {
@@ -3184,6 +3152,23 @@ export const App: React.FC = () => {
         : [],
     [patchFilterMatches, patchSourceChangedFiles, uncommittedPatchFilter?.patches]
   )
+  useEffect(() => {
+    if (!changesCwd || !isPatchChangeSource(changeSource) || !patchFilterMatches) return
+
+    let active = true
+    queueMicrotask(() => {
+      if (!active) return
+      setCachedPatchChangedFiles({
+        cwd: changesCwd,
+        source: changeSource,
+        files: patchChangedFiles
+      })
+    })
+
+    return () => {
+      active = false
+    }
+  }, [changeSource, changesCwd, patchChangedFiles, patchFilterMatches])
   const currentGitChangeSource: GitChangeSource | null =
     changeSource === 'uncommitted' ? 'uncommitted' : null
   const gitChangesMatchCurrentSource = isGitChangesScope(
@@ -3196,17 +3181,15 @@ export const App: React.FC = () => {
     () => (changesCwd ? getGitChangedFiles(displayedGitChanges) : []),
     [changesCwd, displayedGitChanges]
   )
-  const rawChangedFiles =
-    changeSource === 'chat'
-      ? patchChangedFiles
-      : changeSource === 'lastTurn'
-        ? patchChangedFiles
-        : gitChangedFiles
-  const changedFilesDisplayRoot =
-    displayedGitChanges?.repositoryRoot ?? changesProjectCwd ?? changesCwd ?? null
-  const changedFiles = useMemo(
-    () => getTreeFilesWithDisplayPaths(rawChangedFiles, changedFilesDisplayRoot),
-    [changedFilesDisplayRoot, rawChangedFiles]
+  const uncommittedGitChangesMatchCurrentCwd = isGitChangesScope(
+    gitChangesScope,
+    changesCwd,
+    'uncommitted'
+  )
+  const uncommittedChangedFiles = useMemo(
+    () =>
+      changesCwd && uncommittedGitChangesMatchCurrentCwd ? getGitChangedFiles(gitChanges) : [],
+    [changesCwd, gitChanges, uncommittedGitChangesMatchCurrentCwd]
   )
   const fileTreeMatchesCurrentCwd = isFileTreeScope(fileTreeScope, changesCwd)
   const displayedFileTree = fileTreeMatchesCurrentCwd ? fileTree : null
@@ -3235,8 +3218,6 @@ export const App: React.FC = () => {
         : gitChangeLoadMatchesCurrentSource
           ? gitChangeLoadState
           : 'loading'
-  const visibleChangesLoadState =
-    changesLoadState === 'loading' && displayedGitChanges ? 'ready' : changesLoadState
   const fileTreeLoadMatchesCurrentCwd = isFileTreeScope(fileTreeLoadScope, changesCwd)
   const filesLoadState = !changesCwd
     ? 'ready'
@@ -3245,6 +3226,34 @@ export const App: React.FC = () => {
       : 'loading'
   const visibleFilesLoadState =
     filesLoadState === 'loading' && displayedFileTree ? 'ready' : filesLoadState
+  const cachedPatchChangedFilesMatch = Boolean(
+    cachedPatchChangedFiles &&
+    changesCwd &&
+    isPatchChangeSource(changeSource) &&
+    cachedPatchChangedFiles.cwd === changesCwd &&
+    cachedPatchChangedFiles.source === changeSource
+  )
+  const displayedPatchChangedFiles =
+    changesLoadState === 'loading' && cachedPatchChangedFilesMatch
+      ? (cachedPatchChangedFiles?.files ?? [])
+      : patchChangedFiles
+  const visibleChangesLoadState =
+    changesLoadState === 'loading' &&
+    (displayedGitChanges || (patchChangeSourceSelected && displayedPatchChangedFiles.length > 0))
+      ? 'ready'
+      : changesLoadState
+  const rawChangedFiles =
+    changeSource === 'chat'
+      ? displayedPatchChangedFiles
+      : changeSource === 'lastTurn'
+        ? displayedPatchChangedFiles
+        : gitChangedFiles
+  const changedFilesDisplayRoot =
+    displayedGitChanges?.repositoryRoot ?? changesProjectCwd ?? changesCwd ?? null
+  const changedFiles = useMemo(
+    () => getTreeFilesWithDisplayPaths(rawChangedFiles, changedFilesDisplayRoot),
+    [changedFilesDisplayRoot, rawChangedFiles]
+  )
   const gitSyncMetadata = changesCwd && gitChangesScope?.cwd === changesCwd ? gitChanges : null
   const unpulledCount = gitSyncMetadata?.unpulledCount ?? 0
   const unpushedCount = gitSyncMetadata?.unpushedCount ?? 0
@@ -3279,30 +3288,39 @@ export const App: React.FC = () => {
   )
   const commitInputValue = commitInput.trim()
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
-  const commitPatches = useMemo(() => getCommitPatches(changedFiles), [changedFiles])
   const syncInProgress = syncState === 'sending'
   const visibleSyncRecovery = syncRecovery && syncRecovery.cwd === changesCwd ? syncRecovery : null
+  const aiCommitUnavailable =
+    !selectedChat ||
+    !chatDetail ||
+    chatLoadState !== 'ready' ||
+    chatIsBusy ||
+    sendState === 'sending' ||
+    Boolean(editingMessage)
   const commitBaseDisabled =
-    changedFiles.length === 0 ||
-    (isPatchChangeSource(changeSource) ? commitPatches.length === 0 : commitFiles.length === 0) ||
+    providerUpdateInProgress ||
+    commitFiles.length === 0 ||
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
     syncInProgress
-  const getCommitActionDisabled = (action: GitCommitPromptAction): boolean =>
-    commitBaseDisabled || !changesCwd || (action === 'commit' && !commitInputValue)
+  const getCommitActionDisabled = (
+    action: GitCommitPromptAction,
+    message = commitInputValue
+  ): boolean => commitBaseDisabled || !changesCwd || (action === 'commit' && !message)
   const commitDisabled = getCommitActionDisabled('commit')
-  const commitNameSourceAvailable = isPatchChangeSource(changeSource)
-    ? commitPatches.length > 0
-    : commitFiles.length > 0
-  const generateCommitNameDisabled =
+  const aiCommitBaseDisabled =
+    providerUpdateInProgress ||
     !changesCwd ||
-    !commitNameSourceAvailable ||
+    uncommittedChangedFiles.length === 0 ||
     changesLoadState !== 'ready' ||
-    commitNameState === 'sending' ||
     commitState === 'sending' ||
-    syncInProgress
-  const generateCommitNameTitle = 'Generate commit name'
-  const syncDisabled = !changesCwd || syncInProgress || commitState === 'sending'
+    syncInProgress ||
+    aiCommitUnavailable
+  const getAiCommitActionDisabled = (): boolean => aiCommitBaseDisabled
+  const aiCommitDisabled = getAiCommitActionDisabled()
+  const commitInputLabel = 'Commit message or AI instructions'
+  const syncDisabled =
+    providerUpdateInProgress || !changesCwd || syncInProgress || commitState === 'sending'
   const syncDropdownActions: ButtonDropdownAction[] = [
     ...(hasUnpulledChanges
       ? [
@@ -3494,105 +3512,105 @@ export const App: React.FC = () => {
       onToggleFolder: handleToggleFileTreeFolder
     })
 
-  const createCommitNameGenerationId = (): string =>
-    `commit-name:${Date.now()}:${++commitNameGenerationSequenceRef.current}`
+  const handleScopedChatCommit = async (
+    action: GitCommitPromptAction,
+    extraInstructions: string
+  ): Promise<boolean> => {
+    if (providerUpdateInProgress) return false
+    if (!selectedChat || !chatDetail) return false
+    if (sendInFlightRef.current) return false
 
-  const cancelCommitNameGeneration = (): void => {
-    const generation = commitNameGenerationRef.current
-    if (!generation) return
+    const prompt = getScopedChatCommitPrompt(action, extraInstructions)
+    const providerId = selectedChat.providerId
+    const chatId = selectedChat.id
 
-    commitNameGenerationRef.current = null
-    setCommitNameState('idle')
-    setCommitNameError(null)
-    void providerApi.cancelOneShot(generation.providerId, generation.generationId).catch(() => {})
-  }
-
-  const handleGenerateCommitName = async (): Promise<void> => {
-    if (generateCommitNameDisabled || !changesCwd) return
-
-    const providerId = selectedChat?.providerId ?? newSessionProvider
-    const generationId = createCommitNameGenerationId()
-
-    commitNameGenerationRef.current = { providerId, generationId }
-    setCommitNameState('sending')
-    setCommitNameError(null)
+    sendInFlightRef.current = true
+    chatAutoScrollEnabledRef.current = true
+    setCommitState('sending')
     setCommitError(null)
+    setSendState('sending')
 
-    let generatedText: string | null = null
+    if (chatDetail.id === chatId) {
+      applyViewedChatDetail(providerId, {
+        ...chatDetail,
+        status: 'active',
+        contextUsage: chatDetail.contextUsage,
+        items: getOptimisticItems(chatDetail.items, prompt)
+      })
+    }
 
     try {
-      const recentCommits = await appApi.getRecentGitCommitMessages({ cwd: changesCwd, limit: 3 })
-      let prompt: string
-
-      if (isPatchChangeSource(changeSource)) {
-        prompt = getPatchCommitNamePrompt(recentCommits.messages, commitPatches)
-      } else {
-        const uncommittedDiff = await appApi.getUncommittedGitDiff({ cwd: changesCwd })
-        if (!uncommittedDiff.diff.trim()) throw new Error('No uncommitted diff to name')
-
-        prompt = getUncommittedCommitNamePrompt(recentCommits.messages, uncommittedDiff.diff)
-      }
-
-      if (commitNameGenerationRef.current?.generationId !== generationId) return
-
-      generatedText = await providerApi.generateOneShot(providerId, prompt, {
-        ...getApprovalAccessOptions('never', 'read-only'),
-        cwd: changesCwd,
-        generationId,
-        model,
-        reasoningEffort,
-        sandboxMode: 'read-only'
-      })
-      if (commitNameGenerationRef.current?.generationId !== generationId) return
-
-      const commitName = normalizeGeneratedCommitName(generatedText)
-
-      if (!commitName) throw new Error('Empty commit name')
-
-      setCommitInput(commitName)
-      setCommitNameState('idle')
+      const detail = await providerApi.continueChat(
+        providerId,
+        chatId,
+        prompt,
+        getCurrentTurnOptions()
+      )
+      applyViewedChatDetail(providerId, detail)
+      setCommitInput('')
+      setCommitState('idle')
+      setSendState('idle')
+      return true
     } catch (error) {
-      if (commitNameGenerationRef.current?.generationId !== generationId) return
-
-      if (isOneShotGenerationCanceledError(error)) {
-        setCommitNameState('idle')
-        setCommitNameError(null)
-        return
-      }
-
-      setCommitNameState('error')
-      setCommitNameError(getErrorMessage(error, 'Unable to generate commit name.'))
+      void providerApi
+        .getChat(providerId, chatId)
+        .then((detail) => applyViewedChatDetail(providerId, detail))
+        .catch(() => {})
+      setCommitState('error')
+      setCommitError(getErrorMessage(error, 'Unable to start scoped commit in chat.'))
+      setSendState('error')
+      return false
     } finally {
-      if (commitNameGenerationRef.current?.generationId === generationId) {
-        commitNameGenerationRef.current = null
-      }
+      sendInFlightRef.current = false
     }
   }
 
   const handleCommitChangedFiles = async (
-    action: GitCommitPromptAction = 'commit'
-  ): Promise<void> => {
-    if (getCommitActionDisabled(action)) return
-    if (!changesCwd) return
+    action: GitCommitPromptAction = 'commit',
+    message = commitInputValue
+  ): Promise<boolean> => {
+    const commitMessage = message.trim()
+    if (providerUpdateInProgress) return false
+    if (commitInFlightRef.current) return false
+    if (getCommitActionDisabled(action, commitMessage)) return false
+    if (!changesCwd) return false
 
-    setCommitState('sending')
-    setCommitError(null)
-    if (action === 'amend') cancelCommitNameGeneration()
-
+    commitInFlightRef.current = true
     try {
+      setCommitState('sending')
+      setCommitError(null)
+
       await appApi.commitGitChanges({
         cwd: changesCwd,
         action,
         files: commitFiles,
-        patches: isPatchChangeSource(changeSource) ? commitPatches : undefined,
-        message: action === 'amend' ? null : commitInputValue
+        message: action === 'amend' ? null : commitMessage
       })
       setCommitInput('')
       setCommitState('idle')
       setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
+      return true
     } catch (error) {
       setCommitState('error')
       setCommitError(getErrorMessage(error, 'Unable to commit these files.'))
+      return false
+    } finally {
+      commitInFlightRef.current = false
+    }
+  }
+
+  const handleAiCommitChangedFiles = async (
+    action: GitCommitPromptAction = 'commit'
+  ): Promise<boolean> => {
+    if (providerUpdateInProgress) return false
+    if (commitInFlightRef.current) return false
+    if (getAiCommitActionDisabled()) return false
+
+    commitInFlightRef.current = true
+    try {
+      return await handleScopedChatCommit(action, commitInputValue)
+    } finally {
+      commitInFlightRef.current = false
     }
   }
 
@@ -4126,29 +4144,7 @@ export const App: React.FC = () => {
               />
             </header>
             <div className="changes-sidebar__body">
-              <div
-                className={`changes-sidebar__controls${
-                  changesPaneView === 'files' ? ' changes-sidebar__controls--files' : ''
-                }`}
-              >
-                {changesPaneView === 'git' && (
-                  <>
-                    <label className="sr-only" htmlFor="changes-source">
-                      Diff type
-                    </label>
-                    <Dropdown
-                      id="changes-source"
-                      fill
-                      options={changeSourceOptions}
-                      size="large"
-                      value={changeSource}
-                      onChange={(nextChangeSource) => {
-                        setCollapsedChangeTreeFolders({})
-                        setChangeSource(nextChangeSource)
-                      }}
-                    />
-                  </>
-                )}
+              <div className="changes-sidebar__controls changes-sidebar__controls--files">
                 <label className="sr-only" htmlFor="changes-branch">
                   Branch
                 </label>
@@ -4189,7 +4185,7 @@ export const App: React.FC = () => {
 
                     setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
                   }}
-                  icon={<GitRefreshIcon active={activeSidebarLoadState === 'loading'} />}
+                  icon={<GitRefreshIcon />}
                 />
               </div>
               <div className="changes-sidebar__content">
@@ -4213,7 +4209,7 @@ export const App: React.FC = () => {
                 ) : (
                   <>
                     {visibleFilesLoadState === 'loading' && (
-                      <p className="changes-sidebar__status">Loading files...</p>
+                      <ChangesSidebarGitState active label="Loading files" />
                     )}
                     {visibleFilesLoadState === 'error' && (
                       <p className="changes-sidebar__status">Unable to load files.</p>
@@ -4234,19 +4230,15 @@ export const App: React.FC = () => {
               <footer className="changes-sidebar__footer">
                 <div className="changes-sidebar__input-row">
                   <label className="changes-sidebar__commit-message">
-                    <span className="sr-only">Commit message</span>
+                    <span className="sr-only">{commitInputLabel}</span>
                     <Input
                       type="text"
                       value={commitInput}
-                      placeholder={
-                        commitNameState === 'sending' ? 'Generating message...' : 'Commit message'
-                      }
-                      disabled={commitNameState === 'sending'}
+                      placeholder={commitInputLabel}
+                      disabled={providerUpdateInProgress || commitState === 'sending'}
                       onChange={(event) => {
                         setCommitState('idle')
                         setCommitError(null)
-                        setCommitNameState('idle')
-                        setCommitNameError(null)
                         setCommitInput(event.target.value)
                       }}
                       onKeyDown={(event) => {
@@ -4256,21 +4248,6 @@ export const App: React.FC = () => {
                       }}
                     />
                   </label>
-                  <Button
-                    aria-label="Generate commit name"
-                    title={generateCommitNameTitle}
-                    disabled={generateCommitNameDisabled}
-                    callback={() => void handleGenerateCommitName()}
-                    icon={
-                      commitNameState === 'sending' ? (
-                        <ChangesAnimatedIcon Icon={AnimatedSparklesIcon} active />
-                      ) : (
-                        <Sparkles aria-hidden="true" />
-                      )
-                    }
-                    label={<span>AI</span>}
-                    theme="secondary"
-                  />
                 </div>
                 <div className="changes-sidebar__commit-row">
                   <Button
@@ -4296,6 +4273,31 @@ export const App: React.FC = () => {
                     }
                     label={<span>{commitActionLabels.commit}</span>}
                     theme="primary"
+                    fill
+                  />
+                  <Button
+                    disabled={aiCommitDisabled}
+                    callback={() => void handleAiCommitChangedFiles('commit')}
+                    dropdownActions={[
+                      {
+                        id: 'ai-amend',
+                        label: 'AI Amend',
+                        disabled: getAiCommitActionDisabled(),
+                        callback: () => void handleAiCommitChangedFiles('amend')
+                      }
+                    ]}
+                    dropdownLabel="AI commit actions"
+                    dropdownMenuAlign="end"
+                    dropdownPlacement="top"
+                    icon={
+                      commitState === 'sending' ? (
+                        <ChangesAnimatedIcon Icon={AnimatedGitCommitHorizontalIcon} active />
+                      ) : (
+                        <Sparkles aria-hidden="true" />
+                      )
+                    }
+                    label={<span>AI Commit</span>}
+                    theme="secondary"
                     fill
                   />
                 </div>
@@ -4391,7 +4393,7 @@ export const App: React.FC = () => {
                             dropdownLabel={`${action.label} options`}
                             dropdownMenuAlign="end"
                             dropdownPlacement="top"
-                            icon={getGitRecoveryActionIcon(action.id, syncInProgress)}
+                            icon={getGitRecoveryActionIcon(action.id)}
                             label={<span>{action.label}</span>}
                             theme={actionIndex === 0 ? 'primary' : 'secondary'}
                             size="small"
@@ -4425,9 +4427,9 @@ export const App: React.FC = () => {
                     </div>
                   </section>
                 )}
-                {(commitState === 'error' || commitNameState === 'error') && (
+                {commitState === 'error' && (
                   <p className="changes-sidebar__commit-error" role="status">
-                    {commitError ?? commitNameError ?? 'Unable to commit these files.'}
+                    {commitError ?? 'Unable to commit these files.'}
                   </p>
                 )}
                 {syncState === 'error' && !syncRecovery && (

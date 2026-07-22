@@ -814,30 +814,6 @@ const writeContentToIndex = async (
   )
 }
 
-const getContentBlobHash = async (repositoryRoot: string, content: string): Promise<string> => {
-  const objectHash = await runGit(repositoryRoot, ['hash-object', '--stdin'], {
-    input: content,
-    required: true
-  })
-  if (!objectHash) throw new Error('Unable to hash patch content')
-
-  return objectHash
-}
-
-const getIndexBlobHash = async (
-  repositoryRoot: string,
-  indexPath: string,
-  path: string
-): Promise<string | null> => {
-  const output = await runGit(repositoryRoot, ['ls-files', '-s', '--', path], {
-    env: getTemporaryIndexEnv(indexPath),
-    required: true
-  })
-  const match = /^(\d+)\s+([0-9a-f]+)\s+\d+\t/.exec(output ?? '')
-
-  return match?.[2] ?? null
-}
-
 const removePathFromIndex = async (
   repositoryRoot: string,
   indexPath: string,
@@ -870,6 +846,35 @@ const applyPatchChangeToIndex = async (
   return path
 }
 
+const reverseApplyPatchChangeToIndex = async (
+  repositoryRoot: string,
+  indexPath: string,
+  change: AppGitPatchChange
+): Promise<string> => {
+  const path = normalizePatchPath(repositoryRoot, change.path)
+
+  if (change.kind === 'create' && !isFullUnifiedDiff(change.diff)) {
+    await removePathFromIndex(repositoryRoot, indexPath, path)
+    return path
+  }
+
+  if (change.kind === 'delete' && !isFullUnifiedDiff(change.diff)) {
+    await writeContentToIndex(repositoryRoot, indexPath, path, change.diff)
+    return path
+  }
+
+  await runGit(
+    repositoryRoot,
+    ['apply', '--cached', '--whitespace=nowarn', '--recount', '-C0', '--reverse'],
+    {
+      env: getTemporaryIndexEnv(indexPath),
+      input: getUnifiedPatch(change, path),
+      required: true
+    }
+  )
+  return path
+}
+
 const patchChangesHead = async (
   repositoryRoot: string,
   tempDirectory: string,
@@ -888,34 +893,64 @@ const patchChangesHead = async (
   }
 }
 
-const worktreeSnapshotContainsPatchChange = async (
+const getTemporaryIndexDiffWeight = async (
   repositoryRoot: string,
+  indexPath: string,
+  paths: string[]
+): Promise<number> => {
+  const output = await runGit(repositoryRoot, ['diff', '--cached', '--shortstat', '--', ...paths], {
+    env: getTemporaryIndexEnv(indexPath),
+    required: true
+  })
+
+  const files = Number.parseInt(output?.match(/(\d+) files? changed/)?.[1] ?? '0', 10)
+  const insertions = Number.parseInt(output?.match(/(\d+) insertions?\(\+\)/)?.[1] ?? '0', 10)
+  const deletions = Number.parseInt(output?.match(/(\d+) deletions?\(-\)/)?.[1] ?? '0', 10)
+
+  return files * 1000 + insertions + deletions
+}
+
+const reversePatchReducesWorktreeDiff = async (
+  repositoryRoot: string,
+  tempDirectory: string,
+  patchIndex: number,
   worktreeIndexPath: string,
   change: AppGitPatchChange
 ): Promise<boolean> => {
   const path = normalizePatchPath(repositoryRoot, change.path)
+  const reverseIndexPath = join(tempDirectory, `reverse-${patchIndex}.index`)
+  const beforeWeight = await getTemporaryIndexDiffWeight(repositoryRoot, worktreeIndexPath, [path])
 
-  if (change.kind === 'create' && !isFullUnifiedDiff(change.diff)) {
+  if (beforeWeight === 0) return false
+
+  try {
+    await copyFile(worktreeIndexPath, reverseIndexPath)
+    await reverseApplyPatchChangeToIndex(repositoryRoot, reverseIndexPath, change)
+
     return (
-      (await getIndexBlobHash(repositoryRoot, worktreeIndexPath, path)) ===
-      (await getContentBlobHash(repositoryRoot, change.diff))
+      (await getTemporaryIndexDiffWeight(repositoryRoot, reverseIndexPath, [path])) < beforeWeight
     )
+  } catch {
+    return false
+  }
+}
+
+const getGitPatchChangeKey = (patch: AppGitPatchChange): string =>
+  [patch.path, patch.kind, patch.diff].join('\0')
+
+const getUniqueGitPatchChanges = (patches: AppGitPatchChange[]): AppGitPatchChange[] => {
+  const seenPatchKeys = new Set<string>()
+  const uniquePatches: AppGitPatchChange[] = []
+
+  for (const patch of patches) {
+    const key = getGitPatchChangeKey(patch)
+    if (seenPatchKeys.has(key)) continue
+
+    seenPatchKeys.add(key)
+    uniquePatches.push(patch)
   }
 
-  if (change.kind === 'delete' && !isFullUnifiedDiff(change.diff)) {
-    return (await getIndexBlobHash(repositoryRoot, worktreeIndexPath, path)) == null
-  }
-
-  const reverseCheck = await runGit(
-    repositoryRoot,
-    ['apply', '--cached', '--whitespace=nowarn', '--recount', '-C0', '--reverse', '--check'],
-    {
-      env: getTemporaryIndexEnv(worktreeIndexPath),
-      input: getUnifiedPatch(change, path)
-    }
-  )
-
-  return reverseCheck != null
+  return uniquePatches
 }
 
 const getUncommittedGitPatchChanges = async (
@@ -942,9 +977,17 @@ const getUncommittedGitPatchChanges = async (
 
     const uncommittedPatches: AppGitPatchChange[] = []
 
-    for (const [patchIndex, patch] of patches.entries()) {
+    for (const [patchIndex, patch] of getUniqueGitPatchChanges(patches).entries()) {
       if (!(await patchChangesHead(repositoryRoot, tempDirectory, patchIndex, patch))) continue
-      if (!(await worktreeSnapshotContainsPatchChange(repositoryRoot, worktreeIndexPath, patch))) {
+      if (
+        !(await reversePatchReducesWorktreeDiff(
+          repositoryRoot,
+          tempDirectory,
+          patchIndex,
+          worktreeIndexPath,
+          patch
+        ))
+      ) {
         continue
       }
 
