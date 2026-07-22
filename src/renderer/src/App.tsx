@@ -1306,26 +1306,33 @@ const formatExtraUserInstructionsForPrompt = (instructions: string): string | nu
     : null
 }
 
-const scopedChatCommitPrompt = [
-  'Inspect current `git status` / `git diff` yourself and create a scoped Git commit for all work done in this chat before this commit request.',
-  'There are highly likely some changes of parallel work in same files which were touched in this session, so you need to check actual diffs and create a scoped hunk patch to commit instead of committing entire file, to ensure that only work done in this chat gets committed.',
-  'Do not include any unrelated changes and include all changes from this session.',
-  'Do not ask for review or confirmation.',
-  'If you cannot scope the changes, do not commit and explain why.'
-].join(' ')
+const getScopedChatCommitWorkflowStep = (action: GitCommitPromptAction): string =>
+  action === 'amend'
+    ? '9. `git commit --amend` (amend last commit instead of creating a new one)'
+    : '9. `git commit -m "..."`'
+
+const getScopedChatCommitPromptBody = (action: GitCommitPromptAction): string =>
+  [
+    'You need to create a scoped Git commit for all work done in this chat before this commit request. There are highly likely some changes of parallel work in same files which were touched in this session, so you need to check actual diffs and create a scoped hunk patch to commit instead of committing entire file, to ensure that only work done in this chat gets committed. Do not include any unrelated changes and include all changes from this session. Do not ask for review or confirmation. If you cannot scope the changes, do not commit and explain why.',
+    '',
+    'Workflow:',
+    '1. `git status --short`',
+    '2. `git diff --name-only`',
+    '3. For only candidate files: `git diff -U0 -- file`',
+    '4. Write a small patch containing only the wanted hunks.',
+    '5. `git apply --cached --unidiff-zero < patch`',
+    '6. `git diff --cached --name-status`',
+    '7. `git diff --cached | rg ...` only for known unrelated markers if files are mixed',
+    '8. `git diff --cached --check`',
+    getScopedChatCommitWorkflowStep(action)
+  ].join('\n')
 
 const getScopedChatCommitPrompt = (
   action: GitCommitPromptAction,
   extraInstructions: string
 ): string => {
-  const actionInstruction =
-    action === 'amend'
-      ? 'Amend HEAD instead of creating a new commit.'
-      : null
-
   return [
-    scopedChatCommitPrompt,
-    actionInstruction,
+    getScopedChatCommitPromptBody(action),
     formatExtraUserInstructionsForPrompt(extraInstructions)
   ]
     .filter((line): line is string => line != null)
