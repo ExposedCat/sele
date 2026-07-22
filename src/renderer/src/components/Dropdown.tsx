@@ -395,6 +395,17 @@ export const Dropdown = <TValue extends string>({
           {options.map((option, index) => {
             const selected = option.value === value
             const optionId = `${listboxId}-option-${index}`
+            const optionIcon = optionsHaveIcons ? (
+              <span className="ui-dropdown__option-icon" aria-hidden="true">
+                {option.icon}
+              </span>
+            ) : null
+            const optionLabel = (
+              <span className="ui-dropdown__option-label">{option.menuLabel ?? option.label}</span>
+            )
+            const optionCheck = selected ? (
+              <Check className="ui-dropdown__check" aria-hidden="true" />
+            ) : null
 
             return (
               <div
@@ -416,20 +427,22 @@ export const Dropdown = <TValue extends string>({
                   if (!option.disabled) setActiveIndex(index)
                 }}
               >
-                {optionsHaveIcons && (
-                  <span className="ui-dropdown__option-icon" aria-hidden="true">
-                    {option.icon}
-                  </span>
-                )}
-                <span className="ui-dropdown__option-body">
-                  <span className="ui-dropdown__option-label">
-                    {option.menuLabel ?? option.label}
-                  </span>
-                  {option.description && (
+                {option.description ? (
+                  <span className="ui-dropdown__option-body">
+                    <span className="ui-dropdown__option-row">
+                      {optionIcon}
+                      {optionLabel}
+                      {optionCheck}
+                    </span>
                     <span className="ui-dropdown__option-description">{option.description}</span>
-                  )}
-                </span>
-                {selected && <Check className="ui-dropdown__check" aria-hidden="true" />}
+                  </span>
+                ) : (
+                  <>
+                    {optionIcon}
+                    <span className="ui-dropdown__option-body">{optionLabel}</span>
+                    {optionCheck}
+                  </>
+                )}
               </div>
             )
           })}
