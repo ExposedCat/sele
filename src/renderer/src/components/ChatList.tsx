@@ -6,8 +6,10 @@ type ChatListProps = {
   ariaLabel?: string
   chats: ProviderChat[]
   selectedChatKey: string | null
+  canMarkDone?: boolean
+  canMarkUndone?: boolean
   showProjects?: boolean
-  onMarkDone: (chat: ProviderChat) => void
+  onMarkDone: (chat: ProviderChat, done?: boolean) => void
   onResolveApproval: (chat: ProviderChat, decision: ProviderApprovalDecision) => void
   onSelect: (chat: ProviderChat) => void
   onTogglePinned: (chat: ProviderChat) => void
@@ -21,6 +23,8 @@ export const ChatList: React.FC<ChatListProps> = ({
   ariaLabel = 'Chats',
   chats,
   selectedChatKey,
+  canMarkDone = true,
+  canMarkUndone = false,
   showProjects = false,
   onMarkDone,
   onResolveApproval,
@@ -37,11 +41,13 @@ export const ChatList: React.FC<ChatListProps> = ({
           key={chatKey}
           chat={chat}
           selected={chatKey === selectedChatKey}
+          canMarkDone={canMarkDone}
+          canMarkUndone={canMarkUndone}
           showProject={showProjects}
           approvalDecisionInFlight={
             chat.pendingApproval && chat.pendingApproval.id === resolvingApprovalId ? 'allow' : null
           }
-          onMarkDone={() => onMarkDone(chat)}
+          onMarkDone={(done) => onMarkDone(chat, done)}
           onClick={() => onSelect(chat)}
           onResolveApproval={(decision) => onResolveApproval(chat, decision)}
           onTogglePinned={() => onTogglePinned(chat)}

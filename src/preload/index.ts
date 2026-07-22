@@ -106,10 +106,14 @@ const providerApi: ProviderApi = {
     ipcRenderer.invoke(providerIpcChannels.resolveApproval, providerId, chatId, decision),
   stopChat: (providerId, chatId) =>
     ipcRenderer.invoke(providerIpcChannels.stopChat, providerId, chatId),
-  markChatDone: (providerId, chatId) =>
-    ipcRenderer.invoke(providerIpcChannels.markChatDone, providerId, chatId),
+  markChatDone: (providerId, chatId, done) =>
+    ipcRenderer.invoke(providerIpcChannels.markChatDone, providerId, chatId, done),
   markCwdChatsDone: (providerId, cwd) =>
     ipcRenderer.invoke(providerIpcChannels.markCwdChatsDone, providerId, cwd),
+  getCwdNotes: (providerId, cwd) =>
+    ipcRenderer.invoke(providerIpcChannels.getCwdNotes, providerId, cwd),
+  setCwdNotes: (providerId, cwd, notes) =>
+    ipcRenderer.invoke(providerIpcChannels.setCwdNotes, providerId, cwd, notes),
   markChatSeen: (providerId, chatId, seenUpdatedAt) =>
     ipcRenderer.invoke(providerIpcChannels.markChatSeen, providerId, chatId, seenUpdatedAt),
   setChatPinned: (providerId, chatId, pinned) =>

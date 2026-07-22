@@ -340,6 +340,52 @@ const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[]; active: 
 const getToolsFromToolItem = (item: ProviderToolItem): ProviderWorkingTool[] =>
   item.type === 'toolGroup' ? item.tools : [item]
 
+type MarkdownFence = {
+  marker: '`' | '~'
+  length: number
+}
+
+const getMarkdownFence = (line: string): MarkdownFence | null => {
+  const match = line.match(/^(?: {0,3})(`{3,}|~{3,})/)
+  if (!match) return null
+
+  const marker = match[1]
+  return { marker: marker[0] as MarkdownFence['marker'], length: marker.length }
+}
+
+const isMarkdownFenceClose = (line: string, fence: MarkdownFence): boolean => {
+  const match = line.match(/^(?: {0,3})(`{3,}|~{3,})(.*)$/)
+  if (!match) return false
+
+  const marker = match[1]
+  return marker[0] === fence.marker && marker.length >= fence.length && !match[2].trim()
+}
+
+const withPromptMarkdownLineBreaks = (content: string): string => {
+  const parts = content.split(/(\r?\n)/)
+  let fence: MarkdownFence | null = null
+
+  return parts
+    .map((part, index) => {
+      if (index % 2 === 1 || !parts[index + 1]) return part
+
+      if (fence) {
+        if (isMarkdownFenceClose(part, fence)) fence = null
+        return part
+      }
+
+      const nextFence = getMarkdownFence(part)
+      if (nextFence) {
+        fence = nextFence
+        return part
+      }
+
+      if (!part.trim() || part.endsWith('  ')) return part
+      return `${part}  `
+    })
+    .join('')
+}
+
 const ToolItem: React.FC<{ item: ProviderToolItem; activeToolIds: Set<string> }> = ({
   item,
   activeToolIds
@@ -830,7 +876,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
         {messageLabel && <span className="chat-detail__pending-message-label">{messageLabel}</span>}
         <MarkdownMessage
           className={`chat-detail__message chat-detail__message--${role}`}
-          content={item.content}
+          content={role === 'user' ? withPromptMarkdownLineBreaks(item.content) : item.content}
         />
         <div className="chat-detail__message-footer">
           {role === 'user' && messageDate}

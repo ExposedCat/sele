@@ -4,6 +4,7 @@ import type {
   ProviderApprovalDecision,
   ProviderActiveSendMode,
   ProviderChatListOptions,
+  ProviderCwdNote,
   ProviderId,
   ProviderOneShotOptions,
   ProviderTurnOptions,
@@ -58,6 +59,40 @@ const requireTimestamp = (value: unknown): number => {
   }
 
   return Math.floor(value)
+}
+
+const requireCwdNotes = (value: unknown): ProviderCwdNote[] => {
+  if (!Array.isArray(value)) throw new Error('Invalid notes')
+  if (value.length > 100) throw new Error('Too many notes')
+
+  return value.map((note) => {
+    if (!note || typeof note !== 'object') throw new Error('Invalid note')
+
+    const candidate = note as Partial<ProviderCwdNote>
+    if (typeof candidate.id !== 'string' || !candidate.id.trim() || candidate.id.length > 128) {
+      throw new Error('Invalid note ID')
+    }
+    if (
+      typeof candidate.text !== 'string' ||
+      !candidate.text.trim() ||
+      candidate.text.length > 1000
+    ) {
+      throw new Error('Invalid note text')
+    }
+    if (
+      typeof candidate.createdAt !== 'number' ||
+      !Number.isFinite(candidate.createdAt) ||
+      candidate.createdAt < 0
+    ) {
+      throw new Error('Invalid note timestamp')
+    }
+
+    return {
+      id: candidate.id.trim(),
+      text: candidate.text.trim(),
+      createdAt: Math.floor(candidate.createdAt)
+    }
+  })
 }
 
 const requireApprovalDecision = (value: unknown): ProviderApprovalDecision => {
@@ -338,12 +373,32 @@ export const registerProviderIpc = (): void => {
       )
   )
 
-  ipcMain.handle(providerIpcChannels.markChatDone, (_, providerId: unknown, chatId: unknown) =>
-    providerApi.markChatDone(requireProviderId(providerId), requireChatId(chatId))
+  ipcMain.handle(
+    providerIpcChannels.markChatDone,
+    (_, providerId: unknown, chatId: unknown, done: unknown) =>
+      providerApi.markChatDone(
+        requireProviderId(providerId),
+        requireChatId(chatId),
+        done == null ? true : requireBoolean(done)
+      )
   )
 
   ipcMain.handle(providerIpcChannels.markCwdChatsDone, (_, providerId: unknown, cwd: unknown) =>
     providerApi.markCwdChatsDone(requireProviderId(providerId), requireOptionalCwd(cwd))
+  )
+
+  ipcMain.handle(providerIpcChannels.getCwdNotes, (_, providerId: unknown, cwd: unknown) =>
+    providerApi.getCwdNotes(requireProviderId(providerId), requireOptionalCwd(cwd))
+  )
+
+  ipcMain.handle(
+    providerIpcChannels.setCwdNotes,
+    (_, providerId: unknown, cwd: unknown, notes: unknown) =>
+      providerApi.setCwdNotes(
+        requireProviderId(providerId),
+        requireOptionalCwd(cwd),
+        requireCwdNotes(notes)
+      )
   )
 
   ipcMain.handle(

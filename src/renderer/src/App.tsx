@@ -65,6 +65,7 @@ import type {
   ProviderWorkingStep,
   ProviderChatItem,
   ProviderChatMetadata,
+  ProviderCwdNote,
   ProviderMessage,
   ProviderPendingMessage,
   ProviderActiveSendMode,
@@ -1348,9 +1349,23 @@ const isGitChangesScope = (
 const isFileTreeScope = (scope: FileTreeScope | null, cwd: string | null): boolean =>
   Boolean(scope && cwd && scope.cwd === cwd)
 
-const getChangesEmptyMessage = (source: ChangeSource, cwd: string | null): string => {
-  if (source === 'lastTurn') return 'No files changed in the last turn.'
-  if (source === 'chat') return 'No files changed in this chat.'
+const getChangesEmptyMessage = (
+  source: ChangeSource,
+  cwd: string | null,
+  options: { hasNonReadOnlyTools?: boolean; hasUncommittedChanges?: boolean } = {}
+): string => {
+  if (source === 'lastTurn') {
+    if (options.hasNonReadOnlyTools && options.hasUncommittedChanges) {
+      return 'Command changes will be scoped by the chat when committed.'
+    }
+    return 'No files changed in the last turn.'
+  }
+  if (source === 'chat') {
+    if (options.hasNonReadOnlyTools && options.hasUncommittedChanges) {
+      return 'Command changes will be scoped by the chat when committed.'
+    }
+    return 'No files changed in this chat.'
+  }
   if (!cwd) return 'Choose a folder to see changes.'
 
   return `No ${changeSourceLabels[source].toLocaleLowerCase()} changes.`
@@ -1429,6 +1444,7 @@ export const App: React.FC = () => {
   const [visibleChatCountsByGroup, setVisibleChatCountsByGroup] = useState<Record<string, number>>(
     {}
   )
+  const [cwdNotesByGroup, setCwdNotesByGroup] = useState<Record<string, ProviderCwdNote[]>>({})
   const [projectIconsByGroup, setProjectIconsByGroup] = useState<
     Record<string, AppProjectIcon | null>
   >({})
@@ -1477,6 +1493,7 @@ export const App: React.FC = () => {
   const chatAutoScrollFrameRef = useRef<number | null>(null)
   const selectedChatKeyRef = useRef<string | null>(null)
   const chatHadActiveTurnByKeyRef = useRef(new Map<string, boolean>())
+  const loadingCwdNotesRef = useRef(new Set<string>())
   const loadingProjectIconsRef = useRef(new Set<string>())
   const modelManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.model))
   const reasoningManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.reasoningEffort))
@@ -2404,6 +2421,34 @@ export const App: React.FC = () => {
   const doneChatGroup = chatGroups.find((group) => group.kind === 'done') ?? null
 
   useEffect(() => {
+    const groupsToLoad = activeChatGroups.filter(
+      (group) => !(group.key in cwdNotesByGroup) && !loadingCwdNotesRef.current.has(group.key)
+    )
+    if (groupsToLoad.length === 0) return
+
+    groupsToLoad.forEach((group) => loadingCwdNotesRef.current.add(group.key))
+
+    void Promise.all(
+      groupsToLoad.map((group) =>
+        providerApi
+          .getCwdNotes('codex', group.cwd)
+          .then((notes) => ({ key: group.key, notes }))
+          .catch(() => ({ key: group.key, notes: [] }))
+      )
+    ).then((groupNotes) => {
+      groupNotes.forEach(({ key }) => loadingCwdNotesRef.current.delete(key))
+
+      setCwdNotesByGroup((currentNotes) => {
+        const nextNotes = { ...currentNotes }
+        groupNotes.forEach(({ key, notes }) => {
+          nextNotes[key] = notes
+        })
+        return nextNotes
+      })
+    })
+  }, [activeChatGroups, cwdNotesByGroup])
+
+  useEffect(() => {
     const entriesByKey = new Map<string, { key: string; cwd: string | null }>()
     const addProjectIconEntry = (cwd: string | null): void => {
       const key = getChatCwdGroupKey(cwd)
@@ -2523,6 +2568,25 @@ export const App: React.FC = () => {
       delete nextCounts[group.key]
       return nextCounts
     })
+  }
+
+  const handleCwdNotesChange = (group: ChatListGroupData, notes: ProviderCwdNote[]): void => {
+    setCwdNotesByGroup((currentNotes) => ({
+      ...currentNotes,
+      [group.key]: notes
+    }))
+
+    void providerApi
+      .setCwdNotes('codex', group.cwd, notes)
+      .then((storedNotes) => {
+        setCwdNotesByGroup((currentNotes) => ({
+          ...currentNotes,
+          [group.key]: storedNotes
+        }))
+      })
+      .catch(() => {
+        // Keep the optimistic note list visible if local persistence fails.
+      })
   }
 
   const handleSelectProjectIcon = async (group: ChatListGroupData): Promise<void> => {
@@ -2727,12 +2791,12 @@ export const App: React.FC = () => {
 
   const providerUpdateInProgress = providerUpdateState === 'updating'
 
-  const handleMarkChatDone = async (chat: ProviderChat): Promise<void> => {
+  const handleMarkChatDone = async (chat: ProviderChat, done = true): Promise<void> => {
     try {
-      const metadata = await providerApi.markChatDone(chat.providerId, chat.id)
+      const metadata = await providerApi.markChatDone(chat.providerId, chat.id, done)
       applyChatMetadata([metadata])
 
-      if (selectedChat?.providerId === chat.providerId && selectedChat.id === chat.id) {
+      if (done && selectedChat?.providerId === chat.providerId && selectedChat.id === chat.id) {
         showNewChatView()
       }
     } catch {
@@ -2832,7 +2896,7 @@ export const App: React.FC = () => {
     message: string,
     activeMode?: ProviderActiveSendMode
   ): Promise<void> => {
-    if (sendInFlightRef.current) return
+    if (providerUpdateInProgress || sendInFlightRef.current) return
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
     const turnOptions = getCurrentTurnOptions()
@@ -2948,7 +3012,7 @@ export const App: React.FC = () => {
     decision: ProviderApprovalDecision,
     options: { markViewed: boolean }
   ): Promise<void> => {
-    if (approvalResolution.decision) return
+    if (providerUpdateInProgress || approvalResolution.decision) return
 
     const approvalId = approval.id
     setApprovalResolution({ approvalId, decision, error: null })
@@ -2993,7 +3057,7 @@ export const App: React.FC = () => {
   }
 
   const handleStopChat = async (): Promise<void> => {
-    if (!selectedChat || sendInFlightRef.current) return
+    if (providerUpdateInProgress || !selectedChat || sendInFlightRef.current) return
     sendInFlightRef.current = true
     setSendState('sending')
 
@@ -3009,7 +3073,7 @@ export const App: React.FC = () => {
   }
 
   const handleDeletePendingMessage = async (message: ProviderPendingMessage): Promise<void> => {
-    if (!selectedChat) return
+    if (providerUpdateInProgress || !selectedChat) return
 
     try {
       const detail = await providerApi.deletePendingMessage(
@@ -3025,7 +3089,7 @@ export const App: React.FC = () => {
   }
 
   const handleInterruptPendingMessage = async (message: ProviderPendingMessage): Promise<void> => {
-    if (!selectedChat || sendInFlightRef.current) return
+    if (providerUpdateInProgress || !selectedChat || sendInFlightRef.current) return
     sendInFlightRef.current = true
     setSendState('sending')
 
@@ -3067,10 +3131,12 @@ export const App: React.FC = () => {
         chatPageSize={chatPageSize}
         onLoadMoreChats={handleLoadMoreChatsInGroup}
         onShowLessChats={handleShowLessChatsInGroup}
+        notes={cwdNotesByGroup[group.key] ?? []}
         projectIconSrc={projectIconsByGroup[group.key]?.dataUrl ?? null}
         onMarkChatDone={handleMarkChatDone}
         onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
         onNewChatInCwd={handleNewChatInCwd}
+        onNotesChange={handleCwdNotesChange}
         onSelectProjectIcon={(nextGroup) => void handleSelectProjectIcon(nextGroup)}
         onResolveApproval={(chat, decision) => void handleResolveChatApproval(chat, decision)}
         onSelectChat={handleSelectChat}
@@ -3082,20 +3148,21 @@ export const App: React.FC = () => {
     )
   }
 
-  const chatIsWaiting =
-    chatDetail?.status === 'waitingOnApproval' || chatDetail?.status === 'waitingOnUserInput'
-  const chatHasActiveTurn = chatDetail?.status === 'active' || chatIsWaiting
+  const chatHasActiveTurn = isActiveChatStatus(chatDetail?.status)
   const chatHasPendingSteeringMessage = hasPendingSteeringMessage(chatDetail)
   const chatIsBusy =
     chatHasActiveTurn || (sendState === 'sending' && hasActiveWorkingStep(chatDetail))
   const messageBoxDisabled = selectedChat
-    ? chatLoadState !== 'ready' || (chatHasActiveTurn && !chatDetail?.capabilities.activeMessages)
-    : false
+    ? providerUpdateInProgress ||
+      chatLoadState !== 'ready' ||
+      (chatHasActiveTurn && !chatDetail?.capabilities.activeMessages)
+    : providerUpdateInProgress
   const canEditOwnMessages = Boolean(
     selectedChat &&
     chatDetail?.capabilities.editMessages &&
     chatLoadState === 'ready' &&
     sendState !== 'sending' &&
+    !providerUpdateInProgress &&
     !editingMessage
   )
   const visibleChatItems = chatDetail ? getVisibleChatItems(chatDetail.items, editingMessage) : []
@@ -3346,6 +3413,7 @@ export const App: React.FC = () => {
       : [])
   ]
   const gitAiResolutionDisabled =
+    providerUpdateInProgress ||
     syncInProgress ||
     sendState === 'sending' ||
     Boolean(editingMessage) ||
@@ -3640,6 +3708,8 @@ export const App: React.FC = () => {
       recovery?: GitSyncRecoveryState | null
     } = {}
   ): Promise<void> => {
+    if (providerUpdateInProgress) return
+
     setSyncState('sending')
     setSyncError(null)
     setSyncRecovery(options.recovery ? { ...options.recovery, error: null } : null)
@@ -4001,7 +4071,7 @@ export const App: React.FC = () => {
                       aria-label="Project"
                       appearance="inline"
                       title={newSessionCwd ?? 'Choose folder'}
-                      disabled={sendState === 'sending'}
+                      disabled={providerUpdateInProgress || sendState === 'sending'}
                       menuActions={[
                         {
                           id: 'add-project',
@@ -4021,7 +4091,7 @@ export const App: React.FC = () => {
                     <Dropdown
                       aria-label="Provider"
                       appearance="inline"
-                      disabled={sendState === 'sending'}
+                      disabled={providerUpdateInProgress || sendState === 'sending'}
                       options={providerOptions}
                       placement="top"
                       size="small"
@@ -4055,14 +4125,14 @@ export const App: React.FC = () => {
                     </div>
                     <div className="chat-approval__actions">
                       <Button
-                        disabled={Boolean(approvalDecisionInFlight)}
+                        disabled={providerUpdateInProgress || Boolean(approvalDecisionInFlight)}
                         callback={() => void handleResolveApproval('deny')}
                         icon={<X aria-hidden="true" />}
                         label={<span>Deny</span>}
                         theme="secondary"
                       />
                       <Button
-                        disabled={Boolean(approvalDecisionInFlight)}
+                        disabled={providerUpdateInProgress || Boolean(approvalDecisionInFlight)}
                         callback={() => void handleResolveApproval('allow')}
                         icon={<Check aria-hidden="true" />}
                         label={<span>Allow</span>}
@@ -4086,6 +4156,7 @@ export const App: React.FC = () => {
                   contextUsage={messageBoxContextUsage}
                   model={model}
                   models={models}
+                  operationsDisabled={providerUpdateInProgress}
                   pending={sendState === 'sending'}
                   reasoningEffort={reasoningEffort}
                   sandboxMode={sandboxMode}

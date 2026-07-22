@@ -45,6 +45,7 @@ type MessageBoxProps = {
   error?: string | null
   model: ProviderModelId
   models: ProviderModel[]
+  operationsDisabled?: boolean
   pending?: boolean
   reasoningEffort: ProviderReasoningEffort
   sandboxMode: ProviderSandboxMode
@@ -297,6 +298,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   contextUsage,
   model,
   models,
+  operationsDisabled = false,
   pending = false,
   reasoningEffort,
   sandboxMode,
@@ -417,7 +419,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
     ? `${selectedSandboxMode.label}: ${selectedSandboxMode.description}`
     : (selectedSandboxMode?.label ?? formatOptionLabel(sandboxMode))
   const selectedReasoningEffortLabel = getReasoningEffortLabel(reasoningEffort)
-  const textareaDisabled = active ? false : disabled || pending
+  const textareaDisabled = operationsDisabled || (active ? false : disabled || pending)
   const activePrimaryLabel = activePrimaryMode === 'queue' ? 'Queue message' : 'Steer current turn'
   const editingPendingMessage = editSession?.type === 'pending'
 
@@ -469,14 +471,14 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
   }, [editSession])
 
   useEffect(() => {
-    if (!autoFocus || disabled || pending) return
+    if (!autoFocus || operationsDisabled || disabled || pending) return
 
     const animationFrame = window.requestAnimationFrame(() => {
       textareaRef.current?.focus({ preventScroll: true })
     })
 
     return () => window.cancelAnimationFrame(animationFrame)
-  }, [autoFocus, disabled, pending])
+  }, [autoFocus, operationsDisabled, disabled, pending])
 
   useEffect(() => {
     const textarea = textareaRef.current
@@ -492,7 +494,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
 
   const submitMessage = (activeMode: ProviderActiveSendMode = activePrimaryMode): void => {
     const nextMessage = message.trim()
-    if (!nextMessage || (!active && (disabled || pending))) return
+    if (!nextMessage || operationsDisabled || (!active && (disabled || pending))) return
 
     if (editing) {
       void Promise.resolve(onSend(nextMessage))
@@ -552,7 +554,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
       : editing
         ? 'Save edit'
         : 'Send message'
-  const selectorsDisabled = !active && pending
+  const selectorsDisabled = operationsDisabled || (!active && pending)
   const approvalSelectorDisabled = selectorsDisabled || fullAccessSelected
   const activeDropdownActions = activeWithMessage
     ? [
@@ -563,6 +565,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
                 label: 'Queue',
                 title: 'Send this as the next turn after the current response finishes',
                 callback: () => submitMessage('queue'),
+                disabled: operationsDisabled,
                 icon: <ListPlus aria-hidden="true" />
               }
             ]
@@ -572,6 +575,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
           label: 'Interrupt',
           title: 'Stop the current response and send this message',
           callback: () => submitMessage('interrupt'),
+          disabled: operationsDisabled,
           icon: <Square aria-hidden="true" />
         }
       ]
@@ -909,7 +913,8 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
               aria-label={buttonLabel}
               title={buttonLabel}
               disabled={
-                activeWithMessage ? false : active ? false : disabled || pending || !hasMessage
+                operationsDisabled ||
+                (activeWithMessage ? false : active ? false : disabled || pending || !hasMessage)
               }
               callback={activeWithMessage ? submitMessage : active ? handleStop : submitMessage}
               dropdownActions={activeDropdownActions}
@@ -935,7 +940,7 @@ export const MessageBox: React.FC<MessageBoxProps> = ({
               <Button
                 aria-label="Stop response"
                 title="Stop response"
-                disabled={false}
+                disabled={operationsDisabled}
                 callback={handleStop}
                 icon={<Square aria-hidden="true" />}
                 theme="secondary"

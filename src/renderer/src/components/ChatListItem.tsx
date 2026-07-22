@@ -7,6 +7,7 @@ import {
   PinOff,
   ShieldQuestionMark,
   Target,
+  Undo2,
   X
 } from 'lucide-react'
 import type { ProviderApprovalDecision, ProviderChat } from '../../../shared/provider'
@@ -17,8 +18,10 @@ type ChatListItemProps = {
   chat: ProviderChat
   selected: boolean
   showProject: boolean
+  canMarkDone?: boolean
+  canMarkUndone?: boolean
   onClick: () => void
-  onMarkDone: () => void
+  onMarkDone: (done?: boolean) => void
   onResolveApproval: (decision: ProviderApprovalDecision) => void
   onTogglePinned: () => void
   approvalDecisionInFlight?: ProviderApprovalDecision | null
@@ -58,6 +61,8 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
   chat,
   selected,
   showProject,
+  canMarkDone = true,
+  canMarkUndone = false,
   onClick,
   onMarkDone,
   onResolveApproval,
@@ -199,14 +204,24 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({
         </div>
       )}
       <span className="chat-list-item__actions">
-        {!chat.done && (
+        {!chat.done && canMarkDone && (
           <Button
             theme="transparent"
             size="small"
             aria-label="Mark chat done"
             title="Mark done"
-            callback={onMarkDone}
+            callback={() => onMarkDone(true)}
             icon={<Check aria-hidden="true" />}
+          />
+        )}
+        {chat.done && canMarkUndone && (
+          <Button
+            theme="transparent"
+            size="small"
+            aria-label="Mark chat not done"
+            title="Mark not done"
+            callback={() => onMarkDone(false)}
+            icon={<Undo2 aria-hidden="true" />}
           />
         )}
         <Button

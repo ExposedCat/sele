@@ -285,6 +285,12 @@ export type ProviderChatMetadata = {
   seenUpdatedAt: number | null
 }
 
+export type ProviderCwdNote = {
+  id: string
+  text: string
+  createdAt: number
+}
+
 export type ProviderChat = {
   id: string
   providerId: ProviderId
@@ -510,8 +516,18 @@ export type ProviderApi = {
     decision: ProviderApprovalDecision
   ) => Promise<ProviderChatDetail>
   stopChat: (providerId: ProviderId, chatId: string) => Promise<ProviderChatDetail>
-  markChatDone: (providerId: ProviderId, chatId: string) => Promise<ProviderChatMetadata>
+  markChatDone: (
+    providerId: ProviderId,
+    chatId: string,
+    done?: boolean
+  ) => Promise<ProviderChatMetadata>
   markCwdChatsDone: (providerId: ProviderId, cwd: string | null) => Promise<ProviderChatMetadata[]>
+  getCwdNotes: (providerId: ProviderId, cwd: string | null) => Promise<ProviderCwdNote[]>
+  setCwdNotes: (
+    providerId: ProviderId,
+    cwd: string | null,
+    notes: ProviderCwdNote[]
+  ) => Promise<ProviderCwdNote[]>
   markChatSeen: (
     providerId: ProviderId,
     chatId: string,
@@ -548,6 +564,8 @@ export const providerIpcChannels = {
   stopChat: 'provider:stop-chat',
   markChatDone: 'provider:mark-chat-done',
   markCwdChatsDone: 'provider:mark-cwd-chats-done',
+  getCwdNotes: 'provider:get-cwd-notes',
+  setCwdNotes: 'provider:set-cwd-notes',
   markChatSeen: 'provider:mark-chat-seen',
   setChatPinned: 'provider:set-chat-pinned',
   chatUpdated: 'provider:chat-updated'

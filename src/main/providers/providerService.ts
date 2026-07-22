@@ -15,6 +15,7 @@ import {
   setChatSeen,
   setChatsDone
 } from '../database/chat'
+import { getCwdNotes, setCwdNotes } from '../database/cwdNotes'
 import { CodexProviderAdapter } from './codex/CodexProviderAdapter'
 import { getCwdMetadata } from './cwdMetadata'
 import type { ProviderAdapter } from './ProviderAdapter'
@@ -167,9 +168,11 @@ export const providerApi: ProviderApi = {
       .then((detail) => applyMetadataToDetail(detail)),
   stopChat: (providerId, chatId) =>
     adapters[providerId].stopChat(chatId).then((detail) => applyMetadataToDetail(detail)),
-  markChatDone: (_providerId, chatId) => setChatDone(chatId, true),
+  markChatDone: (_providerId, chatId, done = true) => setChatDone(chatId, done),
   markCwdChatsDone: async (providerId, cwd) =>
     setChatsDone(await collectProviderChatIdsByCwd(providerId, cwd), true),
+  getCwdNotes: (providerId, cwd) => getCwdNotes(providerId, cwd),
+  setCwdNotes: (providerId, cwd, notes) => setCwdNotes(providerId, cwd, notes),
   markChatSeen: (_providerId, chatId, seenUpdatedAt) => setChatSeen(chatId, seenUpdatedAt),
   setChatPinned: (_providerId, chatId, pinned) => setChatPinned(chatId, pinned),
   onChatUpdated: (listener) => {

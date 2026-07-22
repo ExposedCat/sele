@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { Kysely, SqliteDialect, sql, type ColumnType } from 'kysely'
-import type { ProviderChatCwdKind } from '../../shared/provider'
+import type { ProviderChatCwdKind, ProviderId } from '../../shared/provider'
 
 type SqliteBooleanColumn = ColumnType<number, number | boolean | undefined, number | boolean>
 type SqliteNullableNumberColumn = ColumnType<
@@ -24,6 +24,12 @@ export type LocalDatabase = {
     kind: ProviderChatCwdKind
     project_cwd: string | null
     branch_name: string | null
+  }
+  cwd_notes: {
+    id: string
+    provider_id: ProviderId
+    cwd_key: string
+    notes_json: string
   }
   project_icons: {
     cwd_key: string
@@ -69,6 +75,15 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
     .addColumn('kind', 'text', (column) => column.notNull())
     .addColumn('project_cwd', 'text')
     .addColumn('branch_name', 'text')
+    .execute()
+
+  await db.schema
+    .createTable('cwd_notes')
+    .ifNotExists()
+    .addColumn('id', 'text', (column) => column.primaryKey())
+    .addColumn('provider_id', 'text', (column) => column.notNull())
+    .addColumn('cwd_key', 'text', (column) => column.notNull())
+    .addColumn('notes_json', 'text', (column) => column.notNull())
     .execute()
 
   await db.schema
