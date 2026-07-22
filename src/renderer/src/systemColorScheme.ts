@@ -1,23 +1,41 @@
 import type { AppColorScheme } from '../../shared/app'
 import { appApi } from './appApi'
+import { type AppThemePreference, readStoredAppSettings } from './settings'
 
 const colorSchemeQuery = '(prefers-color-scheme: dark)'
 const logPrefix = '[color-scheme:renderer]'
+let themePreference: AppThemePreference = readStoredAppSettings().appearance.theme
+let systemColorScheme: AppColorScheme = 'light'
 
 const getSystemColorScheme = (query: MediaQueryList): AppColorScheme =>
   query.matches ? 'dark' : 'light'
 
-const applySystemColorScheme = (scheme: AppColorScheme): void => {
+const getEffectiveColorScheme = (
+  preference: AppThemePreference,
+  systemScheme: AppColorScheme
+): AppColorScheme => (preference === 'system' ? systemScheme : preference)
+
+const applyColorScheme = (scheme: AppColorScheme): void => {
   const root = document.documentElement
 
   root.dataset.colorScheme = scheme
   root.style.colorScheme = scheme
 }
 
+const applyPreferredColorScheme = (): void => {
+  applyColorScheme(getEffectiveColorScheme(themePreference, systemColorScheme))
+}
+
+export const setThemePreference = (preference: AppThemePreference): void => {
+  themePreference = preference
+  applyPreferredColorScheme()
+}
+
 export const watchSystemColorScheme = (): void => {
   const query = window.matchMedia(colorSchemeQuery)
   const updateColorScheme = (): void => {
-    applySystemColorScheme(getSystemColorScheme(query))
+    systemColorScheme = getSystemColorScheme(query)
+    applyPreferredColorScheme()
   }
 
   updateColorScheme()
@@ -25,10 +43,16 @@ export const watchSystemColorScheme = (): void => {
 
   void appApi
     .getColorScheme()
-    .then(applySystemColorScheme)
+    .then((scheme) => {
+      systemColorScheme = scheme
+      applyPreferredColorScheme()
+    })
     .catch((error: unknown) => {
       console.error(logPrefix, 'failed to read main process color scheme', error)
     })
 
-  appApi.onColorSchemeUpdated(applySystemColorScheme)
+  appApi.onColorSchemeUpdated((scheme) => {
+    systemColorScheme = scheme
+    applyPreferredColorScheme()
+  })
 }

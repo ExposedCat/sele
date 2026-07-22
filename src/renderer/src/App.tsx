@@ -12,6 +12,7 @@ import {
 import {
   ArrowLeft,
   BellOff,
+  Bot,
   ChevronDown,
   ChevronRight,
   Check,
@@ -28,10 +29,15 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  Monitor,
+  Moon,
   RefreshCw,
   Search,
+  Settings,
+  MessageSquare,
   Sparkles,
   SquarePen,
+  Sun,
   Upload,
   X
 } from 'lucide-react'
@@ -103,6 +109,13 @@ import { MessageBox } from './components/MessageBox'
 import { SegmentedControl } from './components/SegmentedControl'
 import { appApi } from './appApi'
 import { providerApi } from './providerApi'
+import {
+  type AppSettings,
+  type AppThemePreference,
+  readStoredAppSettings,
+  writeStoredAppSettings
+} from './settings'
+import { setThemePreference } from './systemColorScheme'
 import './App.css'
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -155,6 +168,7 @@ type GitSyncRecoveryState = {
 type GitSyncRecoveryActionOptions = {
   rememberStrategy?: boolean
 }
+type SettingsTab = 'appearance' | 'chat' | 'git'
 type CachedPatchChangedFiles = {
   cwd: string
   source: PatchChangeSource
@@ -252,6 +266,7 @@ const chatPaneDefaultReferenceWidth = 1200
 const chatPanePreferenceStorageKey = 'sele:chat-pane-preference:v1'
 const messageBoxSelectionStorageKey = 'sele:message-box-selection:v1'
 const providerUpdatePreferenceStorageKey = 'sele:provider-update-preferences:v1'
+const gitCurrentChatModelValue = '__sele_current_chat_model__'
 const pinnedGroupKey = 'pinned'
 const unknownCwdGroupKey = 'cwd:unknown'
 const doneGroupKey = 'done'
@@ -742,6 +757,52 @@ const writeStoredMessageBoxSelection = (selection: MessageBoxSelection): void =>
 }
 
 const providerOptions = getDropdownOptions(providerLabels)
+
+const formatModelLabel = (label: string): string => label.replace(/-/g, ' ')
+
+const settingsTabOptions = [
+  {
+    value: 'appearance',
+    label: 'Appearance',
+    icon: <Sun aria-hidden="true" />
+  },
+  {
+    value: 'chat',
+    label: 'Chat',
+    icon: <MessageSquare aria-hidden="true" />
+  },
+  {
+    value: 'git',
+    label: 'Git',
+    icon: <GitBranch aria-hidden="true" />
+  }
+] satisfies readonly {
+  value: SettingsTab
+  label: string
+  icon: React.ReactNode
+}[]
+
+const themeOptions = [
+  {
+    value: 'light',
+    label: 'Light',
+    icon: <Sun aria-hidden="true" />
+  },
+  {
+    value: 'dark',
+    label: 'Dark',
+    icon: <Moon aria-hidden="true" />
+  },
+  {
+    value: 'system',
+    label: 'System',
+    icon: <Monitor aria-hidden="true" />
+  }
+] satisfies readonly {
+  value: AppThemePreference
+  label: string
+  icon: React.ReactNode
+}[]
 
 const approvalTypeLabels = {
   command: 'Command approval',
@@ -1400,6 +1461,9 @@ const getProviderUpdateSummary = (suggestion: ProviderUpdateSuggestion): string 
 
 export const App: React.FC = () => {
   const storedMessageBoxSelection = useMemo(() => readStoredMessageBoxSelection(), [])
+  const [appSettings, setAppSettings] = useState<AppSettings>(readStoredAppSettings)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance')
   const [chats, setChats] = useState<ProviderChat[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [selectedChat, setSelectedChat] = useState<ProviderChat | null>(null)
@@ -1494,6 +1558,7 @@ export const App: React.FC = () => {
   const resizeHandleRef = useRef<HTMLDivElement>(null)
   const changesResizeHandleRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const settingsCloseButtonRef = useRef<HTMLButtonElement>(null)
   const sendInFlightRef = useRef(false)
   const commitInFlightRef = useRef(false)
   const chatAutoScrollEnabledRef = useRef(true)
@@ -1525,6 +1590,27 @@ export const App: React.FC = () => {
 
     writeStoredChatPanePercents(panePercents)
   }, [panePercents])
+
+  useEffect(() => {
+    writeStoredAppSettings(appSettings)
+    setThemePreference(appSettings.appearance.theme)
+  }, [appSettings])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+
+      event.preventDefault()
+      setSettingsOpen(false)
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    queueMicrotask(() => settingsCloseButtonRef.current?.focus({ preventScroll: true }))
+
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [settingsOpen])
 
   useEffect(
     () => () => {
@@ -2554,6 +2640,38 @@ export const App: React.FC = () => {
     return options
   }, [chats, newSessionCwd, projectHistory, projectIconsByGroup])
   const newSessionProjectValue = newSessionCwd ?? newSessionProjectPlaceholderValue
+  const gitCommitModelValue = appSettings.git.commitModel ?? gitCurrentChatModelValue
+  const gitCommitModelOptions = useMemo<DropdownOption<string>[]>(() => {
+    const modelOptions = models.map((candidateModel): DropdownOption<string> => ({
+      value: candidateModel.id,
+      label: formatModelLabel(candidateModel.label),
+      menuLabel: candidateModel.isDefault
+        ? `${formatModelLabel(candidateModel.label)} (default)`
+        : formatModelLabel(candidateModel.label),
+      description: candidateModel.description || undefined,
+      icon: <Bot aria-hidden="true" />
+    }))
+
+    return [
+      {
+        value: gitCurrentChatModelValue,
+        label: 'Selected model',
+        description: 'Use the model selected in the chat at the moment you commit.',
+        icon: <MessageSquare aria-hidden="true" />
+      },
+      ...(appSettings.git.commitModel &&
+      !modelOptions.some((option) => option.value === appSettings.git.commitModel)
+        ? [
+            {
+              value: appSettings.git.commitModel,
+              label: formatModelLabel(appSettings.git.commitModel),
+              icon: <Bot aria-hidden="true" />
+            }
+          ]
+        : []),
+      ...modelOptions
+    ]
+  }, [appSettings.git.commitModel, models])
 
   const handleToggleCwdGroup = (groupKey: string): void => {
     setCollapsedCwdGroups((currentGroups) => ({
@@ -2665,6 +2783,43 @@ export const App: React.FC = () => {
   const handleCloseSearch = (): void => {
     setSearchOpen(false)
     setSearchQuery('')
+  }
+
+  const updateAppSettings = (update: (settings: AppSettings) => AppSettings): void => {
+    setAppSettings((currentSettings) => update(currentSettings))
+  }
+
+  const handleThemePreferenceChange = (theme: AppThemePreference): void => {
+    updateAppSettings((currentSettings) => ({
+      ...currentSettings,
+      appearance: {
+        ...currentSettings.appearance,
+        theme
+      }
+    }))
+  }
+
+  const handleChatDropdownPreferenceChange = (
+    key: keyof AppSettings['chat'],
+    value: boolean
+  ): void => {
+    updateAppSettings((currentSettings) => ({
+      ...currentSettings,
+      chat: {
+        ...currentSettings.chat,
+        [key]: value
+      }
+    }))
+  }
+
+  const handleGitCommitModelChange = (nextModel: string): void => {
+    updateAppSettings((currentSettings) => ({
+      ...currentSettings,
+      git: {
+        ...currentSettings.git,
+        commitModel: nextModel === gitCurrentChatModelValue ? null : nextModel
+      }
+    }))
   }
 
   const handleSelectNewSessionFolder = async (): Promise<void> => {
@@ -2899,14 +3054,34 @@ export const App: React.FC = () => {
     sandboxMode
   })
 
+  const getGitTurnOptions = (): ProviderTurnOptions => {
+    const commitModel = appSettings.git.commitModel
+    const turnOptions = getCurrentTurnOptions()
+    if (!commitModel) return turnOptions
+
+    const selectedCommitModel = models.find((candidateModel) => candidateModel.id === commitModel)
+
+    return {
+      ...turnOptions,
+      model: commitModel,
+      reasoningEffort: modelSupportsReasoningEffort(
+        selectedCommitModel,
+        turnOptions.reasoningEffort
+      )
+        ? turnOptions.reasoningEffort
+        : getDefaultReasoningEffort(selectedCommitModel)
+    }
+  }
+
   const handleSendMessage = async (
     message: string,
-    activeMode?: ProviderActiveSendMode
+    activeMode?: ProviderActiveSendMode,
+    turnOptionsOverride?: ProviderTurnOptions
   ): Promise<void> => {
     if (providerUpdateInProgress || sendInFlightRef.current) return
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
-    const turnOptions = getCurrentTurnOptions()
+    const turnOptions = turnOptionsOverride ?? getCurrentTurnOptions()
 
     if (editingMessage) {
       if (!selectedChat) {
@@ -3615,12 +3790,7 @@ export const App: React.FC = () => {
     }
 
     try {
-      const detail = await providerApi.continueChat(
-        providerId,
-        chatId,
-        prompt,
-        getCurrentTurnOptions()
-      )
+      const detail = await providerApi.continueChat(providerId, chatId, prompt, getGitTurnOptions())
       applyViewedChatDetail(providerId, detail)
       setCommitInput('')
       setCommitState('idle')
@@ -3810,7 +3980,11 @@ export const App: React.FC = () => {
     setSyncRecovery(null)
     setSyncState('idle')
     setSyncError(null)
-    await handleSendMessage(getGitAiResolutionPrompt(recovery, rememberStrategy))
+    await handleSendMessage(
+      getGitAiResolutionPrompt(recovery, rememberStrategy),
+      undefined,
+      getGitTurnOptions()
+    )
   }
 
   const handleMinimizeWindow = (): void => {
@@ -3826,6 +4000,141 @@ export const App: React.FC = () => {
 
   const handleCloseWindow = (): void => {
     void appApi.closeWindow()
+  }
+
+  const renderSettingsPanel = (): React.ReactElement => {
+    if (settingsTab === 'chat') {
+      return (
+        <section
+          className="settings-dialog__panel"
+          id="settings-panel-chat"
+          role="tabpanel"
+          aria-label="Chat settings"
+        >
+          <div className="settings-dialog__field">
+            <div className="settings-dialog__field-header">
+              <h3 id="settings-chat-existing-label">Update all existing chats</h3>
+            </div>
+            <label className="settings-switch">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-labelledby="settings-chat-existing-label"
+                checked={appSettings.chat.updateExistingChats}
+                onChange={(event) =>
+                  handleChatDropdownPreferenceChange(
+                    'updateExistingChats',
+                    event.currentTarget.checked
+                  )
+                }
+              />
+              <span className="settings-switch__control" aria-hidden="true" />
+            </label>
+          </div>
+          <div className="settings-dialog__field">
+            <div className="settings-dialog__field-header">
+              <h3 id="settings-chat-new-label">Update all new chats</h3>
+            </div>
+            <label className="settings-switch">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-labelledby="settings-chat-new-label"
+                checked={appSettings.chat.updateNewChats}
+                onChange={(event) =>
+                  handleChatDropdownPreferenceChange('updateNewChats', event.currentTarget.checked)
+                }
+              />
+              <span className="settings-switch__control" aria-hidden="true" />
+            </label>
+          </div>
+        </section>
+      )
+    }
+
+    if (settingsTab === 'git') {
+      return (
+        <section
+          className="settings-dialog__panel"
+          id="settings-panel-git"
+          role="tabpanel"
+          aria-label="Git settings"
+        >
+          <div className="settings-dialog__field settings-dialog__field--inline">
+            <div className="settings-dialog__field-header">
+              <h3>Commit model</h3>
+            </div>
+            <Dropdown
+              id="settings-git-commit-model"
+              aria-label="Commit model"
+              menuAlign="end"
+              options={gitCommitModelOptions}
+              value={gitCommitModelValue}
+              onChange={handleGitCommitModelChange}
+            />
+          </div>
+        </section>
+      )
+    }
+
+    return (
+      <section
+        className="settings-dialog__panel"
+        id="settings-panel-appearance"
+        role="tabpanel"
+        aria-label="Appearance settings"
+      >
+        <div className="settings-dialog__field settings-dialog__field--inline">
+          <div className="settings-dialog__field-header">
+            <h3>Theme</h3>
+          </div>
+          <SegmentedControl
+            aria-label="Theme"
+            className="settings-dialog__theme-toggle"
+            options={themeOptions}
+            value={appSettings.appearance.theme}
+            onChange={handleThemePreferenceChange}
+          />
+        </div>
+      </section>
+    )
+  }
+
+  const renderSettingsDialog = (): React.ReactElement | null => {
+    if (!settingsOpen) return null
+
+    return (
+      <div
+        className="settings-overlay"
+        role="presentation"
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget) setSettingsOpen(false)
+        }}
+      >
+        <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="Settings">
+          <header className="settings-dialog__header">
+            <SegmentedControl
+              aria-label="Settings sections"
+              className="settings-dialog__tabs"
+              options={settingsTabOptions}
+              value={settingsTab}
+              onChange={setSettingsTab}
+            />
+            <button
+              ref={settingsCloseButtonRef}
+              className="settings-dialog__close"
+              type="button"
+              aria-label="Close settings"
+              title="Close settings"
+              onClick={() => setSettingsOpen(false)}
+            >
+              <X aria-hidden="true" />
+            </button>
+          </header>
+          <div className="settings-dialog__body">{renderSettingsPanel()}</div>
+        </section>
+      </div>
+    )
   }
 
   const renderWindowControls = (placement: 'darwin' | 'default'): React.ReactElement => (
@@ -3866,6 +4175,7 @@ export const App: React.FC = () => {
 
   return (
     <main className={`chat${chatPanelOpen ? ' chat--has-selection' : ' chat--no-selection'}`}>
+      {renderSettingsDialog()}
       <div className="chat__panels" ref={panelsRef} style={panelsStyle}>
         <div className="chat__sidebar-panel" data-panel="true" id="sidebar">
           <aside className="chat-sidebar" aria-label="Recent conversations">
@@ -3902,6 +4212,13 @@ export const App: React.FC = () => {
                 </>
               ) : (
                 <div className="chat-home__actions">
+                  <Button
+                    theme="secondary"
+                    aria-label="Settings"
+                    title="Settings"
+                    callback={() => setSettingsOpen(true)}
+                    icon={<Settings aria-hidden="true" />}
+                  />
                   <Button
                     theme="secondary"
                     aria-label="New chat"
