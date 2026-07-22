@@ -500,6 +500,79 @@ const getThreadApiCwd = (thread: CodexThread): string | null => {
 const getThreadTurns = (thread: CodexThread): CodexTurn[] =>
   Array.isArray(thread.turns) ? thread.turns : []
 
+const historicalToolItemTypes = new Set([
+  'commandExecution',
+  'customToolCall',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'fileChange'
+])
+
+const textItemTypes = new Set(['userMessage', 'agentMessage'])
+
+const isHistoricalToolItem = (item: CodexThreadItem): boolean =>
+  historicalToolItemTypes.has(item.type) ||
+  Boolean(
+    item.command ||
+    item.customToolName ||
+    item.tool ||
+    item.server ||
+    item.namespace ||
+    (item.changes?.length ?? 0) > 0
+  )
+
+const countItemsByType = (turn: CodexTurn, matches: (item: CodexThreadItem) => boolean): number =>
+  turn.items.reduce((count, item) => (matches(item) ? count + 1 : count), 0)
+
+const shouldUseRolloutTurnItems = (structuredTurn: CodexTurn, rolloutTurn: CodexTurn): boolean => {
+  if (structuredTurn.status === 'inProgress' || structuredTurn.status === 'queued') return false
+
+  const structuredToolCount = countItemsByType(structuredTurn, isHistoricalToolItem)
+  const rolloutToolCount = countItemsByType(rolloutTurn, isHistoricalToolItem)
+  if (rolloutToolCount <= structuredToolCount) return false
+
+  const structuredTextCount = countItemsByType(structuredTurn, (item) =>
+    textItemTypes.has(item.type)
+  )
+  const rolloutTextCount = countItemsByType(rolloutTurn, (item) => textItemTypes.has(item.type))
+
+  return rolloutTextCount >= structuredTextCount
+}
+
+const mergeStructuredAndRolloutTurn = (
+  structuredTurn: CodexTurn,
+  rolloutTurn: CodexTurn
+): CodexTurn => ({
+  ...rolloutTurn,
+  ...structuredTurn,
+  startedAt: structuredTurn.startedAt ?? rolloutTurn.startedAt,
+  completedAt: structuredTurn.completedAt ?? rolloutTurn.completedAt,
+  items: shouldUseRolloutTurnItems(structuredTurn, rolloutTurn)
+    ? rolloutTurn.items
+    : structuredTurn.items
+})
+
+const mergeStructuredAndRolloutTurns = (
+  structuredTurns: CodexTurn[],
+  rolloutTurns: CodexTurn[]
+): CodexTurn[] => {
+  if (structuredTurns.length === 0) return rolloutTurns
+  if (rolloutTurns.length === 0) return structuredTurns
+
+  const structuredTurnsById = new Map(structuredTurns.map((turn) => [turn.id, turn]))
+  const usedStructuredTurnIds = new Set<string>()
+  const mergedTurns = rolloutTurns.map((rolloutTurn) => {
+    const structuredTurn = structuredTurnsById.get(rolloutTurn.id)
+    if (!structuredTurn) return rolloutTurn
+
+    usedStructuredTurnIds.add(structuredTurn.id)
+    return mergeStructuredAndRolloutTurn(structuredTurn, rolloutTurn)
+  })
+
+  return [...mergedTurns, ...structuredTurns.filter((turn) => !usedStructuredTurnIds.has(turn.id))]
+}
+
 const nowSeconds = (): number => Math.floor(Date.now() / 1_000)
 
 const getThreadId = (params: { threadId?: unknown }): string | null =>
@@ -1440,9 +1513,9 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
   private getTurnsForThread = async (thread: CodexThread): Promise<CodexTurn[]> => {
     const structuredTurns = getThreadTurns(thread)
-    if (structuredTurns.length > 0) return structuredTurns
+    const rolloutTurns = await loadRolloutHistory(thread.path)
 
-    return loadRolloutHistory(thread.path)
+    return mergeStructuredAndRolloutTurns(structuredTurns, rolloutTurns)
   }
 
   private steerActiveChat = async (

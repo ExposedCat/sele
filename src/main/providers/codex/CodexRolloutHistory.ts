@@ -48,17 +48,24 @@ type RolloutEntry = {
 const isToolCallPayload = (payload: RolloutPayload): boolean =>
   payload.type === 'custom_tool_call' ||
   payload.type === 'function_call' ||
-  payload.type === 'tool_search_call'
+  payload.type === 'tool_search_call' ||
+  payload.type === 'web_search_call'
 
 const getToolCallOutputType = (payload: RolloutPayload): string | null => {
   if (payload.type === 'function_call') return 'function_call_output'
   if (payload.type === 'custom_tool_call') return 'custom_tool_call_output'
   if (payload.type === 'tool_search_call') return 'tool_search_output'
+  if (payload.type === 'web_search_call') return 'web_search_end'
   return null
 }
 
 const getToolCallName = (payload: RolloutPayload): string =>
-  payload.name ?? (payload.type === 'tool_search_call' ? 'tool_search' : 'tool')
+  payload.name ??
+  (payload.type === 'tool_search_call'
+    ? 'tool_search'
+    : payload.type === 'web_search_call'
+      ? 'web_search'
+      : 'tool')
 
 const getRecordValue = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -241,6 +248,9 @@ const getToolCallInput = (payload: RolloutPayload): string | null => {
   }
   if (payload.arguments !== undefined) {
     return `tools.${getToolCallName(payload)}(${JSON.stringify(payload.arguments)})`
+  }
+  if (payload.action !== undefined) {
+    return `tools.${getToolCallName(payload)}(${JSON.stringify(payload.action)})`
   }
   return null
 }
