@@ -357,7 +357,7 @@ const classifySegment = (segment: ShellSegment): SegmentClassification | null =>
   if (!parsed) return null
 
   const { command, args } = parsed
-  if (['pwd', 'which', 'command -v'].includes(command)) {
+  if (['cd', 'pwd', 'which', 'command -v'].includes(command)) {
     return { activity: 'neutral', command, args }
   }
   if (command === 'git') return { activity: 'git', command, args }
