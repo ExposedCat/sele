@@ -57,6 +57,54 @@
   transform: rotate(90deg);
 }
 
+.chat-list-group__project-toggle {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-list-group__toggle-content--project {
+  padding-left: 28px;
+}
+
+.chat-list-group__project-icon-button {
+  appearance: none;
+  position: absolute;
+  top: 50%;
+  left: 35px;
+  z-index: 1;
+  display: grid;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  padding: 0;
+  place-items: center;
+  border: 0;
+  color: var(--quiet);
+  cursor: pointer;
+  background: transparent;
+  transform: translateY(-50%);
+  -webkit-app-region: no-drag;
+}
+
+.chat-list-group__project-icon-button svg {
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+}
+
+.chat-list-group__project-icon-image {
+  display: block;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.chat-list-group__project-icon-button:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .chat-list-group__title {
   min-width: 0;
   flex: 1;

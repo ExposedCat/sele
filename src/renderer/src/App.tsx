@@ -17,6 +17,7 @@ import {
   Check,
   Download,
   Files,
+  FolderKanban,
   FolderPlus,
   GitBranch,
   GitCommitHorizontal,
@@ -52,6 +53,7 @@ import type {
   AppGitChangesResult,
   AppGitCommitAction,
   AppGitPatchChange,
+  AppProjectIcon,
   AppGitPullStrategy,
   AppGitRecoverableFailure,
   AppGitRecoveryActionId,
@@ -1476,6 +1478,9 @@ export const App: React.FC = () => {
   const [visibleChatCountsByGroup, setVisibleChatCountsByGroup] = useState<Record<string, number>>(
     {}
   )
+  const [projectIconsByGroup, setProjectIconsByGroup] = useState<
+    Record<string, AppProjectIcon | null>
+  >({})
   const [changeSource, setChangeSource] = useState<ChangeSource>('uncommitted')
   const [changesPaneView, setChangesPaneView] = useState<ChangesPaneView>('git')
   const [gitChanges, setGitChanges] = useState<AppGitChangesResult | null>(null)
@@ -1521,6 +1526,7 @@ export const App: React.FC = () => {
   const chatAutoScrollEnabledRef = useRef(true)
   const chatAutoScrollFrameRef = useRef<number | null>(null)
   const selectedChatKeyRef = useRef<string | null>(null)
+  const loadingProjectIconsRef = useRef(new Set<string>())
   const modelManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.model))
   const reasoningManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.reasoningEffort))
   const approvalModeManuallySelectedRef = useRef(Boolean(storedMessageBoxSelection.approvalMode))
@@ -2432,6 +2438,48 @@ export const App: React.FC = () => {
   const pinnedChatGroup = chatGroups.find((group) => group.kind === 'pinned') ?? null
   const activeChatGroups = chatGroups.filter((group) => group.kind === 'cwd')
   const doneChatGroup = chatGroups.find((group) => group.kind === 'done') ?? null
+
+  useEffect(() => {
+    const entriesByKey = new Map<string, { key: string; cwd: string | null }>()
+    const addProjectIconEntry = (cwd: string | null): void => {
+      const key = getChatCwdGroupKey(cwd)
+      if (!entriesByKey.has(key)) entriesByKey.set(key, { key, cwd })
+    }
+
+    activeChatGroups.forEach((group) => addProjectIconEntry(group.cwd))
+    projectHistory.forEach((project) => addProjectIconEntry(project.cwd))
+    chats.forEach((chat) => addProjectIconEntry(getChatProjectCwd(chat)))
+    addProjectIconEntry(newSessionCwd)
+
+    const projectIconEntries = Array.from(entriesByKey.values())
+    const iconsToLoad = projectIconEntries.filter(
+      (entry) =>
+        !(entry.key in projectIconsByGroup) && !loadingProjectIconsRef.current.has(entry.key)
+    )
+    if (iconsToLoad.length === 0) return
+
+    iconsToLoad.forEach((entry) => loadingProjectIconsRef.current.add(entry.key))
+
+    void Promise.all(
+      iconsToLoad.map((entry) =>
+        appApi
+          .getProjectIcon({ cwd: entry.cwd })
+          .then((icon) => ({ key: entry.key, icon }))
+          .catch(() => ({ key: entry.key, icon: null }))
+      )
+    ).then((groupIcons) => {
+      groupIcons.forEach(({ key }) => loadingProjectIconsRef.current.delete(key))
+
+      setProjectIconsByGroup((currentIcons) => {
+        const nextIcons = { ...currentIcons }
+        groupIcons.forEach(({ key, icon }) => {
+          nextIcons[key] = icon
+        })
+        return nextIcons
+      })
+    })
+  }, [activeChatGroups, chats, newSessionCwd, projectHistory, projectIconsByGroup])
+
   const projectOptions = useMemo<DropdownOption<string>[]>(() => {
     const projectsByCwd = new Map<string, { cwd: string; updatedAt: number }>()
 
@@ -2449,6 +2497,16 @@ export const App: React.FC = () => {
     chats.forEach((chat) => addProject(getChatProjectCwd(chat), chat.updatedAt))
     addProject(newSessionCwd, Number.MAX_SAFE_INTEGER)
 
+    const getProjectOptionIcon = (cwd: string | null): React.ReactElement => {
+      const projectIcon = projectIconsByGroup[getChatCwdGroupKey(cwd)]
+
+      return projectIcon?.dataUrl ? (
+        <img src={projectIcon.dataUrl} alt="" />
+      ) : (
+        <FolderKanban aria-hidden="true" />
+      )
+    }
+
     const options = Array.from(projectsByCwd.values())
       .sort((firstProject, secondProject) => {
         if (secondProject.updatedAt !== firstProject.updatedAt) {
@@ -2461,7 +2519,8 @@ export const App: React.FC = () => {
         value: project.cwd,
         label: getFolderName(project.cwd),
         menuLabel: getFolderName(project.cwd),
-        description: getFolderDescription(project.cwd)
+        description: getFolderDescription(project.cwd),
+        icon: getProjectOptionIcon(project.cwd)
       }))
 
     if (!newSessionCwd) {
@@ -2469,6 +2528,7 @@ export const App: React.FC = () => {
         {
           value: newSessionProjectPlaceholderValue,
           label: 'Choose folder',
+          icon: getProjectOptionIcon(null),
           disabled: true
         },
         ...options
@@ -2476,7 +2536,7 @@ export const App: React.FC = () => {
     }
 
     return options
-  }, [chats, newSessionCwd, projectHistory])
+  }, [chats, newSessionCwd, projectHistory, projectIconsByGroup])
   const newSessionProjectValue = newSessionCwd ?? newSessionProjectPlaceholderValue
 
   const handleToggleCwdGroup = (groupKey: string): void => {
@@ -2499,6 +2559,22 @@ export const App: React.FC = () => {
       delete nextCounts[group.key]
       return nextCounts
     })
+  }
+
+  const handleSelectProjectIcon = async (group: ChatListGroupData): Promise<void> => {
+    if (group.kind !== 'cwd') return
+
+    let icon: AppProjectIcon | null = null
+    try {
+      icon = await appApi.selectProjectIcon({ cwd: group.cwd })
+    } catch {
+      return
+    }
+
+    setProjectIconsByGroup((currentIcons) => ({
+      ...currentIcons,
+      [group.key]: icon
+    }))
   }
 
   const handleSelectChat = (chat: ProviderChat): void => {
@@ -3023,9 +3099,11 @@ export const App: React.FC = () => {
         chatPageSize={chatPageSize}
         onLoadMoreChats={handleLoadMoreChatsInGroup}
         onShowLessChats={handleShowLessChatsInGroup}
+        projectIconSrc={projectIconsByGroup[group.key]?.dataUrl ?? null}
         onMarkChatDone={handleMarkChatDone}
         onMarkCwdChatsDone={(nextGroup) => void handleMarkCwdChatsDone(nextGroup)}
         onNewChatInCwd={handleNewChatInCwd}
+        onSelectProjectIcon={(nextGroup) => void handleSelectProjectIcon(nextGroup)}
         onResolveApproval={(chat, decision) => void handleResolveChatApproval(chat, decision)}
         onSelectChat={handleSelectChat}
         onToggle={handleToggleCwdGroup}

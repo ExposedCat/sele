@@ -2,6 +2,16 @@ export type FolderSelectionOptions = {
   defaultPath?: string | null
 }
 
+export type AppProjectIconOptions = {
+  cwd?: string | null
+}
+
+export type AppProjectIcon = {
+  cwd: string | null
+  dataUrl: string
+  updatedAt: number
+}
+
 export type AppColorScheme = 'dark' | 'light'
 
 export type AppWindowState = {
@@ -155,6 +165,8 @@ export type AppApi = {
   pullGitChanges: (options?: AppGitPullOptions) => Promise<AppGitPullResult>
   pushGitChanges: (options?: AppGitPushOptions) => Promise<AppGitPushResult>
   selectFolder: (options?: FolderSelectionOptions) => Promise<string | null>
+  getProjectIcon: (options: AppProjectIconOptions) => Promise<AppProjectIcon | null>
+  selectProjectIcon: (options: AppProjectIconOptions) => Promise<AppProjectIcon | null>
   onColorSchemeUpdated: (listener: (scheme: AppColorScheme) => void) => () => void
   onWindowStateUpdated: (listener: (state: AppWindowState) => void) => () => void
 }
@@ -176,5 +188,7 @@ export const appIpcChannels = {
   commitGitChanges: 'app:commit-git-changes',
   pullGitChanges: 'app:pull-git-changes',
   pushGitChanges: 'app:push-git-changes',
-  selectFolder: 'app:select-folder'
+  selectFolder: 'app:select-folder',
+  getProjectIcon: 'app:get-project-icon',
+  selectProjectIcon: 'app:select-project-icon'
 } as const

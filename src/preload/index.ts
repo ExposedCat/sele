@@ -24,6 +24,8 @@ const appApi: AppApi = {
   pullGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pullGitChanges, options),
   pushGitChanges: (options) => ipcRenderer.invoke(appIpcChannels.pushGitChanges, options),
   selectFolder: (options) => ipcRenderer.invoke(appIpcChannels.selectFolder, options),
+  getProjectIcon: (options) => ipcRenderer.invoke(appIpcChannels.getProjectIcon, options),
+  selectProjectIcon: (options) => ipcRenderer.invoke(appIpcChannels.selectProjectIcon, options),
   onColorSchemeUpdated: (listener): (() => void) => {
     const handleColorSchemeUpdated = (_: IpcRendererEvent, scheme: AppColorScheme): void => {
       listener(scheme)

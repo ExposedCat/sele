@@ -25,6 +25,11 @@ export type LocalDatabase = {
     project_cwd: string | null
     branch_name: string | null
   }
+  project_icons: {
+    cwd_key: string
+    image_path: string
+    updated_at: number
+  }
 }
 
 let database: Kysely<LocalDatabase> | null = null
@@ -64,6 +69,14 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
     .addColumn('kind', 'text', (column) => column.notNull())
     .addColumn('project_cwd', 'text')
     .addColumn('branch_name', 'text')
+    .execute()
+
+  await db.schema
+    .createTable('project_icons')
+    .ifNotExists()
+    .addColumn('cwd_key', 'text', (column) => column.primaryKey())
+    .addColumn('image_path', 'text', (column) => column.notNull())
+    .addColumn('updated_at', 'integer', (column) => column.notNull())
     .execute()
 
   await ensureColumn(db, 'cwd_metadata', 'project_cwd', () =>

@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
-import { BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
+import { extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron'
 import type {
   AppColorScheme,
   AppFileTreeFile,
@@ -19,9 +20,15 @@ import type {
   AppGitRecentCommitMessagesOptions,
   AppGitRecoverableFailure,
   AppGitUncommittedPatchChangesOptions,
+  AppProjectIcon,
+  AppProjectIconOptions,
   AppWindowState
 } from '../shared/app'
 import { appIpcChannels } from '../shared/app'
+import {
+  getProjectIcon as getStoredProjectIcon,
+  setProjectIcon as setStoredProjectIcon
+} from './database/projectIcons'
 
 export const getAppWindowState = (window: BrowserWindow): AppWindowState => ({
   isMaximized: window.isMaximized()
@@ -42,6 +49,79 @@ const getDefaultPath = (value: unknown): string | undefined => {
   if (value == null) return undefined
   if (typeof value !== 'string' || !isAbsolute(value)) throw new Error('Invalid folder path')
   return value
+}
+
+const imageMimeTypes = {
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp'
+} satisfies Record<string, string>
+const maxProjectIconBytes = 8 * 1024 * 1024
+
+const getOptionalCwd = (value: unknown): string | null => {
+  if (value == null) return null
+  if (typeof value !== 'string' || !isAbsolute(value)) throw new Error('Invalid cwd')
+  return value
+}
+
+const getProjectIconOptions = (value: unknown): AppProjectIconOptions => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid project icon options')
+  }
+
+  return {
+    cwd: getOptionalCwd((value as { cwd?: unknown }).cwd)
+  }
+}
+
+const getImageMimeType = (imagePath: string): string | null =>
+  imageMimeTypes[extname(imagePath).toLocaleLowerCase()] ?? null
+
+const getProjectIconDataUrl = async (imagePath: string): Promise<string | null> => {
+  const mimeType = getImageMimeType(imagePath)
+  if (!mimeType) return null
+
+  const file = await readFile(imagePath)
+  return `data:${mimeType};base64,${file.toString('base64')}`
+}
+
+const getAppProjectIcon = async (cwd: string | null): Promise<AppProjectIcon | null> => {
+  const icon = await getStoredProjectIcon(cwd)
+  if (!icon) return null
+
+  const dataUrl = await getProjectIconDataUrl(icon.imagePath).catch(() => null)
+  if (!dataUrl) return null
+
+  return {
+    cwd,
+    dataUrl,
+    updatedAt: icon.updatedAt
+  }
+}
+
+const copyProjectIcon = async (sourcePath: string): Promise<string> => {
+  const mimeType = getImageMimeType(sourcePath)
+  if (!mimeType) throw new Error('Choose a PNG, JPEG, GIF, WebP, or AVIF image.')
+
+  const sourceStat = await stat(sourcePath)
+  if (!sourceStat.isFile()) throw new Error('Choose an image file.')
+  if (sourceStat.size > maxProjectIconBytes) {
+    throw new Error('Choose an image smaller than 8 MB.')
+  }
+
+  const sourceFile = await readFile(sourcePath)
+  const hash = createHash('sha256').update(sourceFile).digest('hex')
+  const extension = extname(sourcePath).toLocaleLowerCase()
+  const iconDirectory = join(app.getPath('userData'), 'project-icons')
+  const copiedPath = join(iconDirectory, `${hash}${extension}`)
+
+  await mkdir(iconDirectory, { recursive: true })
+  await copyFile(sourcePath, copiedPath)
+
+  return copiedPath
 }
 
 const getColorScheme = (): AppColorScheme => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
@@ -1149,5 +1229,36 @@ export const registerAppIpc = (): void => {
 
     if (result.canceled) return null
     return result.filePaths[0] ?? null
+  })
+
+  ipcMain.handle(appIpcChannels.getProjectIcon, async (_event, value: unknown) => {
+    const options = getProjectIconOptions(value)
+    return getAppProjectIcon(options.cwd ?? null)
+  })
+
+  ipcMain.handle(appIpcChannels.selectProjectIcon, async (event, value: unknown) => {
+    const options = getProjectIconOptions(value)
+    const browserWindow = BrowserWindow.fromWebContents(event.sender)
+    const dialogOptions = {
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif']
+        }
+      ]
+    } satisfies Electron.OpenDialogOptions
+    const result = browserWindow
+      ? await dialog.showOpenDialog(browserWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+
+    if (result.canceled) return null
+
+    const sourcePath = result.filePaths[0]
+    if (!sourcePath) return null
+
+    const copiedPath = await copyProjectIcon(sourcePath)
+    await setStoredProjectIcon(options.cwd ?? null, copiedPath)
+    return getAppProjectIcon(options.cwd ?? null)
   })
 }

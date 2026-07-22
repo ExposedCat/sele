@@ -207,6 +207,15 @@
   height: var(--control-icon-size);
 }
 
+:where(.ui-dropdown__value-icon img),
+:where(.ui-dropdown__option-icon img) {
+  display: block;
+  width: var(--control-icon-size);
+  height: var(--control-icon-size);
+  border-radius: 5px;
+  object-fit: cover;
+}
+
 :where(.ui-dropdown__chevron) {
   width: var(--control-icon-size);
   height: var(--control-icon-size);
@@ -361,10 +370,29 @@
   grid-template-columns: var(--control-icon-size) minmax(0, 1fr) var(--control-icon-size);
 }
 
+:where(.ui-dropdown__option--has-icon.ui-dropdown__option--has-description) {
+  grid-template-columns: 32px minmax(0, 1fr) var(--control-icon-size);
+}
+
 :where(.ui-dropdown__option--has-description) {
   min-height: 64px;
-  align-items: start;
+  align-items: center;
   padding: 10px 11px;
+}
+
+:where(.ui-dropdown__option--has-description .ui-dropdown__option-icon) {
+  width: 32px;
+  height: 32px;
+}
+
+:where(.ui-dropdown__option--has-description .ui-dropdown__option-icon svg),
+:where(.ui-dropdown__option--has-description .ui-dropdown__option-icon img) {
+  width: 32px;
+  height: 32px;
+}
+
+:where(.ui-dropdown__option--has-description .ui-dropdown__option-icon img) {
+  border-radius: 7px;
 }
 
 :where(.ui-dropdown__option--active) {
