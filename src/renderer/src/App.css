@@ -124,7 +124,7 @@
 .chat__detail-panel {
   z-index: 2;
   flex-direction: column;
-  overflow: hidden !important;
+  overflow: visible !important;
 }
 
 .chat__changes-panel {
