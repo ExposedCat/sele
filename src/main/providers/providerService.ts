@@ -142,6 +142,10 @@ export const providerApi: ProviderApi = {
     adapters[providerId]
       .continueChat(chatId, message, options)
       .then((detail) => applyMetadataToDetail(detail)),
+  continueChatInFork: (providerId, chatId, message, options) =>
+    adapters[providerId]
+      .continueChatInFork(chatId, message, options)
+      .then((detail) => applyMetadataToDetail(detail)),
   sendActiveChatMessage: (providerId, chatId, message, mode, options) =>
     adapters[providerId]
       .sendActiveChatMessage(chatId, message, mode, options)

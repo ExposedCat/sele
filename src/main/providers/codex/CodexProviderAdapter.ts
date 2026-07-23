@@ -119,6 +119,10 @@ type ThreadResumeResponse = {
   thread: CodexThread
 }
 
+type ThreadForkResponse = {
+  thread: CodexThread
+}
+
 type TurnStartResponse = {
   turn: CodexTurn
 }
@@ -1304,6 +1308,65 @@ export class CodexProviderAdapter implements ProviderAdapter {
     if (!detail) throw new Error('Unable to continue chat')
 
     this.emitChatUpdated(chatId)
+    return detail
+  }
+
+  continueChatInFork = async (
+    chatId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ): Promise<ProviderChatDetail> => {
+    const text = message.trim()
+    if (!text) throw new Error('Cannot continue a chat with an empty message')
+
+    if (!this.threads.has(chatId)) await this.getChat(chatId)
+    const sourceThread = this.threads.get(chatId)
+    if (this.getActiveTurnId(chatId)) {
+      throw new Error('Cannot fork a chat with an active turn')
+    }
+
+    const fork = await this.client.request<ThreadForkResponse>('thread/fork', {
+      threadId: chatId,
+      ...getThreadAccessOptions(options),
+      ...getThreadModelOptions(options)
+    })
+    const [cwd, name, turns] = await Promise.all([
+      this.resolveThreadCwd(fork.thread, sourceThread?.cwd ?? null),
+      this.resolveThreadName(fork.thread),
+      this.getTurnsForThread(fork.thread)
+    ])
+    const forkedThread = {
+      ...fork.thread,
+      name,
+      cwd,
+      status: { type: 'active', activeFlags: [] },
+      turns: this.filterRolledBackTurns(fork.thread.id, turns)
+    } satisfies CodexThread
+    this.cacheThread(forkedThread)
+
+    const pendingTurn = this.addPendingTurn(forkedThread.id, text, options)
+    if (pendingTurn) this.emitChatUpdated(forkedThread.id)
+
+    try {
+      const started = await this.client.request<TurnStartResponse>('turn/start', {
+        threadId: forkedThread.id,
+        input: createUserTextInput(text),
+        ...getTurnModelOptions(options),
+        ...getTurnAccessOptions(options)
+      })
+
+      this.activeTurnIds.set(forkedThread.id, started.turn.id)
+      this.replacePendingTurn(forkedThread.id, pendingTurn?.id ?? null, started.turn)
+      this.pendingTurnIds.delete(forkedThread.id)
+    } catch (error) {
+      if (pendingTurn) this.removePendingTurn(forkedThread.id, pendingTurn.id)
+      throw error
+    }
+
+    const detail = this.getCachedChatDetail(forkedThread.id)
+    if (!detail) throw new Error('Unable to continue forked chat')
+
+    this.emitChatUpdated(forkedThread.id)
     return detail
   }
 

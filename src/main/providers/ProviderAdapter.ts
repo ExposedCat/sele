@@ -35,6 +35,11 @@ export type ProviderAdapter = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  continueChatInFork: (
+    chatId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
   sendActiveChatMessage: (
     chatId: string,
     message: string,

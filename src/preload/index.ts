@@ -71,6 +71,14 @@ const providerApi: ProviderApi = {
     ipcRenderer.invoke(providerIpcChannels.startChat, providerId, message, options),
   continueChat: (providerId, chatId, message, options) =>
     ipcRenderer.invoke(providerIpcChannels.continueChat, providerId, chatId, message, options),
+  continueChatInFork: (providerId, chatId, message, options) =>
+    ipcRenderer.invoke(
+      providerIpcChannels.continueChatInFork,
+      providerId,
+      chatId,
+      message,
+      options
+    ),
   sendActiveChatMessage: (providerId, chatId, message, mode, options) =>
     ipcRenderer.invoke(
       providerIpcChannels.sendActiveChatMessage,

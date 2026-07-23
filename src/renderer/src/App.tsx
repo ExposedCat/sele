@@ -166,6 +166,15 @@ type GitSyncRecoveryState = {
   failure: AppGitRecoverableFailure
   error: string | null
 }
+type ScopedCommitActivity = {
+  providerId: ProviderId
+  chatId: string
+  sourceChatId: string
+  projectCwd: string | null
+  chatTitle: string
+  action: GitCommitPromptAction
+  startedAt: number
+}
 type GitSyncRecoveryActionOptions = {
   rememberStrategy?: boolean
 }
@@ -873,6 +882,9 @@ const modelSupportsReasoningEffort = (
 
 const getChatKey = (chat: Pick<ProviderChat, 'providerId' | 'id'>): string =>
   `${chat.providerId}:${chat.id}`
+
+const getProviderChatKey = (providerId: ProviderId, chatId: string): string =>
+  getChatKey({ providerId, id: chatId })
 
 const isActiveChatStatus = (status: ProviderChatDetail['status'] | undefined): boolean =>
   status === 'active' || status === 'waitingOnApproval' || status === 'waitingOnUserInput'
@@ -1584,6 +1596,9 @@ export const App: React.FC = () => {
   const [commitInput, setCommitInput] = useState('')
   const [commitState, setCommitState] = useState<SendState>('idle')
   const [commitError, setCommitError] = useState<string | null>(null)
+  const [scopedCommitActivities, setScopedCommitActivities] = useState<
+    Record<string, ScopedCommitActivity>
+  >({})
   const [syncState, setSyncState] = useState<SendState>('idle')
   const [syncError, setSyncError] = useState<string | null>(null)
   const [syncRecovery, setSyncRecovery] = useState<GitSyncRecoveryState | null>(null)
@@ -1603,6 +1618,7 @@ export const App: React.FC = () => {
   const chatAutoScrollEnabledRef = useRef(true)
   const chatAutoScrollFrameRef = useRef<number | null>(null)
   const selectedChatKeyRef = useRef<string | null>(null)
+  const scopedCommitActivitiesRef = useRef<Record<string, ScopedCommitActivity>>({})
   const chatHadActiveTurnByKeyRef = useRef(new Map<string, boolean>())
   const loadingCwdNotesRef = useRef(new Set<string>())
   const loadingProjectIconsRef = useRef(new Set<string>())
@@ -1623,6 +1639,10 @@ export const App: React.FC = () => {
   useEffect(() => {
     selectedChatKeyRef.current = selectedChat ? getChatKey(selectedChat) : null
   }, [selectedChat])
+
+  useEffect(() => {
+    scopedCommitActivitiesRef.current = scopedCommitActivities
+  }, [scopedCommitActivities])
 
   useEffect(() => {
     if (!panePercents) return
@@ -2188,6 +2208,19 @@ export const App: React.FC = () => {
         applyChatDetail(event.providerId, event.detail)
         if (selectedChatKeyRef.current === updatedChatKey) {
           markChatSeenAt(event.providerId, event.chatId, seenUpdatedAt)
+        }
+        if (
+          scopedCommitActivitiesRef.current[updatedChatKey] &&
+          !isActiveChatStatus(event.detail.status)
+        ) {
+          setScopedCommitActivities((currentActivities) => {
+            if (!currentActivities[updatedChatKey]) return currentActivities
+
+            const nextActivities = { ...currentActivities }
+            delete nextActivities[updatedChatKey]
+            return nextActivities
+          })
+          setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
         }
       }),
     [applyChatDetail, markChatSeenAt]
@@ -3599,6 +3632,14 @@ export const App: React.FC = () => {
   const commitFiles = useMemo(() => getCommitFiles(changedFiles), [changedFiles])
   const syncInProgress = syncState === 'sending'
   const visibleSyncRecovery = syncRecovery && syncRecovery.cwd === changesCwd ? syncRecovery : null
+  const currentProjectCommitActivities = useMemo(() => {
+    const currentProjectKey = getChatCwdGroupKey(changesProjectCwd ?? changesCwd)
+
+    return Object.values(scopedCommitActivities)
+      .filter((activity) => getChatCwdGroupKey(activity.projectCwd) === currentProjectKey)
+      .sort((firstActivity, secondActivity) => firstActivity.startedAt - secondActivity.startedAt)
+  }, [changesCwd, changesProjectCwd, scopedCommitActivities])
+  const projectCommitInProgress = currentProjectCommitActivities.length > 0
   const aiCommitUnavailable =
     !selectedChat ||
     !chatDetail ||
@@ -3611,6 +3652,7 @@ export const App: React.FC = () => {
     commitFiles.length === 0 ||
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
+    projectCommitInProgress ||
     syncInProgress
   const getCommitActionDisabled = (
     action: GitCommitPromptAction,
@@ -3623,13 +3665,18 @@ export const App: React.FC = () => {
     uncommittedChangedFiles.length === 0 ||
     changesLoadState !== 'ready' ||
     commitState === 'sending' ||
+    projectCommitInProgress ||
     syncInProgress ||
     aiCommitUnavailable
   const getAiCommitActionDisabled = (): boolean => aiCommitBaseDisabled
   const aiCommitDisabled = getAiCommitActionDisabled()
   const commitInputLabel = 'Commit message or AI instructions'
   const syncDisabled =
-    providerUpdateInProgress || !changesCwd || syncInProgress || commitState === 'sending'
+    providerUpdateInProgress ||
+    !changesCwd ||
+    syncInProgress ||
+    commitState === 'sending' ||
+    projectCommitInProgress
   const syncDropdownActions: ButtonDropdownAction[] = [
     ...(hasUnpulledChanges
       ? [
@@ -3837,6 +3884,8 @@ export const App: React.FC = () => {
     )
     const providerId = selectedChat.providerId
     const chatId = selectedChat.id
+    const turnOptions = getGitTurnOptions()
+    const useForkedChat = turnOptions.model !== model
 
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
@@ -3844,7 +3893,7 @@ export const App: React.FC = () => {
     setCommitError(null)
     setSendState('sending')
 
-    if (chatDetail.id === chatId) {
+    if (!useForkedChat && chatDetail.id === chatId) {
       applyViewedChatDetail(providerId, {
         ...chatDetail,
         status: 'active',
@@ -3854,17 +3903,40 @@ export const App: React.FC = () => {
     }
 
     try {
-      const detail = await providerApi.continueChat(providerId, chatId, prompt, getGitTurnOptions())
-      applyViewedChatDetail(providerId, detail)
+      const detail = useForkedChat
+        ? await providerApi.continueChatInFork(providerId, chatId, prompt, turnOptions)
+        : await providerApi.continueChat(providerId, chatId, prompt, turnOptions)
+      if (useForkedChat) applyChatDetail(providerId, detail)
+      else applyViewedChatDetail(providerId, detail)
+
       setCommitInput('')
+      if (isActiveChatStatus(detail.status)) {
+        const activityKey = getProviderChatKey(providerId, detail.id)
+        const activity = {
+          providerId,
+          chatId: detail.id,
+          sourceChatId: chatId,
+          projectCwd: changesProjectCwd ?? changesCwd,
+          chatTitle: detail.title || selectedChat.title,
+          action,
+          startedAt: Date.now()
+        } satisfies ScopedCommitActivity
+
+        setScopedCommitActivities((currentActivities) => ({
+          ...currentActivities,
+          [activityKey]: activity
+        }))
+      }
       setCommitState('idle')
       setSendState('idle')
       return true
     } catch (error) {
-      void providerApi
-        .getChat(providerId, chatId)
-        .then((detail) => applyViewedChatDetail(providerId, detail))
-        .catch(() => {})
+      if (!useForkedChat) {
+        void providerApi
+          .getChat(providerId, chatId)
+          .then((detail) => applyViewedChatDetail(providerId, detail))
+          .catch(() => {})
+      }
       setCommitState('error')
       setCommitError(getErrorMessage(error, 'Unable to start scoped commit in chat.'))
       setSendState('error')
@@ -4117,6 +4189,9 @@ export const App: React.FC = () => {
     }
 
     if (settingsTab === 'git') {
+      const commitModelDiffersFromCurrent =
+        gitCommitModelValue !== gitCurrentChatModelValue && getGitTurnOptions().model !== model
+
       return (
         <section
           className="settings-dialog__panel"
@@ -4127,6 +4202,11 @@ export const App: React.FC = () => {
           <div className="settings-dialog__field settings-dialog__field--inline">
             <div className="settings-dialog__field-header">
               <h3>Commit model</h3>
+              {commitModelDiffersFromCurrent && (
+                <p className="settings-dialog__warning" role="status">
+                  Chat context will be compacted to switch the model
+                </p>
+              )}
             </div>
             <Dropdown
               id="settings-git-commit-model"
@@ -4715,6 +4795,36 @@ export const App: React.FC = () => {
             </div>
             {changesPaneView === 'git' && (
               <footer className="changes-sidebar__footer">
+                {currentProjectCommitActivities.length > 0 && (
+                  <div
+                    className="changes-sidebar__commit-activity-list"
+                    role="status"
+                    aria-label="Commit activity"
+                  >
+                    {currentProjectCommitActivities.map((activity) => (
+                      <div
+                        className="changes-sidebar__commit-activity"
+                        key={getProviderChatKey(activity.providerId, activity.chatId)}
+                      >
+                        <span className="changes-sidebar__commit-activity-badge">
+                          <ChangesAnimatedIcon Icon={AnimatedGitCommitHorizontalIcon} active />
+                          <span>Committing</span>
+                        </span>
+                        <span
+                          className="changes-sidebar__commit-activity-detail"
+                          title={`${commitActionLabels[activity.action]} in ${activity.chatTitle}`}
+                        >
+                          <span className="changes-sidebar__commit-activity-action">
+                            AI {commitActionLabels[activity.action]}
+                          </span>
+                          <span className="changes-sidebar__commit-activity-chat">
+                            {activity.chatTitle}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="changes-sidebar__input-row">
                   <label className="changes-sidebar__commit-message">
                     <span className="sr-only">{commitInputLabel}</span>
@@ -4722,7 +4832,11 @@ export const App: React.FC = () => {
                       type="text"
                       value={commitInput}
                       placeholder={commitInputLabel}
-                      disabled={providerUpdateInProgress || commitState === 'sending'}
+                      disabled={
+                        providerUpdateInProgress ||
+                        commitState === 'sending' ||
+                        projectCommitInProgress
+                      }
                       onChange={(event) => {
                         setCommitState('idle')
                         setCommitError(null)

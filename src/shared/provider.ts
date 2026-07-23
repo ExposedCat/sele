@@ -480,6 +480,12 @@ export type ProviderApi = {
     message: string,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
+  continueChatInFork: (
+    providerId: ProviderId,
+    chatId: string,
+    message: string,
+    options?: ProviderTurnOptions
+  ) => Promise<ProviderChatDetail>
   sendActiveChatMessage: (
     providerId: ProviderId,
     chatId: string,
@@ -556,6 +562,7 @@ export const providerIpcChannels = {
   cancelOneShot: 'provider:cancel-one-shot',
   startChat: 'provider:start-chat',
   continueChat: 'provider:continue-chat',
+  continueChatInFork: 'provider:continue-chat-in-fork',
   sendActiveChatMessage: 'provider:send-active-chat-message',
   deletePendingMessage: 'provider:delete-pending-message',
   editPendingMessage: 'provider:edit-pending-message',
