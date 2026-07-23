@@ -110,6 +110,7 @@ import { SegmentedControl } from './components/SegmentedControl'
 import { appApi } from './appApi'
 import { providerApi } from './providerApi'
 import {
+  type AppGitCommitPromptSettings,
   type AppSettings,
   type AppThemePreference,
   readStoredAppSettings,
@@ -804,6 +805,38 @@ const themeOptions = [
   icon: React.ReactNode
 }[]
 
+const gitCommitPromptFieldOptions = [
+  {
+    key: 'instructions',
+    label: 'Instructions',
+    rows: 6
+  },
+  {
+    key: 'workflow',
+    label: 'Workflow',
+    rows: 9
+  },
+  {
+    key: 'commitStep',
+    label: 'Commit step',
+    rows: 2
+  },
+  {
+    key: 'amendStep',
+    label: 'Amend step',
+    rows: 2
+  },
+  {
+    key: 'extraInstructionsPrefix',
+    label: 'Extra instructions prefix',
+    rows: 1
+  }
+] satisfies readonly {
+  key: keyof AppGitCommitPromptSettings
+  label: string
+  rows: number
+}[]
+
 const approvalTypeLabels = {
   command: 'Command approval',
   fileChange: 'File change approval'
@@ -1360,41 +1393,47 @@ const filterChangedFilesByPatches = (
   })
 }
 
-const formatExtraUserInstructionsForPrompt = (instructions: string): string | null => {
+const formatExtraUserInstructionsForPrompt = (
+  instructions: string,
+  promptSettings: AppGitCommitPromptSettings
+): string | null => {
   const trimmedInstructions = instructions.trim()
-  return trimmedInstructions
-    ? `Extra user instructions: ${JSON.stringify(trimmedInstructions)}`
-    : null
+  if (!trimmedInstructions) return null
+
+  const prefix = promptSettings.extraInstructionsPrefix.trim()
+  return prefix
+    ? `${prefix} ${JSON.stringify(trimmedInstructions)}`
+    : JSON.stringify(trimmedInstructions)
 }
 
-const getScopedChatCommitWorkflowStep = (action: GitCommitPromptAction): string =>
-  action === 'amend'
-    ? '9. `git commit --amend` (amend last commit instead of creating a new one)'
-    : '9. `git commit -m "..."`'
+const getScopedChatCommitWorkflowStep = (
+  action: GitCommitPromptAction,
+  promptSettings: AppGitCommitPromptSettings
+): string => (action === 'amend' ? promptSettings.amendStep : promptSettings.commitStep)
 
-const getScopedChatCommitPromptBody = (action: GitCommitPromptAction): string =>
-  [
-    'You need to create a scoped Git commit for all work done in this chat before this commit request. There are highly likely some changes of parallel work in same files which were touched in this session, so you need to check actual diffs and create a scoped hunk patch to commit instead of committing entire file, to ensure that only work done in this chat gets committed. Do not include any unrelated changes and include all changes from this session. Do not ask for review or confirmation. If you cannot scope the changes, do not commit and explain why.',
-    '',
-    'Workflow:',
-    '1. `git status --short`',
-    '2. `git diff --name-only`',
-    '3. For only candidate files: `git diff -U0 -- file`',
-    '4. Write a small patch containing only the wanted hunks.',
-    '5. `git apply --cached --unidiff-zero < patch`',
-    '6. `git diff --cached --name-status`',
-    '7. `git diff --cached | rg ...` only for known unrelated markers if files are mixed',
-    '8. `git diff --cached --check`',
-    getScopedChatCommitWorkflowStep(action)
-  ].join('\n')
+const getScopedChatCommitPromptBody = (
+  action: GitCommitPromptAction,
+  promptSettings: AppGitCommitPromptSettings
+): string => {
+  const instructions = promptSettings.instructions.trim()
+  const workflow = [
+    promptSettings.workflow.trim(),
+    getScopedChatCommitWorkflowStep(action, promptSettings).trim()
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  return [instructions, workflow].filter(Boolean).join('\n\n')
+}
 
 const getScopedChatCommitPrompt = (
   action: GitCommitPromptAction,
-  extraInstructions: string
+  extraInstructions: string,
+  promptSettings: AppGitCommitPromptSettings
 ): string => {
   return [
-    getScopedChatCommitPromptBody(action),
-    formatExtraUserInstructionsForPrompt(extraInstructions)
+    getScopedChatCommitPromptBody(action, promptSettings),
+    formatExtraUserInstructionsForPrompt(extraInstructions, promptSettings)
   ]
     .filter((line): line is string => line != null)
     .join('\n')
@@ -2640,7 +2679,14 @@ export const App: React.FC = () => {
     return options
   }, [chats, newSessionCwd, projectHistory, projectIconsByGroup])
   const newSessionProjectValue = newSessionCwd ?? newSessionProjectPlaceholderValue
-  const gitCommitModelValue = appSettings.git.commitModel ?? gitCurrentChatModelValue
+  const savedGitCommitModel = appSettings.git.commitModel
+  const savedGitCommitModelOption = savedGitCommitModel
+    ? models.find((candidateModel) => candidateModel.id === savedGitCommitModel)
+    : undefined
+  const fallbackGitCommitModel = getDefaultModel(models)
+  const gitCommitModelValue = savedGitCommitModel
+    ? (savedGitCommitModelOption ?? fallbackGitCommitModel).id
+    : gitCurrentChatModelValue
   const gitCommitModelOptions = useMemo<DropdownOption<string>[]>(() => {
     const modelOptions = models.map((candidateModel): DropdownOption<string> => ({
       value: candidateModel.id,
@@ -2659,19 +2705,9 @@ export const App: React.FC = () => {
         description: 'Use the model selected in the chat at the moment you commit.',
         icon: <MessageSquare aria-hidden="true" />
       },
-      ...(appSettings.git.commitModel &&
-      !modelOptions.some((option) => option.value === appSettings.git.commitModel)
-        ? [
-            {
-              value: appSettings.git.commitModel,
-              label: formatModelLabel(appSettings.git.commitModel),
-              icon: <Bot aria-hidden="true" />
-            }
-          ]
-        : []),
       ...modelOptions
     ]
-  }, [appSettings.git.commitModel, models])
+  }, [models])
 
   const handleToggleCwdGroup = (groupKey: string): void => {
     setCollapsedCwdGroups((currentGroups) => ({
@@ -2818,6 +2854,22 @@ export const App: React.FC = () => {
       git: {
         ...currentSettings.git,
         commitModel: nextModel === gitCurrentChatModelValue ? null : nextModel
+      }
+    }))
+  }
+
+  const handleGitCommitPromptChange = (
+    key: keyof AppGitCommitPromptSettings,
+    value: string
+  ): void => {
+    updateAppSettings((currentSettings) => ({
+      ...currentSettings,
+      git: {
+        ...currentSettings.git,
+        commitPrompt: {
+          ...currentSettings.git.commitPrompt,
+          [key]: value
+        }
       }
     }))
   }
@@ -3060,16 +3112,17 @@ export const App: React.FC = () => {
     if (!commitModel) return turnOptions
 
     const selectedCommitModel = models.find((candidateModel) => candidateModel.id === commitModel)
+    const resolvedCommitModel = selectedCommitModel ?? getDefaultModel(models)
 
     return {
       ...turnOptions,
-      model: commitModel,
+      model: resolvedCommitModel.id,
       reasoningEffort: modelSupportsReasoningEffort(
-        selectedCommitModel,
+        resolvedCommitModel,
         turnOptions.reasoningEffort
       )
         ? turnOptions.reasoningEffort
-        : getDefaultReasoningEffort(selectedCommitModel)
+        : getDefaultReasoningEffort(resolvedCommitModel)
     }
   }
 
@@ -3770,7 +3823,11 @@ export const App: React.FC = () => {
     if (!selectedChat || !chatDetail) return false
     if (sendInFlightRef.current) return false
 
-    const prompt = getScopedChatCommitPrompt(action, extraInstructions)
+    const prompt = getScopedChatCommitPrompt(
+      action,
+      extraInstructions,
+      appSettings.git.commitPrompt
+    )
     const providerId = selectedChat.providerId
     const chatId = selectedChat.id
 
@@ -4073,6 +4130,27 @@ export const App: React.FC = () => {
               onChange={handleGitCommitModelChange}
             />
           </div>
+          {gitCommitPromptFieldOptions.map((field) => {
+            const fieldId = `settings-git-commit-prompt-${field.key}`
+
+            return (
+              <div className="settings-dialog__field settings-dialog__field--stack" key={field.key}>
+                <label className="settings-dialog__field-header" htmlFor={fieldId}>
+                  <h3>{field.label}</h3>
+                </label>
+                <textarea
+                  id={fieldId}
+                  className="settings-dialog__prompt-textarea"
+                  rows={field.rows}
+                  spellCheck={false}
+                  value={appSettings.git.commitPrompt[field.key]}
+                  onChange={(event) =>
+                    handleGitCommitPromptChange(field.key, event.currentTarget.value)
+                  }
+                />
+              </div>
+            )
+          })}
         </section>
       )
     }
@@ -4113,6 +4191,7 @@ export const App: React.FC = () => {
       >
         <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="Settings">
           <header className="settings-dialog__header">
+            <span className="settings-dialog__header-spacer" aria-hidden="true" />
             <SegmentedControl
               aria-label="Settings sections"
               className="settings-dialog__tabs"
@@ -4212,28 +4291,32 @@ export const App: React.FC = () => {
                 </>
               ) : (
                 <div className="chat-home__actions">
-                  <Button
-                    theme="secondary"
-                    aria-label="Settings"
-                    title="Settings"
-                    callback={() => setSettingsOpen(true)}
-                    icon={<Settings aria-hidden="true" />}
-                  />
-                  <Button
-                    theme="secondary"
-                    aria-label="New chat"
-                    title="New chat"
-                    callback={handleNewChat}
-                    icon={<SquarePen aria-hidden="true" />}
-                  />
-                  <Button
-                    theme="secondary"
-                    aria-label="Search conversations"
-                    aria-expanded={false}
-                    title="Search conversations"
-                    callback={() => setSearchOpen(true)}
-                    icon={<Search aria-hidden="true" />}
-                  />
+                  <div className="chat-home__actions-left">
+                    <Button
+                      theme="secondary"
+                      aria-label="Settings"
+                      title="Settings"
+                      callback={() => setSettingsOpen(true)}
+                      icon={<Settings aria-hidden="true" />}
+                    />
+                  </div>
+                  <div className="chat-home__actions-right">
+                    <Button
+                      theme="secondary"
+                      aria-label="New chat"
+                      title="New chat"
+                      callback={handleNewChat}
+                      icon={<SquarePen aria-hidden="true" />}
+                    />
+                    <Button
+                      theme="secondary"
+                      aria-label="Search conversations"
+                      aria-expanded={false}
+                      title="Search conversations"
+                      callback={() => setSearchOpen(true)}
+                      icon={<Search aria-hidden="true" />}
+                    />
+                  </div>
                 </div>
               )}
             </header>
