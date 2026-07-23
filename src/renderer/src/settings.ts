@@ -27,38 +27,78 @@ export type AppSettings = {
 export const appSettingsStorageKey = 'sele:app-settings:v1'
 
 export const defaultAppGitCommitPromptSettings: AppGitCommitPromptSettings = {
-  instructions:
-    'You need to create a scoped Git commit for all work done in this chat before this commit request. There are highly likely some changes of parallel work in same files which were touched in this session, so you need to check actual diffs and create a scoped hunk patch to commit instead of committing entire file, to ensure that only work done in this chat gets committed. Do not include any unrelated changes and include all changes from this session. Do not ask for review or confirmation. If you cannot scope the changes, do not commit and explain why.',
+  instructions: [
+    'Create one scoped Git commit containing all and only the work completed in this chat before this request.',
+    '',
+    'Parallel work may exist in the same files, so inspect the actual diffs before staging. Do not assume every changed file requires partial staging.',
+    '',
+    'Rules:',
+    '- If all changes in a file belong to this chat, stage the whole file with `git add -- <file>`.',
+    '- If a file contains both this chat’s changes and unrelated changes, stage only the relevant hunks using a minimal patch.',
+    '- Include every change from this chat and exclude all unrelated changes.',
+    '- Do not ask for review or confirmation.',
+    '- If the changes cannot be scoped safely, do not commit and explain why.',
+    '- Keep the process focused; do not investigate unrelated repository history or files.'
+  ].join('\n'),
   workflow: [
     'Workflow:',
+    '',
     '1. `git status --short`',
     '2. `git diff --name-only`',
-    '3.1. For files changes in which are to be fully committed, add them with `git add`',
-    '3.2.1. For only partial candidate files: `git diff -U0 -- file`',
-    '3.2.2. Write a small patch containing only the wanted hunks.',
-    '3.2.3. `git apply --cached --unidiff-zero < patch`',
-    '6. `git diff --cached --name-status`',
-    '7. `git diff --cached | rg ...` only for known unrelated markers if files are mixed',
+    '3. Inspect each relevant file with:',
+    '   `git diff -- <file>`',
+    '4. Stage changes:',
+    '   - Whole file belongs to this chat:',
+    '     `git add -- <file>`',
+    '   - File is mixed:',
+    '     1. `git diff -U0 -- <file>`',
+    '     2. Create a minimal patch by copying only the wanted hunks from that diff.',
+    '     3. `git apply --cached --unidiff-zero < patch`',
+    '5. `git diff --cached --name-status`',
+    '6. Review the staged diff:',
+    '   `git diff --cached`',
+    '7. Search for a known unrelated marker only when there is a specific reason:',
+    "   `git diff --cached | rg '<marker>'`",
     '8. `git diff --cached --check`'
   ].join('\n'),
-  commitStep: '9. `git commit -m "..."`',
+  commitStep: '9. `git commit -m "<appropriate message>"`',
   amendStep: '9. `git commit --amend` (amend last commit instead of creating a new one)',
   extraInstructionsPrefix: 'Extra user instructions:'
 }
 
-const legacyDefaultGitCommitWorkflowSettings = new Set([
-  [
-    'Workflow:',
-    '1. `git status --short`',
-    '2. `git diff --name-only`',
-    '3. For only candidate files: `git diff -U0 -- file`',
-    '4. Write a small patch containing only the wanted hunks.',
-    '5. `git apply --cached --unidiff-zero < patch`',
-    '6. `git diff --cached --name-status`',
-    '7. `git diff --cached | rg ...` only for known unrelated markers if files are mixed',
-    '8. `git diff --cached --check`'
-  ].join('\n')
-])
+const legacyDefaultGitCommitPromptSettings: Partial<
+  Record<keyof AppGitCommitPromptSettings, Set<string>>
+> = {
+  instructions: new Set([
+    'You need to create a scoped Git commit for all work done in this chat before this commit request. There are highly likely some changes of parallel work in same files which were touched in this session, so you need to check actual diffs and create a scoped hunk patch to commit instead of committing entire file, to ensure that only work done in this chat gets committed. Do not include any unrelated changes and include all changes from this session. Do not ask for review or confirmation. If you cannot scope the changes, do not commit and explain why.'
+  ]),
+  workflow: new Set([
+    [
+      'Workflow:',
+      '1. `git status --short`',
+      '2. `git diff --name-only`',
+      '3. For only candidate files: `git diff -U0 -- file`',
+      '4. Write a small patch containing only the wanted hunks.',
+      '5. `git apply --cached --unidiff-zero < patch`',
+      '6. `git diff --cached --name-status`',
+      '7. `git diff --cached | rg ...` only for known unrelated markers if files are mixed',
+      '8. `git diff --cached --check`'
+    ].join('\n'),
+    [
+      'Workflow:',
+      '1. `git status --short`',
+      '2. `git diff --name-only`',
+      '3.1. For files changes in which are to be fully committed, add them with `git add`',
+      '3.2.1. For only partial candidate files: `git diff -U0 -- file`',
+      '3.2.2. Write a small patch containing only the wanted hunks.',
+      '3.2.3. `git apply --cached --unidiff-zero < patch`',
+      '6. `git diff --cached --name-status`',
+      '7. `git diff --cached | rg ...` only for known unrelated markers if files are mixed',
+      '8. `git diff --cached --check`'
+    ].join('\n')
+  ]),
+  commitStep: new Set(['9. `git commit -m "..."`'])
+}
 
 export const defaultAppSettings: AppSettings = {
   appearance: {
@@ -87,8 +127,8 @@ const readPromptField = (
   const storedValue = storedPrompt[key]
   if (typeof storedValue !== 'string') return defaultAppGitCommitPromptSettings[key]
 
-  if (key === 'workflow' && legacyDefaultGitCommitWorkflowSettings.has(storedValue)) {
-    return defaultAppGitCommitPromptSettings.workflow
+  if (legacyDefaultGitCommitPromptSettings[key]?.has(storedValue)) {
+    return defaultAppGitCommitPromptSettings[key]
   }
 
   return storedValue
