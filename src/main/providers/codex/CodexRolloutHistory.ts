@@ -20,6 +20,7 @@ type RolloutPayload = {
   call_id?: string
   id?: string
   name?: string
+  model?: string
   input?: string
   arguments?: unknown
   output?: unknown
@@ -31,6 +32,7 @@ type RolloutPayload = {
 }
 
 type RolloutRecord = {
+  type?: string
   payload?: RolloutPayload
   timestamp?: unknown
   time?: unknown
@@ -72,6 +74,9 @@ const getRecordValue = (value: unknown): Record<string, unknown> | null =>
     ? (value as Record<string, unknown>)
     : null
 
+const getStringValue = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value.trim() : null
+
 const getRequiredUsageNumber = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 
@@ -83,7 +88,21 @@ const parseRollout = (contents: string): RolloutEntry[] => {
 
     try {
       const record = JSON.parse(line) as RolloutRecord
-      if (record.payload?.type) entries.push({ record, payload: record.payload, index })
+      if (record.payload?.type) {
+        entries.push({ record, payload: record.payload, index })
+        return
+      }
+
+      if (record.type === 'turn_context' && record.payload) {
+        entries.push({
+          record,
+          payload: {
+            ...record.payload,
+            type: record.type
+          },
+          index
+        })
+      }
     } catch {
       // A malformed rollout row should not prevent the rest of the history from loading.
     }
@@ -145,6 +164,26 @@ const getFirstEntryTimestampSeconds = (entries: RolloutEntry[]): number | null =
   for (const entry of entries) {
     const timestamp = getEntryTimestampSeconds(entry)
     if (timestamp != null) return timestamp
+  }
+
+  return null
+}
+
+const getEntryModel = (entry: RolloutEntry): string | null => {
+  const payload = entry.payload
+  const directModel = getStringValue(payload.model)
+  if (directModel) return directModel
+
+  const collaborationMode = getRecordValue(payload.collaboration_mode)
+  const collaborationModeSettings = getRecordValue(collaborationMode?.settings)
+
+  return getStringValue(collaborationModeSettings?.model)
+}
+
+const getTurnModel = (entries: RolloutEntry[]): string | null => {
+  for (const entry of entries) {
+    const model = getEntryModel(entry)
+    if (model) return model
   }
 
   return null
@@ -487,6 +526,7 @@ const createTurn = (turnId: string, entries: RolloutEntry[]): CodexTurn => {
 
   return {
     id: turnId,
+    model: getTurnModel(entries),
     startedAt: getFirstEntryTimestampSeconds(entries),
     completedAt: getLastEntryTimestampSeconds(entries),
     items
