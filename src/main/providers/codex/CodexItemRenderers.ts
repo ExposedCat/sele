@@ -45,6 +45,7 @@ export type CodexThreadItem = {
 export type CodexTurn = {
   id: string
   status?: string | null
+  model?: string | null
   startedAt?: number | null
   completedAt?: number | null
   items: CodexThreadItem[]
@@ -1233,7 +1234,8 @@ const createAssistantMessage = (
   id: `${turn.id}:${item.id}`,
   role: 'assistant',
   content: item.text?.trim() ?? '',
-  createdAt: toMilliseconds(completedAt)
+  createdAt: toMilliseconds(completedAt),
+  model: turn.model ?? null
 })
 
 export const getChatItems = (
@@ -1310,7 +1312,8 @@ export const getChatItems = (
                 role: 'user',
                 content,
                 label: 'Steering with',
-                createdAt: toMilliseconds(startedAt)
+                createdAt: toMilliseconds(startedAt),
+                model: turn.model ?? null
               })
             }
           } else {
@@ -1319,7 +1322,8 @@ export const getChatItems = (
               id: itemId,
               role: 'user',
               content,
-              createdAt: toMilliseconds(startedAt)
+              createdAt: toMilliseconds(startedAt),
+              model: turn.model ?? null
             })
             hasSeenInitialUserMessage = true
           }

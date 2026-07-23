@@ -331,6 +331,7 @@ export type ProviderMessage = {
   content: string
   createdAt?: number | null
   label?: string | null
+  model?: ProviderModelId | null
 }
 
 export type ProviderWorkingMessage = {

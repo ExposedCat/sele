@@ -38,6 +38,7 @@ import Markdown from 'markdown-to-jsx'
 import type {
   ProviderChatItem,
   ProviderMessage,
+  ProviderModelId,
   ProviderPendingMessage,
   ProviderToolActivity,
   ProviderWorkingItem,
@@ -50,10 +51,12 @@ import './ChatDetailItem.css'
 type ChatDetailItemProps = {
   canEditOwnMessages?: boolean
   item: ProviderChatItem
+  modelLabelsById?: ReadonlyMap<ProviderModelId, string>
   onDeletePendingMessage?: (message: ProviderPendingMessage) => void
   onEditPendingMessage?: (message: ProviderPendingMessage) => void
   onInterruptPendingMessage?: (message: ProviderPendingMessage) => void
   onEditMessage?: (message: ProviderMessage) => void
+  selectedModelId?: ProviderModelId
 }
 
 type ProviderToolItem = Exclude<ProviderWorkingItem, { type: 'message' }>
@@ -476,26 +479,47 @@ const formatMessageTimestamp = (
   }
 }
 
+const formatModelLabel = (label: string): string => label.replace(/-/g, ' ')
+
+const getMessageModelLabel = (
+  message: ProviderMessage,
+  selectedModelId: ProviderModelId | undefined,
+  modelLabelsById: ReadonlyMap<ProviderModelId, string> | undefined
+): string | null => {
+  const messageModel = message.model?.trim()
+  const selectedModel = selectedModelId?.trim()
+  if (!messageModel || !selectedModel || messageModel === selectedModel) return null
+
+  return modelLabelsById?.get(messageModel) ?? formatModelLabel(messageModel)
+}
+
 const MessageDate: React.FC<{
   timestamp: ReturnType<typeof formatMessageTimestamp>
   markerSide: 'left' | 'right'
-}> = ({ timestamp, markerSide }) => {
+  modelLabel?: string | null
+}> = ({ timestamp, markerSide, modelLabel }) => {
   if (!timestamp) {
     return <span className="chat-detail__message-date chat-detail__message-date--empty" />
   }
 
+  const title = modelLabel ? `${timestamp.label} · ${modelLabel}` : timestamp.label
+
   return (
-    <time
-      className="chat-detail__message-date"
-      dateTime={timestamp.dateTime}
-      title={timestamp.label}
-    >
+    <time className="chat-detail__message-date" dateTime={timestamp.dateTime} title={title}>
       {markerSide === 'left' && (
         <span className="chat-detail__message-date-marker" aria-hidden="true">
           ·
         </span>
       )}
       <span>{timestamp.label}</span>
+      {modelLabel && (
+        <>
+          <span className="chat-detail__message-date-marker" aria-hidden="true">
+            ·
+          </span>
+          <span>{modelLabel}</span>
+        </>
+      )}
       {markerSide === 'right' && (
         <span className="chat-detail__message-date-marker" aria-hidden="true">
           ·
@@ -760,10 +784,12 @@ const getPendingMessageActionLabel = (message: ProviderPendingMessage): string =
 export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
   canEditOwnMessages = false,
   item,
+  modelLabelsById,
   onDeletePendingMessage,
   onEditPendingMessage,
   onInterruptPendingMessage,
-  onEditMessage
+  onEditMessage,
+  selectedModelId
 }) => {
   const [copied, setCopied] = useState(false)
 
@@ -792,6 +818,7 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
     const canDelete = pending && Boolean(onDeletePendingMessage)
     const canInterrupt = pending && Boolean(onInterruptPendingMessage)
     const timestamp = formatMessageTimestamp(item.createdAt)
+    const modelLabel = pending ? null : getMessageModelLabel(item, selectedModelId, modelLabelsById)
     const handleCopyMessage = async (): Promise<void> => {
       await copyTextToClipboard(item.content)
       setCopied(true)
@@ -860,7 +887,11 @@ export const ChatDetailItem: React.FC<ChatDetailItemProps> = ({
       </span>
     )
     const messageDate = (
-      <MessageDate markerSide={role === 'user' ? 'right' : 'left'} timestamp={timestamp} />
+      <MessageDate
+        markerSide={role === 'user' ? 'right' : 'left'}
+        modelLabel={modelLabel}
+        timestamp={timestamp}
+      />
     )
     const messageBlockClassName = [
       'chat-detail__message-block',

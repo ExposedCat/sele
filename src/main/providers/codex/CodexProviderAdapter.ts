@@ -546,6 +546,7 @@ const mergeStructuredAndRolloutTurn = (
 ): CodexTurn => ({
   ...rolloutTurn,
   ...structuredTurn,
+  model: structuredTurn.model ?? rolloutTurn.model,
   startedAt: structuredTurn.startedAt ?? rolloutTurn.startedAt,
   completedAt: structuredTurn.completedAt ?? rolloutTurn.completedAt,
   items: shouldUseRolloutTurnItems(structuredTurn, rolloutTurn)
@@ -1240,7 +1241,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     } satisfies CodexThread
     this.cacheThread(thread)
 
-    const pendingTurn = this.addPendingTurn(thread.id, text)
+    const pendingTurn = this.addPendingTurn(thread.id, text, options)
     if (pendingTurn) this.emitChatUpdated(thread.id)
 
     try {
@@ -1277,7 +1278,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     const text = message.trim()
     if (!text) throw new Error('Cannot continue a chat with an empty message')
 
-    const pendingTurn = this.addPendingTurn(chatId, text)
+    const pendingTurn = this.addPendingTurn(chatId, text, options)
     if (pendingTurn) this.emitChatUpdated(chatId)
 
     try {
@@ -1425,7 +1426,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     })
     this.emitChatUpdated(chatId)
 
-    const pendingTurn = this.addPendingTurn(chatId, text)
+    const pendingTurn = this.addPendingTurn(chatId, text, options)
     if (pendingTurn) this.emitChatUpdated(chatId)
 
     try {
@@ -2192,9 +2193,14 @@ export class CodexProviderAdapter implements ProviderAdapter {
     this.setThreadActiveFlag(threadId, 'waitingOnApproval', false)
   }
 
-  private createPendingTurn = (turnId: string, text: string): CodexTurn => ({
+  private createPendingTurn = (
+    turnId: string,
+    text: string,
+    options?: ProviderTurnOptions
+  ): CodexTurn => ({
     id: turnId,
     status: 'inProgress',
+    model: getTurnModelOptions(options).model,
     startedAt: nowSeconds(),
     completedAt: null,
     items: [
@@ -2206,20 +2212,25 @@ export class CodexProviderAdapter implements ProviderAdapter {
     ]
   })
 
-  private addPendingTurn = (threadId: string, text: string): CodexTurn | null => {
-    return this.addPendingTurnWithId(threadId, `pending:${Date.now()}`, text)
+  private addPendingTurn = (
+    threadId: string,
+    text: string,
+    options?: ProviderTurnOptions
+  ): CodexTurn | null => {
+    return this.addPendingTurnWithId(threadId, `pending:${Date.now()}`, text, options)
   }
 
   private addPendingTurnWithId = (
     threadId: string,
     pendingTurnId: string,
-    text: string
+    text: string,
+    options?: ProviderTurnOptions
   ): CodexTurn | null => {
     const thread = this.threads.get(threadId)
     if (!thread) return null
 
     const previousPendingTurnId = this.pendingTurnIds.get(threadId)
-    const pendingTurn = this.createPendingTurn(pendingTurnId, text)
+    const pendingTurn = this.createPendingTurn(pendingTurnId, text, options)
     this.pendingTurnIds.set(threadId, pendingTurnId)
 
     this.cacheThread({
@@ -2641,7 +2652,12 @@ export class CodexProviderAdapter implements ProviderAdapter {
     if (nextQueuedTurns.length > 0) this.queuedTurnsByThread.set(threadId, nextQueuedTurns)
     else this.queuedTurnsByThread.delete(threadId)
 
-    const pendingTurn = this.addPendingTurnWithId(threadId, queuedTurn.id, queuedTurn.text)
+    const pendingTurn = this.addPendingTurnWithId(
+      threadId,
+      queuedTurn.id,
+      queuedTurn.text,
+      queuedTurn.options
+    )
     this.setThreadStatus(threadId, { type: 'active', activeFlags: [] })
     this.emitChatUpdated(threadId)
 
@@ -2830,6 +2846,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     return {
       ...previous,
       ...next,
+      model: next.model ?? previous.model,
       status: next.status ?? previous.status,
       items: mergedItems
     }

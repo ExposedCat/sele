@@ -2683,6 +2683,13 @@ export const App: React.FC = () => {
   const savedGitCommitModelOption = savedGitCommitModel
     ? models.find((candidateModel) => candidateModel.id === savedGitCommitModel)
     : undefined
+  const modelLabelsById = useMemo(
+    () =>
+      new Map<ProviderModelId, string>(
+        models.map((candidateModel) => [candidateModel.id, formatModelLabel(candidateModel.label)])
+      ),
+    [models]
+  )
   const fallbackGitCommitModel = getDefaultModel(models)
   const gitCommitModelValue = savedGitCommitModel
     ? (savedGitCommitModelOption ?? fallbackGitCommitModel).id
@@ -4397,12 +4404,14 @@ export const App: React.FC = () => {
                       canEditOwnMessages={canEditOwnMessages}
                       item={item}
                       key={item.id}
+                      modelLabelsById={modelLabelsById}
                       onDeletePendingMessage={handleDeletePendingMessage}
                       onEditPendingMessage={handleEditPendingMessage}
                       onInterruptPendingMessage={
                         chatHasActiveTurn ? handleInterruptPendingMessage : undefined
                       }
                       onEditMessage={handleEditMessage}
+                      selectedModelId={model}
                     />
                   ))}
                 </div>
