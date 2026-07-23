@@ -1253,7 +1253,7 @@ export const getChatItems = (
     let finalMessage: ProviderMessage | null = null
     const workingItems: ProviderWorkingItem[] = []
     let hasSeenInitialUserMessage = false
-    let contextCompactionItemId: string | null = null
+    const renderedContextCompactionItemIds = new Set<string>()
     let workingStepCount = 0
     const pushWorkingStep = (status: ProviderWorkingStep['status']): void => {
       if (
@@ -1274,15 +1274,30 @@ export const getChatItems = (
       workingItems.length = 0
       workingStepCount += 1
     }
+    const flushBufferedFinalMessage = (): boolean => {
+      if (!finalMessage) return false
+
+      const workingStepStatus = getWorkingStepStatus(workingStatus, finalMessage)
+      pushWorkingStep(workingStepStatus)
+      chatItems.push(finalMessage)
+      finalMessage = null
+      return true
+    }
 
     for (const [itemIndex, item] of turn.items.entries()) {
       if (isContextCompactionItem(item)) {
+        const itemId = `${turn.id}:${item.id}`
         if (
           isFinishedTurn(turn) &&
           isFinishedContextCompactionItem(item) &&
-          !contextCompactionItemId
+          !renderedContextCompactionItemIds.has(itemId)
         ) {
-          contextCompactionItemId = `${turn.id}:${item.id}`
+          renderedContextCompactionItemIds.add(itemId)
+          if (!flushBufferedFinalMessage()) pushWorkingStep('worked')
+          chatItems.push({
+            type: 'contextCompaction',
+            id: itemId
+          })
         }
         continue
       }
@@ -1343,15 +1358,7 @@ export const getChatItems = (
       workingItems.push(...renderWorkingItems(item, turn.id))
     }
 
-    const workingStepStatus = getWorkingStepStatus(workingStatus, finalMessage)
-    pushWorkingStep(workingStepStatus)
-    if (finalMessage) chatItems.push(finalMessage)
-    if (contextCompactionItemId) {
-      chatItems.push({
-        type: 'contextCompaction',
-        id: contextCompactionItemId
-      })
-    }
+    if (!flushBufferedFinalMessage()) pushWorkingStep(workingStatus)
   }
 
   return chatItems
