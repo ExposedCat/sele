@@ -260,6 +260,7 @@ export type ProviderUsageOptions = {
 }
 
 export type ProviderChatStatus = 'active' | 'error' | 'waitingOnApproval' | 'waitingOnUserInput'
+export type ProviderChatPurpose = 'commit'
 export type ProviderChatCwdKind = 'directory' | 'gitWorktree'
 export type ProviderChatCwdMetadata = {
   kind: ProviderChatCwdKind
@@ -283,6 +284,7 @@ export type ProviderChatMetadata = {
   pinned: boolean
   done: boolean
   seenUpdatedAt: number | null
+  purpose: ProviderChatPurpose | null
 }
 
 export type ProviderCwdNote = {
@@ -307,6 +309,7 @@ export type ProviderChat = {
   pinned: boolean
   done: boolean
   seenUpdatedAt: number | null
+  purpose: ProviderChatPurpose | null
 }
 
 export type ProviderChatListOptions = {
@@ -423,6 +426,7 @@ export type ProviderChatDetail = {
   pinned: boolean
   done: boolean
   seenUpdatedAt: number | null
+  purpose: ProviderChatPurpose | null
   capabilities: ProviderCapabilities
   pendingApproval: ProviderPendingApproval | null
   contextUsage: ProviderChatContextUsage | null
@@ -472,7 +476,8 @@ export type ProviderApi = {
   startChat: (
     providerId: ProviderId,
     message: string,
-    options?: ProviderTurnOptions
+    options?: ProviderTurnOptions,
+    purpose?: ProviderChatPurpose
   ) => Promise<ProviderChatDetail>
   continueChat: (
     providerId: ProviderId,
@@ -484,6 +489,7 @@ export type ProviderApi = {
     providerId: ProviderId,
     chatId: string,
     message: string,
+    purpose: ProviderChatPurpose,
     options?: ProviderTurnOptions
   ) => Promise<ProviderChatDetail>
   sendActiveChatMessage: (

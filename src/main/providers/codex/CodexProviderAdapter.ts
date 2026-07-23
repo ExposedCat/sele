@@ -1046,7 +1046,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
           pendingApproval: this.getProviderPendingApproval(namedThread.id),
           pinned: false,
           done: false,
-          seenUpdatedAt: null
+          seenUpdatedAt: null,
+          purpose: null
         }
       })
     )
@@ -1221,7 +1222,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
 
   startChat = async (
     message: string,
-    options?: ProviderTurnOptions
+    options?: ProviderTurnOptions,
+    onChatCreated?: (chatId: string) => Promise<void>
   ): Promise<ProviderChatDetail> => {
     const text = message.trim()
     if (!text) throw new Error('Cannot start a chat with an empty message')
@@ -1231,6 +1233,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
       ...getThreadAccessOptions(options),
       ...getThreadModelOptions(options)
     })
+    await onChatCreated?.(startedThread.thread.id)
+
     const [cwd, name, turns] = await Promise.all([
       this.resolveThreadCwd(startedThread.thread, options?.cwd ?? null),
       this.resolveThreadName(startedThread.thread),
@@ -1314,7 +1318,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
   continueChatInFork = async (
     chatId: string,
     message: string,
-    options?: ProviderTurnOptions
+    options?: ProviderTurnOptions,
+    onForkCreated?: (chatId: string) => Promise<void>
   ): Promise<ProviderChatDetail> => {
     const text = message.trim()
     if (!text) throw new Error('Cannot continue a chat with an empty message')
@@ -1330,6 +1335,8 @@ export class CodexProviderAdapter implements ProviderAdapter {
       ...getThreadAccessOptions(options),
       ...getThreadModelOptions(options)
     })
+    await onForkCreated?.(fork.thread.id)
+
     const [cwd, name, turns] = await Promise.all([
       this.resolveThreadCwd(fork.thread, sourceThread?.cwd ?? null),
       this.resolveThreadName(fork.thread),
@@ -1818,6 +1825,7 @@ export class CodexProviderAdapter implements ProviderAdapter {
     pinned: false,
     done: false,
     seenUpdatedAt: null,
+    purpose: null,
     capabilities: codexCapabilities,
     pendingApproval: this.getProviderPendingApproval(thread.id),
     contextUsage: this.contextUsageByThread.get(thread.id) ?? null,

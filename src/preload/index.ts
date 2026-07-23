@@ -67,16 +67,17 @@ const providerApi: ProviderApi = {
     ipcRenderer.invoke(providerIpcChannels.generateOneShot, providerId, message, options),
   cancelOneShot: (providerId, generationId) =>
     ipcRenderer.invoke(providerIpcChannels.cancelOneShot, providerId, generationId),
-  startChat: (providerId, message, options) =>
-    ipcRenderer.invoke(providerIpcChannels.startChat, providerId, message, options),
+  startChat: (providerId, message, options, purpose) =>
+    ipcRenderer.invoke(providerIpcChannels.startChat, providerId, message, options, purpose),
   continueChat: (providerId, chatId, message, options) =>
     ipcRenderer.invoke(providerIpcChannels.continueChat, providerId, chatId, message, options),
-  continueChatInFork: (providerId, chatId, message, options) =>
+  continueChatInFork: (providerId, chatId, message, purpose, options) =>
     ipcRenderer.invoke(
       providerIpcChannels.continueChatInFork,
       providerId,
       chatId,
       message,
+      purpose,
       options
     ),
   sendActiveChatMessage: (providerId, chatId, message, mode, options) =>

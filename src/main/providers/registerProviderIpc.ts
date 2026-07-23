@@ -4,6 +4,7 @@ import type {
   ProviderApprovalDecision,
   ProviderActiveSendMode,
   ProviderChatListOptions,
+  ProviderChatPurpose,
   ProviderCwdNote,
   ProviderId,
   ProviderOneShotOptions,
@@ -31,6 +32,14 @@ const requireChatId = (value: unknown): string => {
   if (typeof value !== 'string' || !value) throw new Error('Invalid chat ID')
   return value
 }
+
+const requireChatPurpose = (value: unknown): ProviderChatPurpose => {
+  if (value !== 'commit') throw new Error('Invalid chat purpose')
+  return value
+}
+
+const requireOptionalChatPurpose = (value: unknown): ProviderChatPurpose | undefined =>
+  value == null ? undefined : requireChatPurpose(value)
 
 const requireMessageId = (value: unknown): string => {
   if (typeof value !== 'string' || !value) throw new Error('Invalid message ID')
@@ -270,11 +279,12 @@ export const registerProviderIpc = (): void => {
 
   ipcMain.handle(
     providerIpcChannels.startChat,
-    (_, providerId: unknown, message: unknown, options: unknown) =>
+    (_, providerId: unknown, message: unknown, options: unknown, purpose: unknown) =>
       providerApi.startChat(
         requireProviderId(providerId),
         requireMessage(message),
-        requireTurnOptions(options)
+        requireTurnOptions(options),
+        requireOptionalChatPurpose(purpose)
       )
   )
 
@@ -291,11 +301,19 @@ export const registerProviderIpc = (): void => {
 
   ipcMain.handle(
     providerIpcChannels.continueChatInFork,
-    (_, providerId: unknown, chatId: unknown, message: unknown, options: unknown) =>
+    (
+      _,
+      providerId: unknown,
+      chatId: unknown,
+      message: unknown,
+      purpose: unknown,
+      options: unknown
+    ) =>
       providerApi.continueChatInFork(
         requireProviderId(providerId),
         requireChatId(chatId),
         requireMessage(message),
+        requireChatPurpose(purpose),
         requireTurnOptions(options)
       )
   )

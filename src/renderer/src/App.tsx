@@ -190,7 +190,7 @@ type ScopedCommitActivity = {
   source: 'ai'
   providerId: ProviderId
   chatId: string
-  sourceChatId: string
+  sourceChatId: string | null
   projectCwd: string | null
   commitAction: GitCommitPromptAction
   currentAction: CommitActivityAction
@@ -1115,7 +1115,8 @@ const getChatFromDetail = (
   pendingApproval: detail.pendingApproval,
   seenUpdatedAt: detail.seenUpdatedAt ?? existingChat?.seenUpdatedAt ?? null,
   pinned: detail.pinned ?? existingChat?.pinned ?? false,
-  done: detail.done ?? existingChat?.done ?? false
+  done: detail.done ?? existingChat?.done ?? false,
+  purpose: detail.purpose ?? existingChat?.purpose ?? null
 })
 
 const getOptimisticItems = (items: ProviderChatItem[], message: string): ProviderChatItem[] => {
@@ -2212,6 +2213,13 @@ export const App: React.FC = () => {
     ): void => {
       const updatedAt = Date.now()
 
+      if (detail.purpose === 'commit') {
+        setChats((currentChats) =>
+          currentChats.filter((chat) => chat.providerId !== providerId || chat.id !== detail.id)
+        )
+        return
+      }
+
       if (options.select) {
         setChatDetail(detail)
         setChatLoadState('ready')
@@ -2261,7 +2269,8 @@ export const App: React.FC = () => {
               ...chat,
               pinned: metadata.pinned,
               done: metadata.done,
-              seenUpdatedAt: metadata.seenUpdatedAt
+              seenUpdatedAt: metadata.seenUpdatedAt,
+              purpose: metadata.purpose
             }
           : chat
       })
@@ -2275,7 +2284,8 @@ export const App: React.FC = () => {
             ...currentChat,
             pinned: metadata.pinned,
             done: metadata.done,
-            seenUpdatedAt: metadata.seenUpdatedAt
+            seenUpdatedAt: metadata.seenUpdatedAt,
+            purpose: metadata.purpose
           }
         : currentChat
     })
@@ -2288,7 +2298,8 @@ export const App: React.FC = () => {
             ...currentDetail,
             pinned: metadata.pinned,
             done: metadata.done,
-            seenUpdatedAt: metadata.seenUpdatedAt
+            seenUpdatedAt: metadata.seenUpdatedAt,
+            purpose: metadata.purpose
           }
         : currentDetail
     })
@@ -3803,12 +3814,9 @@ export const App: React.FC = () => {
   }, [changesCwd, changesProjectCwd, directCommitActivities, scopedCommitActivities])
   const projectCommitInProgress = currentProjectCommitActivities.length > 0
   const aiCommitUnavailable =
-    !selectedChat ||
-    !chatDetail ||
-    chatLoadState !== 'ready' ||
-    chatIsBusy ||
     sendState === 'sending' ||
-    Boolean(editingMessage)
+    Boolean(editingMessage) ||
+    (selectedChat ? !chatDetail || chatLoadState !== 'ready' || chatIsBusy : false)
   const commitBaseDisabled =
     providerUpdateInProgress ||
     commitFiles.length === 0 ||
@@ -4036,7 +4044,8 @@ export const App: React.FC = () => {
     extraInstructions: string
   ): Promise<boolean> => {
     if (providerUpdateInProgress) return false
-    if (!selectedChat || !chatDetail) return false
+    if (selectedChat && !chatDetail) return false
+    if (!selectedChat && !changesCwd) return false
     if (sendInFlightRef.current) return false
 
     const prompt = getScopedChatCommitPrompt(
@@ -4044,10 +4053,11 @@ export const App: React.FC = () => {
       extraInstructions,
       appSettings.git.commitPrompt
     )
-    const providerId = selectedChat.providerId
-    const chatId = selectedChat.id
+    const providerId = selectedChat?.providerId ?? newSessionProvider
+    const chatId = selectedChat?.id ?? null
     const turnOptions = getGitTurnOptions()
-    const useForkedChat = turnOptions.model !== model
+    const useForkedChat = chatId != null && turnOptions.model !== model
+    const useHiddenChat = chatId == null || useForkedChat
 
     sendInFlightRef.current = true
     chatAutoScrollEnabledRef.current = true
@@ -4055,7 +4065,7 @@ export const App: React.FC = () => {
     setCommitError(null)
     setSendState('sending')
 
-    if (!useForkedChat && chatDetail.id === chatId) {
+    if (chatId && !useForkedChat && chatDetail?.id === chatId) {
       applyViewedChatDetail(providerId, {
         ...chatDetail,
         status: 'active',
@@ -4065,10 +4075,27 @@ export const App: React.FC = () => {
     }
 
     try {
-      const detail = useForkedChat
-        ? await providerApi.continueChatInFork(providerId, chatId, prompt, turnOptions)
-        : await providerApi.continueChat(providerId, chatId, prompt, turnOptions)
-      if (useForkedChat) applyChatDetail(providerId, detail)
+      const detail =
+        chatId == null
+          ? await providerApi.startChat(
+              providerId,
+              prompt,
+              {
+                ...turnOptions,
+                cwd: changesCwd ?? undefined
+              },
+              'commit'
+            )
+          : useForkedChat
+            ? await providerApi.continueChatInFork(
+                providerId,
+                chatId,
+                prompt,
+                'commit',
+                turnOptions
+              )
+            : await providerApi.continueChat(providerId, chatId, prompt, turnOptions)
+      if (useHiddenChat) applyChatDetail(providerId, detail)
       else applyViewedChatDetail(providerId, detail)
 
       setCommitInput('')
@@ -4094,7 +4121,7 @@ export const App: React.FC = () => {
       setSendState('idle')
       return true
     } catch (error) {
-      if (!useForkedChat) {
+      if (chatId && !useForkedChat) {
         void providerApi
           .getChat(providerId, chatId)
           .then((detail) => applyViewedChatDetail(providerId, detail))

@@ -3,13 +3,18 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { Kysely, SqliteDialect, sql, type ColumnType } from 'kysely'
-import type { ProviderChatCwdKind, ProviderId } from '../../shared/provider'
+import type { ProviderChatCwdKind, ProviderChatPurpose, ProviderId } from '../../shared/provider'
 
 type SqliteBooleanColumn = ColumnType<number, number | boolean | undefined, number | boolean>
 type SqliteNullableNumberColumn = ColumnType<
   number | null,
   number | null | undefined,
   number | null
+>
+type SqliteNullableChatPurposeColumn = ColumnType<
+  ProviderChatPurpose | null,
+  ProviderChatPurpose | null | undefined,
+  ProviderChatPurpose | null
 >
 
 export type LocalDatabase = {
@@ -18,6 +23,7 @@ export type LocalDatabase = {
     pinned: SqliteBooleanColumn
     done: SqliteBooleanColumn
     seen_updated_at: SqliteNullableNumberColumn
+    purpose: SqliteNullableChatPurposeColumn
   }
   cwd_metadata: {
     cwd: string
@@ -66,6 +72,7 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
     .addColumn('pinned', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('done', 'integer', (column) => column.notNull().defaultTo(0))
     .addColumn('seen_updated_at', 'integer')
+    .addColumn('purpose', 'text')
     .execute()
 
   await db.schema
@@ -102,6 +109,9 @@ const ensureSchema = async (db: Kysely<LocalDatabase>): Promise<void> => {
   )
   await ensureColumn(db, 'chat', 'seen_updated_at', () =>
     db.schema.alterTable('chat').addColumn('seen_updated_at', 'integer').execute()
+  )
+  await ensureColumn(db, 'chat', 'purpose', () =>
+    db.schema.alterTable('chat').addColumn('purpose', 'text').execute()
   )
 
   schemaReady = true

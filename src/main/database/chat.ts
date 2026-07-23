@@ -1,5 +1,5 @@
 import { sql } from 'kysely'
-import type { ProviderChatMetadata } from '../../shared/provider'
+import type { ProviderChatMetadata, ProviderChatPurpose } from '../../shared/provider'
 import { getDatabase } from './sqlite'
 
 const chatMetadataChunkSize = 200
@@ -20,7 +20,8 @@ const getDefaultChatMetadata = (id: string): ProviderChatMetadata => ({
   id,
   pinned: false,
   done: false,
-  seenUpdatedAt: null
+  seenUpdatedAt: null,
+  purpose: null
 })
 
 const mapChatMetadataRow = (row: {
@@ -28,11 +29,13 @@ const mapChatMetadataRow = (row: {
   pinned: number
   done: number
   seen_updated_at: number | null
+  purpose: ProviderChatPurpose | null
 }): ProviderChatMetadata => ({
   id: row.id,
   pinned: toBoolean(row.pinned),
   done: toBoolean(row.done),
-  seenUpdatedAt: toNumberOrNull(row.seen_updated_at)
+  seenUpdatedAt: toNumberOrNull(row.seen_updated_at),
+  purpose: row.purpose === 'commit' ? row.purpose : null
 })
 
 const uniqueChatIds = (chatIds: string[]): string[] =>
@@ -42,7 +45,7 @@ export const getChatMetadata = async (chatId: string): Promise<ProviderChatMetad
   const db = await getDatabase()
   const row = await db
     .selectFrom('chat')
-    .select(['id', 'pinned', 'done', 'seen_updated_at'])
+    .select(['id', 'pinned', 'done', 'seen_updated_at', 'purpose'])
     .where('id', '=', chatId)
     .executeTakeFirst()
 
@@ -62,7 +65,7 @@ export const getChatMetadataByIds = async (
     const chunk = ids.slice(index, index + chatMetadataChunkSize)
     const rows = await db
       .selectFrom('chat')
-      .select(['id', 'pinned', 'done', 'seen_updated_at'])
+      .select(['id', 'pinned', 'done', 'seen_updated_at', 'purpose'])
       .where('id', 'in', chunk)
       .execute()
 
@@ -122,6 +125,25 @@ export const setChatSeen = async (
     .onConflict((conflict) =>
       conflict.column('id').doUpdateSet({
         seen_updated_at: sql<number>`max(coalesce(seen_updated_at, 0), ${nextSeenUpdatedAt})`
+      })
+    )
+    .execute()
+
+  return getChatMetadata(chatId)
+}
+
+export const setChatPurpose = async (
+  chatId: string,
+  purpose: ProviderChatPurpose
+): Promise<ProviderChatMetadata> => {
+  const db = await getDatabase()
+
+  await db
+    .insertInto('chat')
+    .values({ id: chatId, pinned: 0, done: 0, purpose })
+    .onConflict((conflict) =>
+      conflict.column('id').doUpdateSet({
+        purpose
       })
     )
     .execute()

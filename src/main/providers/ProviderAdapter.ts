@@ -29,7 +29,11 @@ export type ProviderAdapter = {
   getChat: (chatId: string) => Promise<ProviderChatDetail>
   generateOneShot: (message: string, options?: ProviderOneShotOptions) => Promise<string>
   cancelOneShot: (generationId: string) => Promise<void>
-  startChat: (message: string, options?: ProviderTurnOptions) => Promise<ProviderChatDetail>
+  startChat: (
+    message: string,
+    options?: ProviderTurnOptions,
+    onChatCreated?: (chatId: string) => Promise<void>
+  ) => Promise<ProviderChatDetail>
   continueChat: (
     chatId: string,
     message: string,
@@ -38,7 +42,8 @@ export type ProviderAdapter = {
   continueChatInFork: (
     chatId: string,
     message: string,
-    options?: ProviderTurnOptions
+    options?: ProviderTurnOptions,
+    onForkCreated?: (chatId: string) => Promise<void>
   ) => Promise<ProviderChatDetail>
   sendActiveChatMessage: (
     chatId: string,

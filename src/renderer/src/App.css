@@ -458,9 +458,10 @@
   display: grid;
   position: relative;
   z-index: 1;
-  min-width: 0;
+  width: max-content;
+  min-width: calc(100% / 1.5);
+  max-width: 100%;
   gap: 8px;
-  width: calc(100% / 1.5);
   margin: 0 0 0 calc(var(--commit-activity-protrusion) * -1);
   pointer-events: none;
 }

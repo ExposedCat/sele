@@ -12,6 +12,7 @@ import {
   getChatMetadataByIds,
   setChatDone,
   setChatPinned,
+  setChatPurpose,
   setChatSeen,
   setChatsDone
 } from '../database/chat'
@@ -38,7 +39,8 @@ const applyMetadataToChat = (
   ...chat,
   pinned: metadata?.pinned ?? false,
   done: metadata?.done ?? false,
-  seenUpdatedAt: metadata?.seenUpdatedAt ?? null
+  seenUpdatedAt: metadata?.seenUpdatedAt ?? null,
+  purpose: metadata?.purpose ?? null
 })
 
 const applyMetadataToChats = async (chats: ProviderChat[]): Promise<ProviderChat[]> => {
@@ -69,7 +71,8 @@ const applyMetadataToDetail = async (detail: ProviderChatDetail): Promise<Provid
     branchName: cwdMetadata.branchName,
     pinned: metadata.pinned,
     done: metadata.done,
-    seenUpdatedAt: metadata.seenUpdatedAt
+    seenUpdatedAt: metadata.seenUpdatedAt,
+    purpose: metadata.purpose
   }
 }
 
@@ -126,9 +129,10 @@ export const providerApi: ProviderApi = {
   getUsage: (providerId, options?: ProviderUsageOptions) => adapters[providerId].getUsage(options),
   getChats: async (providerId, options) => {
     const page = await adapters[providerId].getChats(options)
+    const chats = await applyMetadataToChats(page.chats)
     return {
       ...page,
-      chats: await applyMetadataToChats(page.chats)
+      chats: chats.filter((chat) => chat.purpose !== 'commit')
     }
   },
   getChat: async (providerId, chatId) =>
@@ -136,16 +140,33 @@ export const providerApi: ProviderApi = {
   generateOneShot: (providerId, message, options) =>
     adapters[providerId].generateOneShot(message, options),
   cancelOneShot: (providerId, generationId) => adapters[providerId].cancelOneShot(generationId),
-  startChat: async (providerId, message, options) =>
-    applyMetadataToDetail(await adapters[providerId].startChat(message, options)),
+  startChat: async (providerId, message, options, purpose) => {
+    const detail = await adapters[providerId].startChat(
+      message,
+      options,
+      purpose
+        ? async (chatId) => {
+            await setChatPurpose(chatId, purpose)
+          }
+        : undefined
+    )
+    return applyMetadataToDetail(detail)
+  },
   continueChat: (providerId, chatId, message, options) =>
     adapters[providerId]
       .continueChat(chatId, message, options)
       .then((detail) => applyMetadataToDetail(detail)),
-  continueChatInFork: (providerId, chatId, message, options) =>
-    adapters[providerId]
-      .continueChatInFork(chatId, message, options)
-      .then((detail) => applyMetadataToDetail(detail)),
+  continueChatInFork: async (providerId, chatId, message, purpose, options) => {
+    const detail = await adapters[providerId].continueChatInFork(
+      chatId,
+      message,
+      options,
+      async (forkedChatId) => {
+        await setChatPurpose(forkedChatId, purpose)
+      }
+    )
+    return applyMetadataToDetail(detail)
+  },
   sendActiveChatMessage: (providerId, chatId, message, mode, options) =>
     adapters[providerId]
       .sendActiveChatMessage(chatId, message, mode, options)
