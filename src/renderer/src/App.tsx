@@ -185,7 +185,6 @@ type CommitActivityDisplay = {
   source: CommitActivitySource
   commitAction: GitCommitPromptAction
   currentAction: CommitActivityAction
-  chatTitle?: string
 }
 type ScopedCommitActivity = {
   source: 'ai'
@@ -193,7 +192,6 @@ type ScopedCommitActivity = {
   chatId: string
   sourceChatId: string
   projectCwd: string | null
-  chatTitle: string
   commitAction: GitCommitPromptAction
   currentAction: CommitActivityAction
   startedAt: number
@@ -457,9 +455,7 @@ const CommitActivityActionIcon: React.FC<{ activity: ProviderToolActivity }> = (
 const CommitActivityRow: React.FC<{ activity: CommitActivityDisplay }> = ({ activity }) => {
   const commitActionName = commitActionLabels[activity.commitAction]
   const commitActionLabel = activity.source === 'ai' ? `AI ${commitActionName}` : commitActionName
-  const title = activity.chatTitle
-    ? `${commitActionLabel} · ${activity.currentAction.label} · ${activity.chatTitle}`
-    : `${commitActionLabel} · ${activity.currentAction.label}`
+  const title = `${commitActionLabel} · ${activity.currentAction.label}`
 
   return (
     <div className="changes-sidebar__commit-activity">
@@ -475,9 +471,6 @@ const CommitActivityRow: React.FC<{ activity: CommitActivityDisplay }> = ({ acti
           {activity.currentAction.label}
         </span>
       </span>
-      {activity.chatTitle && (
-        <span className="changes-sidebar__commit-activity-chat">{activity.chatTitle}</span>
-      )}
     </div>
   )
 }
@@ -1230,7 +1223,7 @@ const getCommitActivityCurrentAction = (
   }
 
   return {
-    label: `Preparing AI ${commitActionLabels[fallbackAction].toLocaleLowerCase()}`,
+    label: `Preparing ${commitActionLabels[fallbackAction].toLocaleLowerCase()}`,
     activity: 'other'
   }
 }
@@ -2383,7 +2376,6 @@ export const App: React.FC = () => {
               ...currentActivities,
               [updatedChatKey]: {
                 ...currentActivity,
-                chatTitle: event.detail.title || currentActivity.chatTitle,
                 currentAction: getCommitActivityCurrentAction(
                   event.detail,
                   currentActivity.commitAction
@@ -4088,7 +4080,6 @@ export const App: React.FC = () => {
           chatId: detail.id,
           sourceChatId: chatId,
           projectCwd: changesProjectCwd ?? changesCwd,
-          chatTitle: detail.title || selectedChat.title,
           commitAction: action,
           currentAction: getCommitActivityCurrentAction(detail, action),
           startedAt: Date.now()
@@ -4382,9 +4373,6 @@ export const App: React.FC = () => {
     }
 
     if (settingsTab === 'git') {
-      const commitModelDiffersFromCurrent =
-        gitCommitModelValue !== gitCurrentChatModelValue && getGitTurnOptions().model !== model
-
       return (
         <section
           className="settings-dialog__panel"
@@ -4395,11 +4383,6 @@ export const App: React.FC = () => {
           <div className="settings-dialog__field settings-dialog__field--inline">
             <div className="settings-dialog__field-header">
               <h3>Commit model</h3>
-              {commitModelDiffersFromCurrent && (
-                <p className="settings-dialog__warning" role="status">
-                  Chat context will be compacted to switch the model
-                </p>
-              )}
             </div>
             <Dropdown
               id="settings-git-commit-model"

@@ -534,18 +534,6 @@
   color: var(--lead);
 }
 
-.changes-sidebar__commit-activity-chat {
-  min-width: 0;
-  max-width: 34%;
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--muted);
-  font-weight: 500;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .changes-sidebar__commit-row {
   display: grid;
   min-width: 0;
@@ -1096,10 +1084,6 @@
   color: var(--muted);
   font: inherit;
   line-height: 1.35;
-}
-
-.settings-dialog__field-header .settings-dialog__warning {
-  color: var(--warning);
 }
 
 .settings-dialog__theme-toggle {
