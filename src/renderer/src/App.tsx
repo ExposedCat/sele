@@ -17,7 +17,10 @@ import {
   ChevronRight,
   Check,
   Download,
+  FileCode2,
   Files,
+  FilePlus2,
+  FileText,
   FolderKanban,
   FolderPlus,
   GitBranch,
@@ -31,6 +34,8 @@ import {
   Minus,
   Monitor,
   Moon,
+  Package,
+  Pencil,
   RefreshCw,
   Search,
   Settings,
@@ -38,7 +43,10 @@ import {
   Sparkles,
   SquarePen,
   Sun,
+  Terminal,
+  Trash2,
   Upload,
+  Wrench,
   X
 } from 'lucide-react'
 import {
@@ -69,6 +77,7 @@ import type {
   ProviderFileDiff,
   ProviderWorkingItem,
   ProviderWorkingStep,
+  ProviderWorkingTool,
   ProviderChatItem,
   ProviderChatMetadata,
   ProviderCwdNote,
@@ -83,6 +92,7 @@ import type {
   ProviderId,
   ProviderModel,
   ProviderModelId,
+  ProviderToolActivity,
   ProviderAccountUsage,
   ProviderReasoningEffort,
   ProviderSandboxMode,
@@ -159,6 +169,7 @@ type ChangesPaneView = 'git' | 'files'
 type GitCommitPromptAction = AppGitCommitAction
 type GitSyncAction = 'pull' | 'push' | 'pullAndPush'
 type GitSyncStep = Exclude<GitSyncAction, 'pullAndPush'>
+type CommitActivitySource = 'ai' | 'git'
 type GitSyncRecoveryState = {
   cwd: string
   requestedAction: GitSyncAction
@@ -166,13 +177,33 @@ type GitSyncRecoveryState = {
   failure: AppGitRecoverableFailure
   error: string | null
 }
+type CommitActivityAction = {
+  label: string
+  activity: ProviderToolActivity
+}
+type CommitActivityDisplay = {
+  source: CommitActivitySource
+  commitAction: GitCommitPromptAction
+  currentAction: CommitActivityAction
+  chatTitle?: string
+}
 type ScopedCommitActivity = {
+  source: 'ai'
   providerId: ProviderId
   chatId: string
   sourceChatId: string
   projectCwd: string | null
   chatTitle: string
-  action: GitCommitPromptAction
+  commitAction: GitCommitPromptAction
+  currentAction: CommitActivityAction
+  startedAt: number
+}
+type DirectCommitActivity = {
+  source: 'git'
+  id: string
+  projectCwd: string | null
+  commitAction: GitCommitPromptAction
+  currentAction: CommitActivityAction
   startedAt: number
 }
 type GitSyncRecoveryActionOptions = {
@@ -406,6 +437,48 @@ const ChangesAnimatedIcon: React.FC<{
       animateOnHover={false}
       aria-hidden="true"
     />
+  )
+}
+
+const CommitActivityActionIcon: React.FC<{ activity: ProviderToolActivity }> = ({ activity }) => {
+  if (activity === 'read') return <FileText aria-hidden="true" />
+  if (activity === 'search') return <Search aria-hidden="true" />
+  if (activity === 'git') return <GitBranch aria-hidden="true" />
+  if (activity === 'edit') return <Pencil aria-hidden="true" />
+  if (activity === 'create') return <FilePlus2 aria-hidden="true" />
+  if (activity === 'delete') return <Trash2 aria-hidden="true" />
+  if (activity === 'npm' || activity === 'npx') return <Package aria-hidden="true" />
+  if (activity === 'script') return <FileCode2 aria-hidden="true" />
+  if (activity === 'command') return <Terminal aria-hidden="true" />
+
+  return <Wrench aria-hidden="true" />
+}
+
+const CommitActivityRow: React.FC<{ activity: CommitActivityDisplay }> = ({ activity }) => {
+  const commitActionName = commitActionLabels[activity.commitAction]
+  const commitActionLabel = activity.source === 'ai' ? `AI ${commitActionName}` : commitActionName
+  const title = activity.chatTitle
+    ? `${commitActionLabel} · ${activity.currentAction.label} · ${activity.chatTitle}`
+    : `${commitActionLabel} · ${activity.currentAction.label}`
+
+  return (
+    <div className="changes-sidebar__commit-activity">
+      <span className="changes-sidebar__commit-activity-badge">
+        <ChangesAnimatedIcon Icon={AnimatedGitCommitHorizontalIcon} active />
+        <span>{commitActionLabel}</span>
+      </span>
+      <span className="changes-sidebar__commit-activity-detail" title={title}>
+        <span className="changes-sidebar__commit-activity-tool-icon">
+          <CommitActivityActionIcon activity={activity.currentAction.activity} />
+        </span>
+        <span className="changes-sidebar__commit-activity-action">
+          {activity.currentAction.label}
+        </span>
+      </span>
+      {activity.chatTitle && (
+        <span className="changes-sidebar__commit-activity-chat">{activity.chatTitle}</span>
+      )}
+    </div>
   )
 }
 
@@ -1090,6 +1163,84 @@ const getWorkingItemEstimateText = (item: ProviderWorkingItem): string => {
   return ''
 }
 
+const activeCommitActivityLabelReplacements: Array<[RegExp, string]> = [
+  [/^Read\b/, 'Reading'],
+  [/^Searched\b/, 'Searching'],
+  [/^Checked\b/, 'Checking'],
+  [/^Viewed\b/, 'Viewing'],
+  [/^Ran\b/, 'Running'],
+  [/^Used\b/, 'Using'],
+  [/^Changed\b/, 'Changing'],
+  [/^Created\b/, 'Creating'],
+  [/^Deleted\b/, 'Deleting'],
+  [/^Applied\b/, 'Applying'],
+  [/^Updated\b/, 'Updating'],
+  [/^Generated\b/, 'Generating']
+]
+
+const getCommitActivityActionFromLabel = (
+  label: string,
+  activity: ProviderToolActivity
+): CommitActivityAction => ({
+  label: getActiveCommitActivityLabel(label) ?? 'Working',
+  activity
+})
+
+const getActiveCommitActivityLabel = (label: string): string | null => {
+  const trimmedLabel = label.trim()
+  if (!trimmedLabel || trimmedLabel === 'Tool use') return null
+
+  for (const [pattern, replacement] of activeCommitActivityLabelReplacements) {
+    if (pattern.test(trimmedLabel)) return trimmedLabel.replace(pattern, replacement)
+  }
+
+  return trimmedLabel
+}
+
+const getActiveCommitToolAction = (tool: ProviderWorkingTool): CommitActivityAction => {
+  return getCommitActivityActionFromLabel(tool.label, tool.activity)
+}
+
+const getWorkingItemTools = (item: ProviderWorkingItem): ProviderWorkingTool[] => {
+  if (item.type === 'tool') return [item]
+  if (item.type === 'toolGroup') return item.tools
+  return []
+}
+
+const getCommitActivityCurrentAction = (
+  detail: ProviderChatDetail,
+  fallbackAction: GitCommitPromptAction
+): CommitActivityAction => {
+  const workingStep = detail.items.findLast(
+    (item): item is ProviderWorkingStep => item.type === 'working' && item.status === 'working'
+  )
+  const tools = workingStep?.items.flatMap(getWorkingItemTools) ?? []
+  const activeTool = tools.findLast((tool) => tool.status === 'running') ?? tools.at(-1)
+  if (activeTool) return getActiveCommitToolAction(activeTool)
+
+  const workingMessage = workingStep?.items.findLast(
+    (item): item is Extract<ProviderWorkingItem, { type: 'message' }> =>
+      item.type === 'message' && item.content.trim().length > 0
+  )
+  if (workingMessage) {
+    return {
+      label: workingMessage.content.trim(),
+      activity: 'other'
+    }
+  }
+
+  return {
+    label: `Preparing AI ${commitActionLabels[fallbackAction].toLocaleLowerCase()}`,
+    activity: 'other'
+  }
+}
+
+const getDirectCommitActivityAction = (action: GitCommitPromptAction): CommitActivityAction =>
+  getCommitActivityActionFromLabel(
+    action === 'amend' ? 'Ran git commit --amend' : 'Ran git commit',
+    'git'
+  )
+
 const getChatItemEstimateText = (item: ProviderChatItem): string => {
   if (item.type === 'message') return item.content
   if (item.type === 'pendingMessage') return item.content
@@ -1598,6 +1749,9 @@ export const App: React.FC = () => {
   const [commitError, setCommitError] = useState<string | null>(null)
   const [scopedCommitActivities, setScopedCommitActivities] = useState<
     Record<string, ScopedCommitActivity>
+  >({})
+  const [directCommitActivities, setDirectCommitActivities] = useState<
+    Record<string, DirectCommitActivity>
   >({})
   const [syncState, setSyncState] = useState<SendState>('idle')
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -2209,10 +2363,8 @@ export const App: React.FC = () => {
         if (selectedChatKeyRef.current === updatedChatKey) {
           markChatSeenAt(event.providerId, event.chatId, seenUpdatedAt)
         }
-        if (
-          scopedCommitActivitiesRef.current[updatedChatKey] &&
-          !isActiveChatStatus(event.detail.status)
-        ) {
+        const commitActivity = scopedCommitActivitiesRef.current[updatedChatKey]
+        if (commitActivity && !isActiveChatStatus(event.detail.status)) {
           setScopedCommitActivities((currentActivities) => {
             if (!currentActivities[updatedChatKey]) return currentActivities
 
@@ -2221,6 +2373,24 @@ export const App: React.FC = () => {
             return nextActivities
           })
           setGitChangeLoadRequest((currentRequest) => currentRequest + 1)
+        }
+        if (commitActivity && isActiveChatStatus(event.detail.status)) {
+          setScopedCommitActivities((currentActivities) => {
+            const currentActivity = currentActivities[updatedChatKey]
+            if (!currentActivity) return currentActivities
+
+            return {
+              ...currentActivities,
+              [updatedChatKey]: {
+                ...currentActivity,
+                chatTitle: event.detail.title || currentActivity.chatTitle,
+                currentAction: getCommitActivityCurrentAction(
+                  event.detail,
+                  currentActivity.commitAction
+                )
+              }
+            }
+          })
         }
       }),
     [applyChatDetail, markChatSeenAt]
@@ -3635,10 +3805,10 @@ export const App: React.FC = () => {
   const currentProjectCommitActivities = useMemo(() => {
     const currentProjectKey = getChatCwdGroupKey(changesProjectCwd ?? changesCwd)
 
-    return Object.values(scopedCommitActivities)
+    return [...Object.values(scopedCommitActivities), ...Object.values(directCommitActivities)]
       .filter((activity) => getChatCwdGroupKey(activity.projectCwd) === currentProjectKey)
       .sort((firstActivity, secondActivity) => firstActivity.startedAt - secondActivity.startedAt)
-  }, [changesCwd, changesProjectCwd, scopedCommitActivities])
+  }, [changesCwd, changesProjectCwd, directCommitActivities, scopedCommitActivities])
   const projectCommitInProgress = currentProjectCommitActivities.length > 0
   const aiCommitUnavailable =
     !selectedChat ||
@@ -3913,12 +4083,14 @@ export const App: React.FC = () => {
       if (isActiveChatStatus(detail.status)) {
         const activityKey = getProviderChatKey(providerId, detail.id)
         const activity = {
+          source: 'ai',
           providerId,
           chatId: detail.id,
           sourceChatId: chatId,
           projectCwd: changesProjectCwd ?? changesCwd,
           chatTitle: detail.title || selectedChat.title,
-          action,
+          commitAction: action,
+          currentAction: getCommitActivityCurrentAction(detail, action),
           startedAt: Date.now()
         } satisfies ScopedCommitActivity
 
@@ -3957,9 +4129,23 @@ export const App: React.FC = () => {
     if (!changesCwd) return false
 
     commitInFlightRef.current = true
+    const activityId = `git:${changesCwd}:${action}:${Date.now()}`
+    const activity = {
+      source: 'git',
+      id: activityId,
+      projectCwd: changesProjectCwd ?? changesCwd,
+      commitAction: action,
+      currentAction: getDirectCommitActivityAction(action),
+      startedAt: Date.now()
+    } satisfies DirectCommitActivity
+
     try {
       setCommitState('sending')
       setCommitError(null)
+      setDirectCommitActivities((currentActivities) => ({
+        ...currentActivities,
+        [activityId]: activity
+      }))
 
       await appApi.commitGitChanges({
         cwd: changesCwd,
@@ -3976,6 +4162,13 @@ export const App: React.FC = () => {
       setCommitError(getErrorMessage(error, 'Unable to commit these files.'))
       return false
     } finally {
+      setDirectCommitActivities((currentActivities) => {
+        if (!currentActivities[activityId]) return currentActivities
+
+        const nextActivities = { ...currentActivities }
+        delete nextActivities[activityId]
+        return nextActivities
+      })
       commitInFlightRef.current = false
     }
   }
@@ -4795,36 +4988,22 @@ export const App: React.FC = () => {
             </div>
             {changesPaneView === 'git' && (
               <footer className="changes-sidebar__footer">
-                {currentProjectCommitActivities.length > 0 && (
-                  <div
-                    className="changes-sidebar__commit-activity-list"
-                    role="status"
-                    aria-label="Commit activity"
-                  >
-                    {currentProjectCommitActivities.map((activity) => (
-                      <div
-                        className="changes-sidebar__commit-activity"
-                        key={getProviderChatKey(activity.providerId, activity.chatId)}
-                      >
-                        <span className="changes-sidebar__commit-activity-badge">
-                          <ChangesAnimatedIcon Icon={AnimatedGitCommitHorizontalIcon} active />
-                          <span>Committing</span>
-                        </span>
-                        <span
-                          className="changes-sidebar__commit-activity-detail"
-                          title={`${commitActionLabels[activity.action]} in ${activity.chatTitle}`}
-                        >
-                          <span className="changes-sidebar__commit-activity-action">
-                            AI {commitActionLabels[activity.action]}
-                          </span>
-                          <span className="changes-sidebar__commit-activity-chat">
-                            {activity.chatTitle}
-                          </span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div
+                  className="changes-sidebar__commit-activity-list"
+                  role="status"
+                  aria-label="Commit activity"
+                >
+                  {currentProjectCommitActivities.map((activity) => (
+                    <CommitActivityRow
+                      activity={activity}
+                      key={
+                        activity.source === 'ai'
+                          ? getProviderChatKey(activity.providerId, activity.chatId)
+                          : activity.id
+                      }
+                    />
+                  ))}
+                </div>
                 <div className="changes-sidebar__input-row">
                   <label className="changes-sidebar__commit-message">
                     <span className="sr-only">{commitInputLabel}</span>
