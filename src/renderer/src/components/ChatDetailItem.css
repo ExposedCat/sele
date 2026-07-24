@@ -424,6 +424,180 @@
   word-break: break-word;
 }
 
+.chat-detail__diff-scroll {
+  max-height: 420px;
+  margin: 0 -14px -12px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.chat-detail__diff {
+  --diff-background-color: transparent;
+  --diff-text-color: var(--lead);
+  --diff-selection-background-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  --diff-selection-text-color: var(--lead);
+  --diff-gutter-insert-background-color: color-mix(in srgb, #2f8f46 16%, transparent);
+  --diff-gutter-insert-text-color: var(--muted);
+  --diff-gutter-delete-background-color: color-mix(in srgb, #c74c44 16%, transparent);
+  --diff-gutter-delete-text-color: var(--muted);
+  --diff-code-insert-background-color: color-mix(in srgb, #2f8f46 10%, transparent);
+  --diff-code-insert-text-color: var(--lead);
+  --diff-code-delete-background-color: color-mix(in srgb, #c74c44 10%, transparent);
+  --diff-code-delete-text-color: var(--lead);
+  --diff-code-insert-edit-background-color: color-mix(in srgb, #2f8f46 28%, transparent);
+  --diff-code-insert-edit-text-color: var(--lead);
+  --diff-code-delete-edit-background-color: color-mix(in srgb, #c74c44 28%, transparent);
+  --diff-code-delete-edit-text-color: var(--lead);
+  --diff-font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  min-width: 100%;
+  font-size: 0.86rem;
+}
+
+.chat-detail__diff + .chat-detail__diff {
+  border-top: 1px solid var(--line);
+}
+
+.chat-detail__diff .diff-gutter-col {
+  width: 6ch;
+}
+
+.chat-detail__diff .diff-line {
+  line-height: 1.55;
+}
+
+.chat-detail__diff .diff-gutter {
+  padding: 0 9px;
+  border-right: 1px solid var(--line);
+  color: var(--quiet);
+}
+
+.chat-detail__diff .diff-code {
+  padding: 0 12px;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
+.chat-detail__diff .token.comment,
+.chat-detail__diff .token.prolog,
+.chat-detail__diff .token.doctype,
+.chat-detail__diff .token.cdata {
+  color: #777772;
+}
+
+.chat-detail__diff .token.punctuation {
+  color: #666661;
+}
+
+.chat-detail__diff .token.property,
+.chat-detail__diff .token.tag,
+.chat-detail__diff .token.boolean,
+.chat-detail__diff .token.number,
+.chat-detail__diff .token.constant,
+.chat-detail__diff .token.symbol,
+.chat-detail__diff .token.deleted {
+  color: #a03c38;
+}
+
+.chat-detail__diff .token.selector,
+.chat-detail__diff .token.attr-name,
+.chat-detail__diff .token.string,
+.chat-detail__diff .token.char,
+.chat-detail__diff .token.builtin,
+.chat-detail__diff .token.inserted {
+  color: #39744b;
+}
+
+.chat-detail__diff .token.operator,
+.chat-detail__diff .token.entity,
+.chat-detail__diff .token.url,
+.chat-detail__diff .language-css .token.string,
+.chat-detail__diff .style .token.string,
+.chat-detail__diff .token.variable {
+  color: #8c5a24;
+}
+
+.chat-detail__diff .token.atrule,
+.chat-detail__diff .token.attr-value,
+.chat-detail__diff .token.function,
+.chat-detail__diff .token.class-name {
+  color: #76552f;
+}
+
+.chat-detail__diff .token.keyword {
+  color: #7d438e;
+}
+
+.chat-detail__diff .token.regex,
+.chat-detail__diff .token.important {
+  color: #a75022;
+}
+
+.chat-detail__diff .token.bold,
+.chat-detail__diff .token.important {
+  font-weight: 700;
+}
+
+.chat-detail__diff .token.italic {
+  font-style: italic;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.comment,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.prolog,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.doctype,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.cdata {
+  color: #898984;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.punctuation {
+  color: #b4b4af;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.property,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.tag,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.boolean,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.number,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.constant,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.symbol,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.deleted {
+  color: #ee8580;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.selector,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.attr-name,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.string,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.char,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.builtin,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.inserted {
+  color: #8fc89d;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.operator,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.entity,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.url,
+:root[data-color-scheme='dark'] .chat-detail__diff .language-css .token.string,
+:root[data-color-scheme='dark'] .chat-detail__diff .style .token.string,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.variable {
+  color: #ddb278;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.atrule,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.attr-value,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.function,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.class-name {
+  color: #d8ac7e;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.keyword {
+  color: #d49ae2;
+}
+
+:root[data-color-scheme='dark'] .chat-detail__diff .token.regex,
+:root[data-color-scheme='dark'] .chat-detail__diff .token.important {
+  color: #e99b65;
+}
+
 .chat-detail__activity-content--command section {
   padding: 0;
 }

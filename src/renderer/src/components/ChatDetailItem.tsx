@@ -46,6 +46,7 @@ import type {
   ProviderWorkingTool
 } from '../../../shared/provider'
 import { Button } from './Button'
+import { ToolDiff } from './ToolDiff'
 import './ChatDetailItem.css'
 
 type ChatDetailItemProps = {
@@ -199,10 +200,7 @@ const DiffContent: React.FC<{ tools: ProviderWorkingTool[] }> = ({ tools }) => (
   <div className="chat-detail__activity-content">
     {tools.flatMap((tool) =>
       tool.diffs.map((diff, index) => (
-        <section key={`${tool.id}:${diff.path}:${index}`}>
-          <h3>{diff.path}</h3>
-          <pre>{diff.diff}</pre>
-        </section>
+        <ToolDiff fileDiff={diff} key={`${tool.id}:${diff.path}:${index}`} />
       ))
     )}
   </div>
@@ -302,11 +300,12 @@ const ToolStatusIcon: React.FC<{ activity: ProviderToolActivity; active: boolean
   return <ToolTypeIcon activity={activity} />
 }
 
-const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[]; active: boolean }> = ({
-  label,
-  tools,
-  active
-}) => {
+const Activity: React.FC<{
+  label: string
+  tools: ProviderWorkingTool[]
+  active: boolean
+  expanded: boolean
+}> = ({ label, tools, active, expanded }) => {
   const activity = tools[0]?.activity ?? 'other'
 
   const detailLabel = getToolDisplayLabel(label || tools[0]?.toolId || 'Tool use', activity, active)
@@ -327,6 +326,7 @@ const Activity: React.FC<{ label: string; tools: ProviderWorkingTool[]; active: 
   return (
     <details
       className={`chat-detail__tool-group${active ? ' chat-detail__tool-group--active' : ''}`}
+      open={expanded}
     >
       <summary>
         <span className="chat-detail__tool-icon">
@@ -389,10 +389,11 @@ const withPromptMarkdownLineBreaks = (content: string): string => {
     .join('')
 }
 
-const ToolItem: React.FC<{ item: ProviderToolItem; activeToolIds: Set<string> }> = ({
-  item,
-  activeToolIds
-}) => {
+const ToolItem: React.FC<{
+  item: ProviderToolItem
+  activeToolIds: Set<string>
+  expanded?: boolean
+}> = ({ item, activeToolIds, expanded = false }) => {
   const tools = getToolsFromToolItem(item)
   const activity = tools[0]?.activity ?? 'other'
   const active = tools.some((tool) => activeToolIds.has(tool.id))
@@ -410,7 +411,7 @@ const ToolItem: React.FC<{ item: ProviderToolItem; activeToolIds: Set<string> }>
     )
   }
 
-  return <Activity label={rawLabel} tools={tools} active={active} />
+  return <Activity label={rawLabel} tools={tools} active={active} expanded={expanded} />
 }
 
 const MarkdownMessage: React.FC<{ className: string; content: string }> = ({
@@ -758,7 +759,12 @@ const WorkingStep: React.FC<{ item: ProviderWorkingStep }> = ({ item }) => {
               />
             ) : (
               block.items.map((toolItem) => (
-                <ToolItem item={toolItem} activeToolIds={activeToolIds} key={toolItem.id} />
+                <ToolItem
+                  item={toolItem}
+                  activeToolIds={activeToolIds}
+                  expanded={active && toolItem === lastWorkingItem}
+                  key={toolItem.id}
+                />
               ))
             )
           ) : (
